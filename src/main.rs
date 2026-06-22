@@ -6,7 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::borrow::Cow;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::sync::{
@@ -96,7 +96,6 @@ fn main() {
 
     // Parse command-line arguments
     let mut detach = false;
-    let mut read_stdin = false;
     let mut input_paths = Vec::new();
 
     let mut i = 1;
@@ -121,17 +120,18 @@ fn main() {
                 println!("    -d, --detach     Launch in background (non-blocking)");
                 println!();
                 println!("FILES:");
-                println!("    One or more markdown files to open. If no files are specified,");
-                println!("    opens an empty document. Use '-' to read markdown from stdin");
-                println!("    (e.g. 'cat notes.md | velotype -').");
+                println!("    One or more markdown files to open. If no files are specified");
+                println!("    and markdown is piped in, it opens in a scratch window");
+                println!("    (e.g. 'cat notes.md | velotype'). Otherwise opens an empty");
+                println!("    document.");
                 return;
             }
             "--detach" | "-d" => {
                 detach = true;
             }
-            "-" => {
-                read_stdin = true;
-            }
+            // Stdin is auto-detected, so '-' is accepted but redundant. Keep it
+            // as a no-op so 'cmd | velotype -' invocations stay valid.
+            "-" => {}
             option if option.starts_with('-') => {
                 eprintln!("Unknown option: {}", option);
                 std::process::exit(1);
@@ -143,13 +143,26 @@ fn main() {
         i += 1;
     }
 
-    // Read piped markdown from stdin when '-' is passed. Done before app.run
-    // since the GUI event loop has not started yet, so blocking is safe.
-    // Detach re-launches a fresh process that does not inherit this stdin, so
-    // the two are incompatible: warn and ignore the pipe in that case.
-    let piped_markdown = if read_stdin && !detach {
+    // Auto-detect piped markdown on stdin and open it in a scratch window.
+    //
+    // Only read when stdin is NOT a terminal: a real tty would block waiting
+    // for the user to type. Guarded further by:
+    //   * explicit file args win — stdin is ignored when files are given.
+    //   * --detach re-launches a process that does not inherit this stdin,
+    //     so reading here would consume the pipe the child cannot see.
+    //   * a GUI launch (Finder, dock) also has a non-tty stdin pointed at
+    //     /dev/null, which reads as empty. An empty read is treated as "no
+    //     pipe" so normal startup (e.g. reopen last file) still applies.
+    //
+    // Done before app.run since the GUI event loop has not started yet, so
+    // blocking on the read is safe.
+    let piped_markdown = if input_paths.is_empty()
+        && !detach
+        && !std::io::stdin().is_terminal()
+    {
         let mut buf = String::new();
         match std::io::stdin().read_to_string(&mut buf) {
+            Ok(0) => None,
             Ok(_) => Some(buf),
             Err(err) => {
                 eprintln!("failed to read markdown from stdin: {err}");
@@ -157,9 +170,6 @@ fn main() {
             }
         }
     } else {
-        if read_stdin && detach {
-            eprintln!("ignoring stdin: '-' cannot be combined with --detach");
-        }
         None
     };
 
@@ -170,19 +180,21 @@ fn main() {
     // TODO: Other platforms may also need to be adapted
     #[cfg(target_os = "macos")]
     if detach {
-        use std::process::Command;
+        use std::process::{Command, Stdio};
 
-        // Re-launch the application in the background without the --detach flag
-        // or the stdin marker (the child process does not inherit this stdin).
+        // Re-launch the application in the background without the --detach flag.
+        // Point the child's stdin at null so its stdin auto-detection does not
+        // try to read a pipe this parent process owns.
         let exe_path = std::env::current_exe().expect("Failed to get executable path");
         let non_detach_args: Vec<String> = args
             .iter()
-            .filter(|arg| *arg != "--detach" && *arg != "-d" && *arg != "-")
+            .filter(|arg| *arg != "--detach" && *arg != "-d")
             .cloned()
             .collect();
 
         Command::new(exe_path)
             .args(&non_detach_args[1..])
+            .stdin(Stdio::null())
             .spawn()
             .expect("Failed to detach process");
 
