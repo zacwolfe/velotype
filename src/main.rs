@@ -91,12 +91,75 @@ impl AssetSource for VelotypeAssets {
     }
 }
 
+/// Re-launches a fresh, detached GUI process that outlives this one, then lets
+/// `main` return so the shell is freed immediately (non-blocking launch).
+///
+/// The child runs with `--no-detach` (so it does not detach again) and its
+/// stdin on null (so its stdin auto-detection does not try to read a pipe this
+/// parent owns). Any markdown drained from a stdin pipe here is staged to a
+/// temp file and passed via `--stdin-file`; the child reads and deletes it.
+#[cfg(target_os = "macos")]
+fn relaunch_detached(args: &[String], piped_stdin: Option<&str>) {
+    use std::process::{Command, Stdio};
+
+    let exe_path = std::env::current_exe().expect("Failed to get executable path");
+
+    // Forward the original args minus the detach/wait flags (the child must not
+    // detach again) and the bare '-' marker.
+    let forwarded: Vec<&String> = args[1..]
+        .iter()
+        .filter(|arg| {
+            !matches!(
+                arg.as_str(),
+                "--detach" | "-d" | "--background" | "--wait" | "-w" | "-"
+            )
+        })
+        .collect();
+
+    let mut command = Command::new(&exe_path);
+    command.args(&forwarded).arg("--no-detach").stdin(Stdio::null());
+
+    // Stage piped markdown to a temp file so the detached child can open it.
+    // pid is unique among live processes, enough to avoid collisions between
+    // concurrent pipes into velotype.
+    let staged_temp = piped_stdin.and_then(|markdown| {
+        let temp_path =
+            std::env::temp_dir().join(format!("velotype-stdin-{}.md", std::process::id()));
+        match std::fs::write(&temp_path, markdown) {
+            Ok(()) => {
+                command.arg("--stdin-file").arg(&temp_path);
+                Some(temp_path)
+            }
+            Err(err) => {
+                eprintln!("failed to stage piped stdin: {err}");
+                None
+            }
+        }
+    });
+
+    if let Err(err) = command.spawn() {
+        eprintln!("failed to launch editor: {err}");
+        if let Some(temp_path) = staged_temp {
+            let _ = std::fs::remove_file(&temp_path);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     // Parse command-line arguments
-    let mut detach = false;
     let mut input_paths = Vec::new();
+    // Per-launch detach override. None means "use the default" (detach when
+    // launched from a terminal). Some(true) forces detach; Some(false) forces
+    // foreground/blocking (--wait).
+    let mut explicit_detach: Option<bool> = None;
+    // Internal: set on a re-launched child so it runs the GUI directly instead
+    // of detaching again (loop guard). Not shown in --help.
+    let mut no_detach = false;
+    // Internal flag: the path of a temp file staged by a parent process during
+    // the piped-stdin handoff (see below). Not shown in --help.
+    let mut stdin_temp_file: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -117,7 +180,13 @@ fn main() {
                 println!("OPTIONS:");
                 println!("    -v, --version    Print version information");
                 println!("    -h, --help       Print this help message");
-                println!("    -d, --detach     Launch in background (non-blocking)");
+                println!(
+                    "    -w, --wait       Block until the editor exits (default is non-blocking)"
+                );
+                println!(
+                    "    -d, --detach     Launch non-blocking (default; forces detach with no tty)"
+                );
+                println!("    --background     Alias for --detach");
                 println!();
                 println!("FILES:");
                 println!("    One or more markdown files to open. If no files are specified");
@@ -126,12 +195,37 @@ fn main() {
                 println!("    document.");
                 return;
             }
-            "--detach" | "-d" => {
-                detach = true;
+            // Non-blocking launch is the default; these flags request it
+            // explicitly and force it even when stdin is not a terminal.
+            // --background is a kept alias. Focus is governed solely by the
+            // foreground_on_launch preference, not by these flags.
+            "--detach" | "-d" | "--background" => {
+                explicit_detach = Some(true);
+            }
+            // Opt back into blocking: run the editor in the foreground and wait
+            // for it to exit (like 'subl -w'), useful as a $EDITOR.
+            "--wait" | "-w" => {
+                explicit_detach = Some(false);
+            }
+            // Internal loop guard: a re-launched child carries this so it runs
+            // the GUI directly instead of detaching again. Not shown in --help.
+            "--no-detach" => {
+                no_detach = true;
             }
             // Stdin is auto-detected, so '-' is accepted but redundant. Keep it
             // as a no-op so 'cmd | velotype -' invocations stay valid.
             "-" => {}
+            // Internal handoff flag: the next arg is a temp file holding markdown
+            // a parent process drained from a stdin pipe. Treated like a file
+            // launch but opened as an unsaved scratch window, then deleted.
+            "--stdin-file" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--stdin-file requires a path");
+                    std::process::exit(1);
+                }
+                stdin_temp_file = Some(PathBuf::from(&args[i]));
+            }
             option if option.starts_with('-') => {
                 eprintln!("Unknown option: {}", option);
                 std::process::exit(1);
@@ -143,21 +237,13 @@ fn main() {
         i += 1;
     }
 
-    // Auto-detect piped markdown on stdin and open it in a scratch window.
-    //
-    // Only read when stdin is NOT a terminal: a real tty would block waiting
-    // for the user to type. Guarded further by:
-    //   * explicit file args win — stdin is ignored when files are given.
-    //   * --detach re-launches a process that does not inherit this stdin,
-    //     so reading here would consume the pipe the child cannot see.
-    //   * a GUI launch (Finder, dock) also has a non-tty stdin pointed at
-    //     /dev/null, which reads as empty. An empty read is treated as "no
-    //     pipe" so normal startup (e.g. reopen last file) still applies.
-    //
-    // Done before app.run since the GUI event loop has not started yet, so
-    // blocking on the read is safe.
-    let piped_markdown = if input_paths.is_empty()
-        && !detach
+    // Drain a stdin pipe once, up front, in whatever process the shell invoked.
+    // A tty stdin would block waiting for input, so only read a non-terminal
+    // stdin; a GUI launch (Finder, dock) has stdin on /dev/null which reads as
+    // empty and is treated as "no pipe". Explicit file args win over the pipe,
+    // and a --stdin-file child already has its content staged on disk.
+    let piped_stdin: Option<String> = if input_paths.is_empty()
+        && stdin_temp_file.is_none()
         && !std::io::stdin().is_terminal()
     {
         let mut buf = String::new();
@@ -173,33 +259,46 @@ fn main() {
         None
     };
 
+    // Decide whether to detach (non-blocking). Non-blocking is the default for
+    // terminal launches; --wait forces blocking, --detach forces non-blocking.
+    // A re-launched child (--no-detach) or a staged-stdin child always runs the
+    // GUI directly, so it never detaches again (loop guard).
+    let detach = if no_detach || stdin_temp_file.is_some() {
+        false
+    } else {
+        // stderr is the most reliable "attached to a terminal" signal: stdin
+        // may be piped and stdout redirected, but stderr usually is not.
+        explicit_detach.unwrap_or_else(|| std::io::stderr().is_terminal())
+    };
+
     #[cfg(not(target_os = "macos"))]
     let _ = detach;
 
-    // On macOS, detach from terminal if requested
+    // On macOS, detach from the terminal by re-launching a fresh GUI process
+    // that outlives this one. The parent returns immediately, freeing the shell.
     // TODO: Other platforms may also need to be adapted
     #[cfg(target_os = "macos")]
     if detach {
-        use std::process::{Command, Stdio};
-
-        // Re-launch the application in the background without the --detach flag.
-        // Point the child's stdin at null so its stdin auto-detection does not
-        // try to read a pipe this parent process owns.
-        let exe_path = std::env::current_exe().expect("Failed to get executable path");
-        let non_detach_args: Vec<String> = args
-            .iter()
-            .filter(|arg| *arg != "--detach" && *arg != "-d")
-            .cloned()
-            .collect();
-
-        Command::new(exe_path)
-            .args(&non_detach_args[1..])
-            .stdin(Stdio::null())
-            .spawn()
-            .expect("Failed to detach process");
-
+        relaunch_detached(&args, piped_stdin.as_deref());
         return;
     }
+
+    // The GUI child reads the staged temp file and deletes it; otherwise use the
+    // pipe drained above. A failed read falls through to an empty scratch window.
+    let piped_markdown = match stdin_temp_file.as_ref() {
+        Some(path) => {
+            let content = std::fs::read_to_string(path);
+            let _ = std::fs::remove_file(path);
+            match content {
+                Ok(markdown) => Some(markdown),
+                Err(err) => {
+                    eprintln!("failed to read staged stdin file: {err}");
+                    None
+                }
+            }
+        }
+        None => piped_stdin,
+    };
 
     #[cfg(target_os = "macos")]
     let (open_file_tx, mut open_file_rx) = mpsc::unbounded::<PathBuf>();
@@ -232,7 +331,10 @@ fn main() {
         config::EditorSettings::init(cx, preferences.show_table_headers);
         net::install_http_client(cx);
         init_editor(cx, &preferences.keybindings);
-        init_app_menu(cx);
+        // Whether the app comes to the foreground on launch is governed solely
+        // by the persisted preference (no CLI override); --detach/--background
+        // affect blocking, not focus.
+        init_app_menu(cx, preferences.foreground_on_launch);
 
         #[cfg(target_os = "macos")]
         cx.spawn(async move |cx| {

@@ -474,7 +474,17 @@ fn request_close_current_editor_window(cx: &mut App) {
     }
 }
 
+/// Requests application quit. Deferred so it never runs inside a window's
+/// update borrow: this handler is dispatched to the focused editor window
+/// (cmd-Q and the in-window menu both route through it), and `quit_now` calls
+/// `Window::update` on each window to check for unsaved changes. Updating the
+/// already-borrowed window would fail with "window not found" — re-entrancy,
+/// not a missing window — which previously aborted every quit attempt.
 pub(crate) fn request_quit_application(cx: &mut App) {
+    cx.defer(quit_now);
+}
+
+fn quit_now(cx: &mut App) {
     let candidates = current_window_candidates(cx);
     if candidates.is_empty() {
         cx.quit();
@@ -1027,7 +1037,11 @@ fn handle_window_closed(cx: &mut App) {
 }
 
 /// Installs menu state, action handlers, and the native menu bar.
-pub(crate) fn init(cx: &mut App) {
+///
+/// When `activate` is true the app is brought to the foreground on launch
+/// (`cx.activate(true)`). Pass false to open without stealing focus from the
+/// frontmost app — e.g. a piped/scratch launch that should stay out of the way.
+pub(crate) fn init(cx: &mut App, activate: bool) {
     cx.set_global(AppMenuState::default());
     let subscription = cx.on_window_closed(handle_window_closed);
     cx.global_mut::<AppMenuState>().window_closed_subscription = Some(subscription);
@@ -1088,7 +1102,9 @@ pub(crate) fn init(cx: &mut App) {
     });
 
     install_menus(cx);
-    cx.activate(true);
+    if activate {
+        cx.activate(true);
+    }
 }
 
 #[cfg(test)]

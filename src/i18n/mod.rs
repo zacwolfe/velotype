@@ -157,6 +157,12 @@ pub struct I18nStrings {
     pub preferences_startup_new_file: String,
     /// Startup option for opening the last opened Markdown document.
     pub preferences_startup_last_opened_file: String,
+    /// Foreground-on-launch field label.
+    pub preferences_foreground_option: String,
+    /// Foreground-on-launch option: bring the app to the front on launch.
+    pub preferences_foreground_enabled: String,
+    /// Foreground-on-launch option: open without stealing focus.
+    pub preferences_foreground_disabled: String,
     /// Theme preference field label.
     pub preferences_local_theme: String,
     /// Image paste behavior field label.
@@ -395,6 +401,9 @@ struct I18nStringsDe {
     preferences_startup_option: Option<String>,
     preferences_startup_new_file: Option<String>,
     preferences_startup_last_opened_file: Option<String>,
+    preferences_foreground_option: Option<String>,
+    preferences_foreground_enabled: Option<String>,
+    preferences_foreground_disabled: Option<String>,
     preferences_local_theme: Option<String>,
     preferences_image_insert_behavior: Option<String>,
     preferences_image_paste_none: Option<String>,
@@ -580,6 +589,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_startup_option",
     "preferences_startup_new_file",
     "preferences_startup_last_opened_file",
+    "preferences_foreground_option",
+    "preferences_foreground_enabled",
+    "preferences_foreground_disabled",
     "preferences_local_theme",
     "preferences_image_insert_behavior",
     "preferences_image_paste_none",
@@ -863,6 +875,15 @@ impl I18nStringsDe {
             preferences_startup_last_opened_file: self
                 .preferences_startup_last_opened_file
                 .unwrap_or(defaults.preferences_startup_last_opened_file),
+            preferences_foreground_option: self
+                .preferences_foreground_option
+                .unwrap_or(defaults.preferences_foreground_option),
+            preferences_foreground_enabled: self
+                .preferences_foreground_enabled
+                .unwrap_or(defaults.preferences_foreground_enabled),
+            preferences_foreground_disabled: self
+                .preferences_foreground_disabled
+                .unwrap_or(defaults.preferences_foreground_disabled),
             preferences_local_theme: self
                 .preferences_local_theme
                 .unwrap_or(defaults.preferences_local_theme),
@@ -1275,6 +1296,9 @@ impl I18nStrings {
             preferences_startup_option: "启动选项".into(),
             preferences_startup_new_file: "新 md 文件".into(),
             preferences_startup_last_opened_file: "上一次打开的 md 文件".into(),
+            preferences_foreground_option: "启动时置于前台".into(),
+            preferences_foreground_enabled: "置于前台".into(),
+            preferences_foreground_disabled: "不抢占焦点".into(),
             preferences_local_theme: "本地主题".into(),
             preferences_save: "保存".into(),
             preferences_cancel: "取消".into(),
@@ -1480,6 +1504,9 @@ impl I18nStrings {
             preferences_startup_option: "Startup Option".into(),
             preferences_startup_new_file: "New Markdown File".into(),
             preferences_startup_last_opened_file: "Last Opened Markdown File".into(),
+            preferences_foreground_option: "Foreground on Launch".into(),
+            preferences_foreground_enabled: "Bring to front".into(),
+            preferences_foreground_disabled: "Don't steal focus".into(),
             preferences_local_theme: "Local Theme".into(),
             preferences_image_insert_behavior: "When inserting images...".into(),
             preferences_image_paste_none: "No special action".into(),

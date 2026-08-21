@@ -1002,6 +1002,36 @@ async fn quit_application_prompts_dirty_editor_without_quitting(cx: &mut TestApp
     });
 }
 
+/// Regression test for re-entrant quit. `cx.dispatch_action` routes the action
+/// through the focused window the same way cmd-Q and the in-window menu do, so
+/// the quit handler runs inside that window's update borrow. Before the fix,
+/// `request_quit_application` re-entered the same window with `Window::update`,
+/// which failed ("window not found"), was treated as "refuses to close", and
+/// silently aborted the quit — so the unsaved-changes dialog never appeared.
+/// Deferring the quit out of the borrow lets the close check actually run.
+#[gpui::test]
+async fn quit_dispatched_from_focused_window_runs_close_check(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_string(), None));
+    let _window = activate_visual_window(cx);
+
+    editor.update(cx, |editor, cx| editor.mark_dirty(cx));
+    editor.read_with(cx, |editor, _cx| {
+        assert!(!editor.show_unsaved_changes_dialog);
+    });
+
+    cx.dispatch_action(QuitApplication);
+    cx.run_until_parked();
+
+    // The close check ran (the re-entrant update no longer fails): a dirty
+    // window surfaces the unsaved-changes dialog instead of silently aborting.
+    editor.read_with(cx, |editor, _cx| {
+        assert!(editor.show_unsaved_changes_dialog);
+    });
+}
+
 #[gpui::test]
 async fn windows_fallback_close_window_dispatch_closes_target_editor_window(
     cx: &mut TestAppContext,
