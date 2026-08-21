@@ -156,6 +156,10 @@ pub(crate) const DEFAULT_PICGO_SERVER_URL: &str = "http://127.0.0.1:36677";
 pub(crate) struct AppPreferences {
     /// Document selection policy used at startup.
     pub(crate) startup_open: StartupOpenPreference,
+    /// Whether the app brings itself to the foreground on launch. This is the
+    /// sole control for focus-stealing; the CLI detach flags affect only
+    /// whether the launch command blocks, not foreground behavior.
+    pub(crate) foreground_on_launch: bool,
     /// Selected built-in or imported UI language identifier.
     pub(crate) default_language_id: String,
     /// Selected built-in or imported theme identifier.
@@ -183,6 +187,7 @@ impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             startup_open: StartupOpenPreference::NewFile,
+            foreground_on_launch: true,
             default_language_id: DEFAULT_LANGUAGE_ID.into(),
             default_theme_id: DEFAULT_THEME_ID.into(),
             show_table_headers: true,
@@ -349,6 +354,7 @@ impl From<&FontPreferences> for FontPreferencesFile {
 struct StartupPreferencesFile {
     /// Serialized startup mode identifier.
     open: String,
+    foreground_on_launch: bool,
 }
 
 /// Persisted editor rendering and paste settings.
@@ -416,6 +422,7 @@ impl From<&AppPreferences> for PreferencesFile {
         Self {
             startup: StartupPreferencesFile {
                 open: value.startup_open.as_str().into(),
+                foreground_on_launch: value.foreground_on_launch,
             },
             language: LanguagePreferencesFile {
                 default_language_id: value.default_language_id.clone(),
@@ -482,6 +489,11 @@ fn app_preferences_from_toml_value(
         .and_then(|open| open.as_str())
         .map(StartupOpenPreference::from_str)
         .unwrap_or(StartupOpenPreference::NewFile);
+    let foreground_on_launch = value
+        .get("startup")
+        .and_then(|startup| startup.get("foreground_on_launch"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
     let default_language_id = value
         .get("language")
         .and_then(|language| language.get("default_language_id"))
@@ -616,6 +628,7 @@ fn app_preferences_from_toml_value(
 
     AppPreferences {
         startup_open,
+        foreground_on_launch,
         default_language_id,
         default_theme_id,
         show_table_headers,
@@ -765,6 +778,7 @@ pub(crate) fn import_theme_config_and_select(
 /// Persists editable window settings while retaining language and table-header settings.
 pub(crate) fn save_preferences_from_window(
     startup_open: StartupOpenPreference,
+    foreground_on_launch: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     image_paste_fallback: ImagePasteBehavior,
@@ -777,6 +791,7 @@ pub(crate) fn save_preferences_from_window(
     let dirs = VelotypeConfigDirs::from_system()?;
     save_preferences_from_window_with_dirs(
         startup_open,
+        foreground_on_launch,
         default_theme_id,
         image_paste_behavior,
         image_paste_fallback,
@@ -792,6 +807,7 @@ pub(crate) fn save_preferences_from_window(
 /// Updates window-owned fields in the supplied config root and returns the saved values.
 fn save_preferences_from_window_with_dirs(
     startup_open: StartupOpenPreference,
+    foreground_on_launch: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     image_paste_fallback: ImagePasteBehavior,
@@ -805,6 +821,7 @@ fn save_preferences_from_window_with_dirs(
     let mut preferences =
         load_or_create_app_preferences_with_dirs_and_locales(dirs, sys_locale::get_locales())?;
     preferences.startup_open = startup_open;
+    preferences.foreground_on_launch = foreground_on_launch;
     preferences.default_theme_id = default_theme_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
     preferences.image_paste_fallback = image_paste_fallback.local_only();
@@ -871,6 +888,7 @@ pub(crate) struct PreferencesWindow {
     nav: PreferencesNav,
     /// Draft startup document policy.
     startup_open: StartupOpenPreference,
+    foreground_on_launch: bool,
     /// Draft theme selection.
     selected_theme_id: String,
     /// Draft clipboard image storage policy.
@@ -890,6 +908,7 @@ pub(crate) struct PreferencesWindow {
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
     saved_startup_open: StartupOpenPreference,
+    saved_foreground_on_launch: bool,
     /// Theme ID at the last successful save.
     saved_theme_id: String,
     /// Image policy at the last successful save.
@@ -911,6 +930,7 @@ pub(crate) struct PreferencesWindow {
     focus_handle: FocusHandle,
     /// Whether startup policy options are expanded.
     startup_dropdown_open: bool,
+    foreground_dropdown_open: bool,
     /// Whether theme options are expanded.
     theme_dropdown_open: bool,
     /// Whether image storage options are expanded.
@@ -996,6 +1016,7 @@ impl PreferencesWindow {
             DEFAULT_THEME_ID.into()
         };
         let startup_open = preferences.startup_open;
+        let foreground_on_launch = preferences.foreground_on_launch;
         let image_paste_behavior = preferences.image_paste_behavior;
         let image_paste_fallback = if image_paste_behavior == ImagePasteBehavior::UsePicGo {
             preferences.image_paste_fallback.local_only()
@@ -1052,12 +1073,14 @@ impl PreferencesWindow {
         Self {
             nav: PreferencesNav::Settings,
             startup_open,
+            foreground_on_launch,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
             image_paste_fallback,
             picgo_server_url: picgo_server_url.clone(),
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
+            saved_foreground_on_launch: foreground_on_launch,
             saved_theme_id: selected_theme_id,
             saved_image_paste_behavior: image_paste_behavior,
             saved_image_paste_fallback: image_paste_fallback,
@@ -1073,6 +1096,7 @@ impl PreferencesWindow {
             theme_options,
             focus_handle: cx.focus_handle(),
             startup_dropdown_open: false,
+            foreground_dropdown_open: false,
             theme_dropdown_open: false,
             image_dropdown_open: false,
             recording_shortcut: None,
@@ -1147,6 +1171,7 @@ impl PreferencesWindow {
     /// Compares draft values with saved baselines, normalizing shortcut overrides.
     fn has_unsaved_changes(&self) -> bool {
         self.startup_open != self.saved_startup_open
+            || self.foreground_on_launch != self.saved_foreground_on_launch
             || self.selected_theme_id != self.saved_theme_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
             || self.image_paste_fallback != self.saved_image_paste_fallback
@@ -1258,6 +1283,7 @@ impl PreferencesWindow {
     fn set_nav_file(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::File;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -1268,6 +1294,7 @@ impl PreferencesWindow {
     fn set_nav_theme(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Theme;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -1278,6 +1305,7 @@ impl PreferencesWindow {
     fn set_nav_image(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Image;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -1323,6 +1351,7 @@ impl PreferencesWindow {
     fn set_nav_shortcuts(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Shortcuts;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.shortcut_error = None;
@@ -1342,6 +1371,20 @@ impl PreferencesWindow {
     /// Toggles startup options and closes the other dropdowns.
     fn toggle_startup_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.startup_dropdown_open = !self.startup_dropdown_open;
+        self.foreground_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        cx.notify();
+    }
+
+    fn toggle_foreground_dropdown(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.foreground_dropdown_open = !self.foreground_dropdown_open;
+        self.startup_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         cx.notify();
@@ -1351,6 +1394,7 @@ impl PreferencesWindow {
     fn toggle_theme_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.theme_dropdown_open = !self.theme_dropdown_open;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.image_dropdown_open = false;
         cx.notify();
     }
@@ -1359,6 +1403,7 @@ impl PreferencesWindow {
     fn toggle_image_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.image_dropdown_open = !self.image_dropdown_open;
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         cx.notify();
     }
@@ -1394,6 +1439,7 @@ impl PreferencesWindow {
 
         let preferences = match save_preferences_from_window(
             self.startup_open,
+            self.foreground_on_launch,
             &self.selected_theme_id,
             self.image_paste_behavior,
             self.image_paste_fallback,
@@ -1465,6 +1511,7 @@ impl PreferencesWindow {
         window.activate_window();
         self.focus_handle.focus(window, cx);
         self.saved_startup_open = self.startup_open;
+        self.saved_foreground_on_launch = self.foreground_on_launch;
         self.saved_theme_id = self.selected_theme_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_image_paste_fallback = self.image_paste_fallback;
@@ -1672,6 +1719,60 @@ impl PreferencesWindow {
                 ));
         }
         self.labeled_row(&strings.preferences_startup_option, dropdown, theme)
+    }
+
+    fn render_foreground_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let selected = if self.foreground_on_launch {
+            strings.preferences_foreground_enabled.clone()
+        } else {
+            strings.preferences_foreground_disabled.clone()
+        };
+        let mut dropdown = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(Self::dropdown_button(
+                "preferences-foreground-dropdown",
+                selected,
+                theme,
+                Self::toggle_foreground_dropdown,
+                cx,
+            ));
+        if self.foreground_dropdown_open {
+            let enabled_label = strings.preferences_foreground_enabled.clone();
+            let disabled_label = strings.preferences_foreground_disabled.clone();
+            dropdown = dropdown
+                .child(Self::dropdown_item(
+                    "preferences-foreground-enabled",
+                    enabled_label,
+                    self.foreground_on_launch,
+                    theme,
+                    |this, _, _, cx| {
+                        this.foreground_on_launch = true;
+                        this.foreground_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(Self::dropdown_item(
+                    "preferences-foreground-disabled",
+                    disabled_label,
+                    !self.foreground_on_launch,
+                    theme,
+                    |this, _, _, cx| {
+                        this.foreground_on_launch = false;
+                        this.foreground_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+        }
+        self.labeled_row(&strings.preferences_foreground_option, dropdown, theme)
     }
 
     /// Renders theme selection, font inputs, syntax errors, and availability warnings.
@@ -2662,7 +2763,12 @@ impl Render for PreferencesWindow {
                                     .min_w(px(0.0))
                                     .overflow_y_scroll()
                                     .pr(px(4.0))
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(20.0))
                                     .child(self.render_startup_page(&theme, &strings, cx))
+                                    .child(self.render_foreground_page(&theme, &strings, cx))
                                     .into_any_element(),
                                 PreferencesNav::Theme => div()
                                     .w_full()
@@ -3055,6 +3161,7 @@ mod tests {
         let dirs = VelotypeConfigDirs::from_root(&root);
         let preferences = AppPreferences {
             startup_open: StartupOpenPreference::LastOpenedFile,
+            foreground_on_launch: false,
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype-light".into(),
             show_table_headers: false,
@@ -3149,6 +3256,7 @@ mod tests {
         let dirs = VelotypeConfigDirs::from_root(&root);
         let preferences = AppPreferences {
             startup_open: StartupOpenPreference::NewFile,
+            foreground_on_launch: true,
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype".into(),
             show_table_headers: true,
@@ -3165,6 +3273,7 @@ mod tests {
 
         let saved = save_preferences_from_window_with_dirs(
             StartupOpenPreference::LastOpenedFile,
+            false,
             "velotype-light",
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             ImagePasteBehavior::CopyToNamedAssetsFolder,
@@ -3178,6 +3287,7 @@ mod tests {
         .expect("window preferences should save");
         assert_eq!(saved.default_language_id, "zh-CN");
         assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
+        assert!(!saved.foreground_on_launch);
         assert_eq!(saved.default_theme_id, "velotype-light");
         assert_eq!(
             saved.image_paste_behavior,
@@ -3279,6 +3389,11 @@ mod tests {
                 preferences.startup_open = StartupOpenPreference::LastOpenedFile;
                 assert!(preferences.has_unsaved_changes());
                 preferences.startup_open = StartupOpenPreference::NewFile;
+                assert!(!preferences.has_unsaved_changes());
+
+                preferences.foreground_on_launch = !preferences.foreground_on_launch;
+                assert!(preferences.has_unsaved_changes());
+                preferences.foreground_on_launch = !preferences.foreground_on_launch;
                 assert!(!preferences.has_unsaved_changes());
 
                 preferences.image_paste_behavior = ImagePasteBehavior::CopyToAssetsFolder;
