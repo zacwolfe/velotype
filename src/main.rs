@@ -111,7 +111,14 @@ fn relaunch_detached(args: &[String], piped_stdin: Option<&str>) {
         .filter(|arg| {
             !matches!(
                 arg.as_str(),
-                "--detach" | "-d" | "--background" | "--wait" | "-w" | "-"
+                "--detach"
+                    | "-d"
+                    | "--background"
+                    | "--wait"
+                    | "-w"
+                    | "--single-instance"
+                    | "--new-instance"
+                    | "-"
             )
         })
         .collect();
@@ -145,6 +152,67 @@ fn relaunch_detached(args: &[String], piped_stdin: Option<&str>) {
     }
 }
 
+/// Resolves the enclosing `.app` bundle for the current executable, if any.
+/// An installed app lives at `<Name>.app/Contents/MacOS/<bin>`; a raw binary
+/// (e.g. `cargo run`, `target/debug/velotype`) is not in a bundle and yields
+/// None, so callers fall back to spawning a fresh process.
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_path() -> Option<PathBuf> {
+    // Canonicalize first: `current_exe()` returns the path used to launch, which
+    // is the symlink itself (e.g. ~/.local/bin/velotype) when invoked through
+    // one. The bundle only shows up once symlinks are resolved to the real
+    // <Name>.app/Contents/MacOS/<bin> location.
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    bundle_path_for_exe(&exe)
+}
+
+/// Pure `<Name>.app/Contents/MacOS/<bin>` → `<Name>.app` derivation, split out
+/// from [`macos_app_bundle_path`] so the path-walking is unit-testable without
+/// depending on the real executable location.
+#[cfg(target_os = "macos")]
+fn bundle_path_for_exe(exe: &std::path::Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?; // <Name>.app/Contents/MacOS
+    let contents = macos_dir.parent()?; // <Name>.app/Contents
+    let bundle = contents.parent()?; // <Name>.app
+    let looks_like_bundle = macos_dir.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app";
+    looks_like_bundle.then(|| bundle.to_path_buf())
+}
+
+/// Routes a launch to the app bundle via LaunchServices `open`, so a new
+/// invocation joins the already-running instance (windows grouped under one
+/// runtime) instead of spawning its own process. macOS delivers the file-open
+/// events to the running instance's `on_open_urls` handler.
+///
+/// Returns false when no `.app` bundle is available (raw binary), so the caller
+/// can fall back to a detached process. Returns true once `open` has been
+/// invoked — even if it errored — so the caller never double-launches.
+#[cfg(target_os = "macos")]
+fn launch_via_open(paths: &[PathBuf], activate: bool) -> bool {
+    use std::process::Command;
+
+    let Some(bundle) = macos_app_bundle_path() else {
+        return false;
+    };
+
+    let mut command = Command::new("open");
+    // -g opens without bringing the app to the front, honoring the
+    // don't-steal-focus preference; the default activates it.
+    if !activate {
+        command.arg("-g");
+    }
+    command.arg("-a").arg(&bundle);
+    // Files after the bundle are opened by the (possibly already running) app.
+    command.args(paths);
+
+    if let Err(err) = command.status() {
+        eprintln!("failed to route launch to running instance: {err}");
+    }
+    true
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -154,6 +222,9 @@ fn main() {
     // launched from a terminal). Some(true) forces detach; Some(false) forces
     // foreground/blocking (--wait).
     let mut explicit_detach: Option<bool> = None;
+    // Per-launch single-instance override. None means "use the preference".
+    // Some(true) routes into the running app; Some(false) forces a fresh one.
+    let mut explicit_single_instance: Option<bool> = None;
     // Internal: set on a re-launched child so it runs the GUI directly instead
     // of detaching again (loop guard). Not shown in --help.
     let mut no_detach = false;
@@ -187,6 +258,12 @@ fn main() {
                     "    -d, --detach     Launch non-blocking (default; forces detach with no tty)"
                 );
                 println!("    --background     Alias for --detach");
+                println!(
+                    "    --new-instance   Force a fresh process instead of reusing a running app"
+                );
+                println!(
+                    "    --single-instance  Route into the already-running app (installed .app only)"
+                );
                 println!();
                 println!("FILES:");
                 println!("    One or more markdown files to open. If no files are specified");
@@ -206,6 +283,15 @@ fn main() {
             // for it to exit (like 'subl -w'), useful as a $EDITOR.
             "--wait" | "-w" => {
                 explicit_detach = Some(false);
+            }
+            // Route this launch into the already-running app (windows grouped),
+            // or force a fresh process. Overrides the single_instance preference
+            // for this launch only. Only effective for an installed .app bundle.
+            "--single-instance" => {
+                explicit_single_instance = Some(true);
+            }
+            "--new-instance" => {
+                explicit_single_instance = Some(false);
             }
             // Internal loop guard: a re-launched child carries this so it runs
             // the GUI directly instead of detaching again. Not shown in --help.
@@ -271,14 +357,38 @@ fn main() {
         explicit_detach.unwrap_or_else(|| std::io::stderr().is_terminal())
     };
 
-    #[cfg(not(target_os = "macos"))]
-    let _ = detach;
+    // Load preferences once, up front, so the launch path (single-instance
+    // routing, focus) and the GUI below both read the same values without
+    // touching disk twice.
+    let preferences = config::load_or_create_app_preferences().unwrap_or_else(|err| {
+        eprintln!("failed to initialize app preferences: {err}");
+        Default::default()
+    });
 
-    // On macOS, detach from the terminal by re-launching a fresh GUI process
-    // that outlives this one. The parent returns immediately, freeing the shell.
+    // Whether a new launch routes into an already-running instance instead of
+    // spawning its own process. --new-instance / --single-instance override the
+    // persisted preference for this launch only.
+    let single_instance = explicit_single_instance.unwrap_or(preferences.single_instance);
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (detach, single_instance);
+
+    // On macOS, detach from the terminal by handing the launch off to a GUI
+    // process that outlives this one. The parent returns immediately, freeing
+    // the shell.
     // TODO: Other platforms may also need to be adapted
     #[cfg(target_os = "macos")]
     if detach {
+        // With single-instance on, route into the running app via LaunchServices
+        // so windows group under one runtime. Piped stdin can't be handed to a
+        // running instance that way, so it always spawns a fresh detached process
+        // (scratch window); a raw binary with no .app bundle also falls back.
+        if single_instance
+            && piped_stdin.is_none()
+            && launch_via_open(&input_paths, preferences.foreground_on_launch)
+        {
+            return;
+        }
         relaunch_detached(&args, piped_stdin.as_deref());
         return;
     }
@@ -322,10 +432,6 @@ fn main() {
     }
 
     app.run(move |cx: &mut App| {
-        let preferences = config::load_or_create_app_preferences().unwrap_or_else(|err| {
-            eprintln!("failed to initialize app preferences: {err}");
-            Default::default()
-        });
         I18nManager::init_with_language_id(cx, &preferences.default_language_id);
         ThemeManager::init_with_theme_id(cx, &preferences.default_theme_id);
         config::EditorSettings::init(cx, preferences.show_table_headers);
@@ -413,4 +519,37 @@ fn main() {
         app_menu::install_menus(cx);
         cx.refresh_windows();
     });
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::bundle_path_for_exe;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn bundle_path_resolves_from_installed_layout() {
+        let exe = Path::new("/Applications/Velotype.app/Contents/MacOS/velotype");
+        assert_eq!(
+            bundle_path_for_exe(exe),
+            Some(PathBuf::from("/Applications/Velotype.app"))
+        );
+    }
+
+    #[test]
+    fn bundle_path_is_none_for_raw_binary() {
+        // A dev build (e.g. cargo run) is not inside a .app bundle.
+        assert_eq!(
+            bundle_path_for_exe(Path::new("/Users/dev/velotype/target/debug/velotype")),
+            None
+        );
+    }
+
+    #[test]
+    fn bundle_path_is_none_when_marker_dirs_wrong() {
+        // Right depth, wrong directory names must not be mistaken for a bundle.
+        assert_eq!(
+            bundle_path_for_exe(Path::new("/opt/Velotype.app/Resources/bin/velotype")),
+            None
+        );
+    }
 }

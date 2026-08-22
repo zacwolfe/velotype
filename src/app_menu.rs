@@ -12,8 +12,8 @@ use gpui::*;
 use crate::components::{
     AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
     InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile,
-    QuitApplication, SaveDocument, SaveDocumentAs, SelectLanguage, SelectTheme, ShowAbout,
-    ToggleWorkspace, UninstallCliTool,
+    QuitApplication, SaveDocument, SaveDocumentAs, SelectLanguage, SelectNextWindow,
+    SelectPreviousWindow, SelectTheme, ShowAbout, ToggleWorkspace, UninstallCliTool,
 };
 use crate::config::{
     apply_configured_language, apply_configured_theme, import_language_config_and_select,
@@ -448,6 +448,46 @@ fn current_window_candidates(cx: &mut App) -> Vec<AnyWindowHandle> {
     candidates
 }
 
+/// Cycles focus to the next (or previous) editor window, matching the macOS
+/// cmd-` / cmd-shift-` "move focus to next/previous window" convention.
+///
+/// Wired as an app action rather than relying on AppKit's built-in cycling:
+/// gpui consumes the key event for its own dispatch, so it never reaches the
+/// system window-cycling handler. Only editor windows participate (dialogs and
+/// the preferences window are skipped); ordering follows `cx.windows()`.
+pub(crate) fn cycle_editor_window(cx: &mut App, forward: bool) {
+    let editor_windows: Vec<AnyWindowHandle> = cx
+        .windows()
+        .into_iter()
+        .filter(|window| window.downcast::<Editor>().is_some())
+        .collect();
+    if editor_windows.len() < 2 {
+        return;
+    }
+
+    let active_id = cx.active_window().map(|window| window.window_id());
+    let current = active_id
+        .and_then(|id| {
+            editor_windows
+                .iter()
+                .position(|window| window.window_id() == id)
+        })
+        .unwrap_or(0);
+
+    let count = editor_windows.len();
+    let next = if forward {
+        (current + 1) % count
+    } else {
+        (current + count - 1) % count
+    };
+
+    if let Some(target) = editor_windows[next].downcast::<Editor>() {
+        let _ = target.update(cx, |_editor, window, _cx| {
+            window.activate_window();
+        });
+    }
+}
+
 fn request_close_editor_window(window: AnyWindowHandle, cx: &mut App) -> bool {
     let Some(window) = window.downcast::<Editor>() else {
         return false;
@@ -586,6 +626,10 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
         request_quit_application(cx);
     } else if action.as_any().is::<CloseWindow>() {
         request_close_current_editor_window(cx);
+    } else if action.as_any().is::<SelectNextWindow>() {
+        cycle_editor_window(cx, true);
+    } else if action.as_any().is::<SelectPreviousWindow>() {
+        cycle_editor_window(cx, false);
     }
 }
 
@@ -848,6 +892,29 @@ fn build_menus(
             items: help_items,
         },
     ]);
+
+    // Register a standard macOS "Window" menu. gpui hands any menu named
+    // exactly "Window" to `NSApplication.setWindowsMenu_`, which makes AppKit
+    // auto-populate the open-window list and enables the system window-cycling
+    // shortcuts (cmd-` "Move focus to next window"). The name must be the
+    // literal "Window" for that detection, so it is not localized. Placed just
+    // before Help to match macOS menu-bar convention.
+    #[cfg(target_os = "macos")]
+    {
+        let help_index = menus.len().saturating_sub(1);
+        menus.insert(
+            help_index,
+            Menu {
+                name: "Window".into(),
+                items: vec![
+                    MenuItem::action(strings.menu_next_window.clone(), SelectNextWindow),
+                    MenuItem::action(strings.menu_previous_window.clone(), SelectPreviousWindow),
+                    MenuItem::separator(),
+                ],
+            },
+        );
+    }
+
     menus
 }
 
@@ -1099,6 +1166,12 @@ pub(crate) fn init(cx: &mut App, activate: bool) {
     });
     cx.on_action(|_: &CloseWindow, cx| {
         dispatch_menu_action(&CloseWindow, cx);
+    });
+    cx.on_action(|_: &SelectNextWindow, cx| {
+        dispatch_menu_action(&SelectNextWindow, cx);
+    });
+    cx.on_action(|_: &SelectPreviousWindow, cx| {
+        dispatch_menu_action(&SelectPreviousWindow, cx);
     });
 
     install_menus(cx);

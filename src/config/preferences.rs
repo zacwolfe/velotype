@@ -115,6 +115,12 @@ pub(crate) struct AppPreferences {
     /// sole control for focus-stealing; the CLI detach flags affect only
     /// whether the launch command blocks, not foreground behavior.
     pub(crate) foreground_on_launch: bool,
+    /// Whether a new launch routes files into the already-running app (one
+    /// shared runtime, windows grouped) instead of spawning its own process.
+    /// Only effective for an installed `.app` bundle on macOS; a raw binary
+    /// (e.g. `cargo run`) always starts a fresh instance. The `--new-instance`
+    /// / `--single-instance` CLI flags override this per launch.
+    pub(crate) single_instance: bool,
     pub(crate) default_language_id: String,
     pub(crate) default_theme_id: String,
     pub(crate) show_table_headers: bool,
@@ -128,6 +134,7 @@ impl Default for AppPreferences {
         Self {
             startup_open: StartupOpenPreference::NewFile,
             foreground_on_launch: true,
+            single_instance: true,
             default_language_id: DEFAULT_LANGUAGE_ID.into(),
             default_theme_id: DEFAULT_THEME_ID.into(),
             show_table_headers: true,
@@ -239,6 +246,7 @@ struct PreferencesFile {
 struct StartupPreferencesFile {
     open: String,
     foreground_on_launch: bool,
+    single_instance: bool,
 }
 
 #[derive(Serialize)]
@@ -287,6 +295,7 @@ impl From<&AppPreferences> for PreferencesFile {
             startup: StartupPreferencesFile {
                 open: value.startup_open.as_str().into(),
                 foreground_on_launch: value.foreground_on_launch,
+                single_instance: value.single_instance,
             },
             language: LanguagePreferencesFile {
                 default_language_id: value.default_language_id.clone(),
@@ -346,6 +355,11 @@ fn app_preferences_from_toml_value(
     let foreground_on_launch = value
         .get("startup")
         .and_then(|startup| startup.get("foreground_on_launch"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true);
+    let single_instance = value
+        .get("startup")
+        .and_then(|startup| startup.get("single_instance"))
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
     let default_language_id = value
@@ -450,6 +464,7 @@ fn app_preferences_from_toml_value(
     AppPreferences {
         startup_open,
         foreground_on_launch,
+        single_instance,
         default_language_id,
         default_theme_id,
         show_table_headers,
@@ -579,6 +594,7 @@ pub(crate) fn import_theme_config_and_select(
 pub(crate) fn save_preferences_from_window(
     startup_open: StartupOpenPreference,
     foreground_on_launch: bool,
+    single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -588,6 +604,7 @@ pub(crate) fn save_preferences_from_window(
     save_preferences_from_window_with_dirs(
         startup_open,
         foreground_on_launch,
+        single_instance,
         default_theme_id,
         image_paste_behavior,
         keybindings,
@@ -599,6 +616,7 @@ pub(crate) fn save_preferences_from_window(
 fn save_preferences_from_window_with_dirs(
     startup_open: StartupOpenPreference,
     foreground_on_launch: bool,
+    single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -609,6 +627,7 @@ fn save_preferences_from_window_with_dirs(
         load_or_create_app_preferences_with_dirs_and_locales(dirs, sys_locale::get_locales())?;
     preferences.startup_open = startup_open;
     preferences.foreground_on_launch = foreground_on_launch;
+    preferences.single_instance = single_instance;
     preferences.default_theme_id = default_theme_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
@@ -640,11 +659,13 @@ pub(crate) struct PreferencesWindow {
     nav: PreferencesNav,
     startup_open: StartupOpenPreference,
     foreground_on_launch: bool,
+    single_instance: bool,
     selected_theme_id: String,
     image_paste_behavior: ImagePasteBehavior,
     keybindings: BTreeMap<String, Vec<String>>,
     saved_startup_open: StartupOpenPreference,
     saved_foreground_on_launch: bool,
+    saved_single_instance: bool,
     saved_theme_id: String,
     saved_image_paste_behavior: ImagePasteBehavior,
     saved_keybindings: BTreeMap<String, Vec<String>>,
@@ -652,6 +673,7 @@ pub(crate) struct PreferencesWindow {
     focus_handle: FocusHandle,
     startup_dropdown_open: bool,
     foreground_dropdown_open: bool,
+    single_instance_dropdown_open: bool,
     theme_dropdown_open: bool,
     image_dropdown_open: bool,
     recording_shortcut: Option<ShortcutCommand>,
@@ -684,17 +706,20 @@ impl PreferencesWindow {
         };
         let startup_open = preferences.startup_open;
         let foreground_on_launch = preferences.foreground_on_launch;
+        let single_instance = preferences.single_instance;
         let image_paste_behavior = preferences.image_paste_behavior;
         let keybindings = preferences.keybindings;
         Self {
             nav: PreferencesNav::File,
             startup_open,
             foreground_on_launch,
+            single_instance,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
+            saved_single_instance: single_instance,
             saved_theme_id: selected_theme_id,
             saved_image_paste_behavior: image_paste_behavior,
             saved_keybindings: keybindings,
@@ -702,6 +727,7 @@ impl PreferencesWindow {
             focus_handle: cx.focus_handle(),
             startup_dropdown_open: false,
             foreground_dropdown_open: false,
+            single_instance_dropdown_open: false,
             theme_dropdown_open: false,
             image_dropdown_open: false,
             recording_shortcut: None,
@@ -730,6 +756,7 @@ impl PreferencesWindow {
     fn has_unsaved_changes(&self) -> bool {
         self.startup_open != self.saved_startup_open
             || self.foreground_on_launch != self.saved_foreground_on_launch
+            || self.single_instance != self.saved_single_instance
             || self.selected_theme_id != self.saved_theme_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
             || normalize_shortcut_config(&self.keybindings)
@@ -745,6 +772,7 @@ impl PreferencesWindow {
         self.nav = PreferencesNav::File;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -755,6 +783,7 @@ impl PreferencesWindow {
         self.nav = PreferencesNav::Theme;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -765,6 +794,7 @@ impl PreferencesWindow {
         self.nav = PreferencesNav::Image;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
@@ -775,6 +805,7 @@ impl PreferencesWindow {
         self.nav = PreferencesNav::Shortcuts;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.shortcut_error = None;
@@ -793,6 +824,7 @@ impl PreferencesWindow {
     fn toggle_startup_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.startup_dropdown_open = !self.startup_dropdown_open;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         cx.notify();
@@ -806,6 +838,21 @@ impl PreferencesWindow {
     ) {
         self.foreground_dropdown_open = !self.foreground_dropdown_open;
         self.startup_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        cx.notify();
+    }
+
+    fn toggle_single_instance_dropdown(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.single_instance_dropdown_open = !self.single_instance_dropdown_open;
+        self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         cx.notify();
@@ -815,6 +862,7 @@ impl PreferencesWindow {
         self.theme_dropdown_open = !self.theme_dropdown_open;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.image_dropdown_open = false;
         cx.notify();
     }
@@ -823,6 +871,7 @@ impl PreferencesWindow {
         self.image_dropdown_open = !self.image_dropdown_open;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         cx.notify();
     }
@@ -850,6 +899,7 @@ impl PreferencesWindow {
         let preferences = match save_preferences_from_window(
             self.startup_open,
             self.foreground_on_launch,
+            self.single_instance,
             &self.selected_theme_id,
             self.image_paste_behavior,
             self.keybindings.clone(),
@@ -914,6 +964,7 @@ impl PreferencesWindow {
         self.focus_handle.focus(window);
         self.saved_startup_open = self.startup_open;
         self.saved_foreground_on_launch = self.foreground_on_launch;
+        self.saved_single_instance = self.single_instance;
         self.saved_theme_id = self.selected_theme_id.clone();
         self.saved_image_paste_behavior = self.image_paste_behavior;
         self.saved_keybindings = normalize_shortcut_config(&self.keybindings);
@@ -1161,6 +1212,60 @@ impl PreferencesWindow {
         self.labeled_row(&strings.preferences_foreground_option, dropdown, theme)
     }
 
+    fn render_single_instance_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let selected = if self.single_instance {
+            strings.preferences_single_instance_shared.clone()
+        } else {
+            strings.preferences_single_instance_separate.clone()
+        };
+        let mut dropdown = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .child(Self::dropdown_button(
+                "preferences-single-instance-dropdown",
+                selected,
+                theme,
+                Self::toggle_single_instance_dropdown,
+                cx,
+            ));
+        if self.single_instance_dropdown_open {
+            let shared_label = strings.preferences_single_instance_shared.clone();
+            let separate_label = strings.preferences_single_instance_separate.clone();
+            dropdown = dropdown
+                .child(Self::dropdown_item(
+                    "preferences-single-instance-shared",
+                    shared_label,
+                    self.single_instance,
+                    theme,
+                    |this, _, _, cx| {
+                        this.single_instance = true;
+                        this.single_instance_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(Self::dropdown_item(
+                    "preferences-single-instance-separate",
+                    separate_label,
+                    !self.single_instance,
+                    theme,
+                    |this, _, _, cx| {
+                        this.single_instance = false;
+                        this.single_instance_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+        }
+        self.labeled_row(&strings.preferences_single_instance_option, dropdown, theme)
+    }
+
     fn render_theme_page(
         &self,
         theme: &Theme,
@@ -1357,6 +1462,8 @@ impl PreferencesWindow {
             ShortcutCommand::ToggleWorkspace => {
                 strings.preferences_shortcut_toggle_workspace.clone()
             }
+            ShortcutCommand::SelectNextWindow => strings.menu_next_window.clone(),
+            ShortcutCommand::SelectPreviousWindow => strings.menu_previous_window.clone(),
         }
     }
 
@@ -1898,6 +2005,9 @@ impl Render for PreferencesWindow {
                                             ))
                                             .child(self.render_foreground_page(
                                                 &theme, &strings, cx,
+                                            ))
+                                            .child(self.render_single_instance_page(
+                                                &theme, &strings, cx,
                                             )),
                                     )
                                     .into_any_element(),
@@ -2186,6 +2296,7 @@ mod tests {
         let preferences = AppPreferences {
             startup_open: StartupOpenPreference::LastOpenedFile,
             foreground_on_launch: false,
+            single_instance: false,
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype-light".into(),
             show_table_headers: false,
@@ -2205,6 +2316,7 @@ mod tests {
         assert!(text.contains("default_language_id = \"zh-CN\""));
         assert!(text.contains("default_theme_id = \"velotype-light\""));
         assert!(text.contains("show_table_headers = false"));
+        assert!(text.contains("single_instance = false"));
         assert!(text.contains("image_paste_behavior = \"copy_to_assets_folder\""));
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2271,6 +2383,7 @@ mod tests {
         let preferences = AppPreferences {
             startup_open: StartupOpenPreference::NewFile,
             foreground_on_launch: true,
+            single_instance: true,
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype".into(),
             show_table_headers: true,
@@ -2284,6 +2397,7 @@ mod tests {
         let saved = save_preferences_from_window_with_dirs(
             StartupOpenPreference::LastOpenedFile,
             false,
+            false,
             "velotype-light",
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
@@ -2294,6 +2408,7 @@ mod tests {
         assert_eq!(saved.default_language_id, "zh-CN");
         assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
         assert!(!saved.foreground_on_launch);
+        assert!(!saved.single_instance);
         assert_eq!(saved.default_theme_id, "velotype-light");
         assert_eq!(
             saved.image_paste_behavior,
@@ -2362,6 +2477,11 @@ mod tests {
                 preferences.foreground_on_launch = !preferences.foreground_on_launch;
                 assert!(preferences.has_unsaved_changes());
                 preferences.foreground_on_launch = !preferences.foreground_on_launch;
+                assert!(!preferences.has_unsaved_changes());
+
+                preferences.single_instance = !preferences.single_instance;
+                assert!(preferences.has_unsaved_changes());
+                preferences.single_instance = !preferences.single_instance;
                 assert!(!preferences.has_unsaved_changes());
 
                 preferences.image_paste_behavior = ImagePasteBehavior::CopyToAssetsFolder;
