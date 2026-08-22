@@ -116,6 +116,10 @@ pub struct I18nStrings {
     pub menu_new_window: String,
     /// File menu item for closing the current window.
     pub menu_close_window: String,
+    /// Window menu item to focus the next editor window (cmd-`).
+    pub menu_next_window: String,
+    /// Window menu item to focus the previous editor window (cmd-shift-`).
+    pub menu_previous_window: String,
     /// File menu item for opening Markdown files.
     pub menu_open_file: String,
     /// File menu item for opening a recent file submenu.
@@ -192,6 +196,12 @@ pub struct I18nStrings {
     pub preferences_foreground_enabled: String,
     /// Foreground-on-launch option: open without stealing focus.
     pub preferences_foreground_disabled: String,
+    /// Window-grouping (single-instance) field label.
+    pub preferences_single_instance_option: String,
+    /// Window-grouping option: route launches into one shared app instance.
+    pub preferences_single_instance_shared: String,
+    /// Window-grouping option: each launch gets its own separate process.
+    pub preferences_single_instance_separate: String,
     /// Theme preference field label.
     pub preferences_local_theme: String,
     /// Label for the document body font family list.
@@ -536,6 +546,8 @@ struct I18nStringsDe {
     /// Optional close-window menu label.
     menu_close_window: Option<String>,
     /// Optional open-file menu label.
+    menu_next_window: Option<String>,
+    menu_previous_window: Option<String>,
     menu_open_file: Option<String>,
     /// Optional recent-file submenu label.
     menu_open_recent_file: Option<String>,
@@ -606,6 +618,9 @@ struct I18nStringsDe {
     preferences_foreground_enabled: Option<String>,
     preferences_foreground_disabled: Option<String>,
     /// Optional theme selector field label.
+    preferences_single_instance_option: Option<String>,
+    preferences_single_instance_shared: Option<String>,
+    preferences_single_instance_separate: Option<String>,
     preferences_local_theme: Option<String>,
     /// Optional body font family field label.
     preferences_font_body: Option<String>,
@@ -906,6 +921,8 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_add_theme_config",
     "menu_new_window",
     "menu_close_window",
+    "menu_next_window",
+    "menu_previous_window",
     "menu_open_file",
     "menu_open_recent_file",
     "menu_preferences",
@@ -944,6 +961,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_foreground_option",
     "preferences_foreground_enabled",
     "preferences_foreground_disabled",
+    "preferences_single_instance_option",
+    "preferences_single_instance_shared",
+    "preferences_single_instance_separate",
     "preferences_local_theme",
     "preferences_font_body",
     "preferences_font_code",
@@ -1205,6 +1225,10 @@ impl I18nStringsDe {
                 .unwrap_or(defaults.menu_add_theme_config),
             menu_new_window: self.menu_new_window.unwrap_or(defaults.menu_new_window),
             menu_close_window: self.menu_close_window.unwrap_or(defaults.menu_close_window),
+            menu_next_window: self.menu_next_window.unwrap_or(defaults.menu_next_window),
+            menu_previous_window: self
+                .menu_previous_window
+                .unwrap_or(defaults.menu_previous_window),
             menu_open_file: self.menu_open_file.unwrap_or(defaults.menu_open_file),
             menu_open_recent_file: self
                 .menu_open_recent_file
@@ -1299,6 +1323,15 @@ impl I18nStringsDe {
             preferences_foreground_disabled: self
                 .preferences_foreground_disabled
                 .unwrap_or(defaults.preferences_foreground_disabled),
+            preferences_single_instance_option: self
+                .preferences_single_instance_option
+                .unwrap_or(defaults.preferences_single_instance_option),
+            preferences_single_instance_shared: self
+                .preferences_single_instance_shared
+                .unwrap_or(defaults.preferences_single_instance_shared),
+            preferences_single_instance_separate: self
+                .preferences_single_instance_separate
+                .unwrap_or(defaults.preferences_single_instance_separate),
             preferences_local_theme: self
                 .preferences_local_theme
                 .unwrap_or(defaults.preferences_local_theme),
@@ -1720,6 +1753,8 @@ impl I18nStrings {
             menu_add_theme_config: "添加主题配置".into(),
             menu_new_window: "新建窗口".into(),
             menu_close_window: "关闭窗口".into(),
+            menu_next_window: "下一个窗口".into(),
+            menu_previous_window: "上一个窗口".into(),
             menu_open_file: "打开文件".into(),
             menu_open_recent_file: "打开最近文件".into(),
             menu_preferences: "偏好设置".into(),
@@ -1754,6 +1789,9 @@ impl I18nStrings {
             preferences_foreground_option: "启动时置于前台".into(),
             preferences_foreground_enabled: "置于前台".into(),
             preferences_foreground_disabled: "不抢占焦点".into(),
+            preferences_single_instance_option: "窗口分组".into(),
+            preferences_single_instance_shared: "共用一个应用".into(),
+            preferences_single_instance_separate: "每次独立启动".into(),
             preferences_local_theme: "本地主题".into(),
             preferences_font_body: "正文字体".into(),
             preferences_font_code: "代码字体".into(),
@@ -1973,6 +2011,8 @@ impl I18nStrings {
             menu_add_theme_config: "Add Theme Config".into(),
             menu_new_window: "New Window".into(),
             menu_close_window: "Close Window".into(),
+            menu_next_window: "Next Window".into(),
+            menu_previous_window: "Previous Window".into(),
             menu_open_file: "Open File".into(),
             menu_open_recent_file: "Open Recent File".into(),
             menu_preferences: "Preferences".into(),
@@ -2012,6 +2052,9 @@ impl I18nStrings {
             preferences_foreground_option: "Foreground on Launch".into(),
             preferences_foreground_enabled: "Bring to front".into(),
             preferences_foreground_disabled: "Don't steal focus".into(),
+            preferences_single_instance_option: "Window Grouping".into(),
+            preferences_single_instance_shared: "One shared app".into(),
+            preferences_single_instance_separate: "Separate instance".into(),
             preferences_local_theme: "Local Theme".into(),
             preferences_font_body: "Body font".into(),
             preferences_font_code: "Code font".into(),

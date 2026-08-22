@@ -71,6 +71,8 @@ actions!(
         DismissTransientUi,
         ToggleViewMode,
         ToggleWorkspace,
+        SelectNextWindow,
+        SelectPreviousWindow,
     ]
 );
 
@@ -216,6 +218,8 @@ pub(crate) enum ShortcutCommand {
     ToggleViewMode,
     /// Toggle workspace visibility.
     ToggleWorkspace,
+    SelectNextWindow,
+    SelectPreviousWindow,
 }
 
 /// Shortcut metadata used for defaults, preference labels, and binding context.
@@ -506,7 +510,9 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         command: ShortcutCommand::CodeSelection,
         id: "code_selection",
         category: ShortcutCategory::Formatting,
-        default_keys: &["cmd-`", "ctrl-`"],
+        // cmd-` is reserved for macOS window cycling (SelectNextWindow); inline
+        // code uses cmd-e on macOS and keeps ctrl-` elsewhere.
+        default_keys: &["cmd-e", "ctrl-`"],
         context: BLOCK_CONTEXT,
     },
     ShortcutDefinition {
@@ -591,6 +597,22 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         id: "toggle_workspace",
         category: ShortcutCategory::Navigation,
         default_keys: &["ctrl-w"],
+        context: None,
+    },
+    // Window cycling matches the macOS convention (cmd-` / cmd-shift-`). Global
+    // context so it works while editing; handled app-wide, not per block.
+    ShortcutDefinition {
+        command: ShortcutCommand::SelectNextWindow,
+        id: "select_next_window",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["cmd-`"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::SelectPreviousWindow,
+        id: "select_previous_window",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["cmd-shift-`"],
         context: None,
     },
 ];
@@ -813,6 +835,10 @@ fn key_binding_for(
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),
         ShortcutCommand::ToggleViewMode => KeyBinding::new(key, ToggleViewMode, context),
         ShortcutCommand::ToggleWorkspace => KeyBinding::new(key, ToggleWorkspace, context),
+        ShortcutCommand::SelectNextWindow => KeyBinding::new(key, SelectNextWindow, context),
+        ShortcutCommand::SelectPreviousWindow => {
+            KeyBinding::new(key, SelectPreviousWindow, context)
+        }
     }
 }
 
@@ -880,6 +906,36 @@ mod tests {
         assert_eq!(
             resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::ToggleWorkspace),
             vec!["ctrl-w".to_string()]
+        );
+    }
+
+    #[test]
+    fn window_cycling_uses_macos_convention_keys() {
+        assert_eq!(
+            resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::SelectNextWindow),
+            vec!["cmd-`".to_string()]
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::SelectPreviousWindow),
+            vec!["cmd-shift-`".to_string()]
+        );
+    }
+
+    #[test]
+    fn code_selection_yields_cmd_backtick_to_window_cycling() {
+        // cmd-` now cycles windows, so inline code uses cmd-e (keeping ctrl-`),
+        // and it must not conflict with the window-cycling default.
+        assert_eq!(
+            resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::CodeSelection),
+            vec!["cmd-e".to_string(), "ctrl-`".to_string()]
+        );
+        assert!(
+            shortcut_conflict_for(
+                ShortcutCommand::SelectNextWindow,
+                &["cmd-`".to_string()],
+                &BTreeMap::new()
+            )
+            .is_none()
         );
     }
 
