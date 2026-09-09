@@ -34,6 +34,7 @@ mod persistence;
 pub(crate) mod picgo;
 mod render;
 mod runtime_context;
+mod search;
 mod selection;
 mod source_mapping;
 mod status_bar;
@@ -45,6 +46,7 @@ mod update;
 mod window_state;
 mod workspace;
 
+use self::search::SearchBarState;
 use self::status_bar::StatusBarState;
 use self::workspace::WorkspaceState;
 
@@ -152,6 +154,7 @@ pub struct Editor {
     context_menu: Option<ContextMenuState>,
     /// Table insertion dialog state, if open.
     table_insert_dialog: Option<TableInsertDialogState>,
+    search_bar: Option<SearchBarState>,
     /// Delayed insert-submenu close task, canceled on renewed hover.
     context_menu_submenu_close_task: Option<Task<()>>,
     /// Hover preview is distinct from the committed row/column selection.
@@ -467,6 +470,7 @@ impl Editor {
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,
+            search_bar: None,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,
