@@ -73,6 +73,9 @@ actions!(
         ToggleWorkspace,
         SelectNextWindow,
         SelectPreviousWindow,
+        Find,
+        FindNext,
+        FindPrevious,
     ]
 );
 
@@ -165,6 +168,9 @@ pub(crate) enum ShortcutCommand {
     ToggleWorkspace,
     SelectNextWindow,
     SelectPreviousWindow,
+    Find,
+    FindNext,
+    FindPrevious,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -546,6 +552,29 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         default_keys: &["cmd-shift-`"],
         context: None,
     },
+    // Global so Find works from anywhere, and FindNext/FindPrevious keep
+    // cycling matches after a jump moves focus out of the search field.
+    ShortcutDefinition {
+        command: ShortcutCommand::Find,
+        id: "find",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-f", "ctrl-f"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FindNext,
+        id: "find_next",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-g", "ctrl-g"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::FindPrevious,
+        id: "find_previous",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-shift-g", "ctrl-shift-g"],
+        context: None,
+    },
 ];
 
 pub(crate) fn shortcut_definitions() -> &'static [ShortcutDefinition] {
@@ -759,6 +788,9 @@ fn key_binding_for(
         ShortcutCommand::SelectPreviousWindow => {
             KeyBinding::new(key, SelectPreviousWindow, context)
         }
+        ShortcutCommand::Find => KeyBinding::new(key, Find, context),
+        ShortcutCommand::FindNext => KeyBinding::new(key, FindNext, context),
+        ShortcutCommand::FindPrevious => KeyBinding::new(key, FindPrevious, context),
     }
 }
 

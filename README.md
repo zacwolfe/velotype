@@ -97,6 +97,28 @@ cargo build --release
 
 If everything works, the build artifact will be stored under `target/release`. You can use the executable directly.
 
+#### Installing a locally-built version as an always-up-to-date app (macOS)
+
+Symlinking a CLI command straight at `target/release/velotype` works for running the editor, but it skips app-bundle detection: single-instance window grouping and cmd-`` ` `` window cycling only activate when Velotype is launched from a real `<Name>.app/Contents/MacOS/<bin>` bundle (see `bundle_path_for_exe` / `launch_via_open` in `src/main.rs`), not a raw binary. To get a locally-built version that behaves like a real install and always reflects your latest `cargo build --release`, package it as a `.app` and refresh that same bundle path after every rebuild, rather than rebuilding a fresh copy each time.
+
+**One-time setup:**
+
+```bash
+./scripts/create_macos_app_dist.sh   # builds + packages dist/Velotype.app
+cp -R dist/Velotype.app /Applications/   # or ~/Applications, see note below
+open /Applications/Velotype.app
+```
+
+Then, in the running app, use **Help → Install CLI Command** to create the `/usr/local/bin/velotype` symlink (this prompts for your admin password).
+
+> Some managed Macs block writes to `/Applications` even for the app's owner. `~/Applications` works identically — Velotype's bundle detection only checks the `*.app/Contents/MacOS/<bin>` shape, not which directory it lives under — so use it instead if `/Applications` is blocked.
+
+**Keeping it up to date:** re-run `scripts/update_installed_app.sh`. It builds, repackages, and replaces whichever of `/Applications/Velotype.app` or `~/Applications/Velotype.app` is writable, in place — so the CLI symlink and Dock icon you set up once keep resolving correctly and always launch the latest build, no reinstall step needed:
+
+```bash
+./scripts/update_installed_app.sh
+```
+
 ## Roadmap
 
 Velotype already supports almost all basic Markdown syntax and most commonly used extended Markdown syntax, including headings, paragraphs, lists, task lists, quotes, callouts, tables, code blocks, inline formatting, links, reference-style links and images, footnotes, standalone images, comment blocks, and safe native HTML handling.

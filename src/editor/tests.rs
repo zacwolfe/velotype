@@ -9,9 +9,10 @@ use gpui::{
 
 use super::{Editor, MountedRun, ViewMode};
 use crate::components::{
-    BlockKind, CloseWindow, FocusNext, ImageReferenceDefinitions, ImageResolvedSource,
-    InlineTextTree, Newline, QuitApplication, SaveDocument, TableCellInlineImageSegment,
-    TableColumnAlignment, parse_table_cell_inline_images, superscript_ordinal,
+    BlockKind, CloseWindow, Find, FindNext, FindPrevious, FocusNext, ImageReferenceDefinitions,
+    ImageResolvedSource, InlineTextTree, Newline, QuitApplication, SaveDocument,
+    TableCellInlineImageSegment, TableColumnAlignment, parse_table_cell_inline_images,
+    superscript_ordinal,
 };
 use crate::export::ExportFormat;
 use crate::i18n::{I18nManager, I18nStrings};
@@ -3506,5 +3507,175 @@ async fn toggle_view_mode_preserves_callout_table_cell_position(cx: &mut TestApp
         assert_eq!(restored_cell.read(cx).display_text(), "beta");
         assert_eq!(restored_cell.read(cx).selected_range, 2..2);
         assert_eq!(editor.pending_focus, Some(restored_cell.entity_id()));
+    });
+}
+
+#[gpui::test]
+async fn search_finds_matches_across_paragraphs_and_table_cells(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = [
+        "Alpha bravo",
+        "",
+        "charlie alpha delta",
+        "",
+        "| A | B |",
+        "| --- | --- |",
+        "| alpha | zeta |",
+    ]
+    .join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().expect("search bar open").query = "alpha".to_string();
+        editor.recompute_search_matches(cx);
+    });
+
+    editor.update(cx, |editor, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        // One in "Alpha bravo" (case-insensitive), one in "charlie alpha
+        // delta", and one in the table cell "alpha" — the header row and
+        // "zeta" cell don't match.
+        assert_eq!(search.matches.len(), 3);
+        // Typing alone never jumps to a match; navigation is explicit.
+        assert_eq!(search.active_index, None);
+    });
+}
+
+#[gpui::test]
+async fn find_next_and_previous_cycle_through_matches_with_wraparound(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two", "", "alpha three"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    assert_eq!(visible.len(), 3);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().expect("search bar open").query = "alpha".to_string();
+        editor.recompute_search_matches(cx);
+        editor.on_find_next(&FindNext, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
+        assert_eq!(visible[0].entity.read(cx).selected_range, 0..5);
+        assert_eq!(editor.search_bar.as_ref().unwrap().active_index, Some(0));
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find_next(&FindNext, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.active_entity_id, Some(visible[1].entity.entity_id()));
+        assert_eq!(visible[1].entity.read(cx).selected_range, 0..5);
+    });
+
+    // One more step past the last match wraps back to the first.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find_next(&FindNext, window, cx);
+        editor.on_find_next(&FindNext, window, cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
+    });
+
+    // Stepping backward from the first match wraps to the last.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find_previous(&FindPrevious, window, cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.active_entity_id, Some(visible[2].entity.entity_id()));
+    });
+}
+
+#[gpui::test]
+async fn closing_search_bar_restores_focus_only_when_no_jump_happened(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    let first_block_id = visible[0].entity.entity_id();
+
+    // `from_markdown` already focused the first block; opening and closing
+    // the bar without ever jumping to a match should restore that focus.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        editor.dismiss_contextual_overlays(cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.search_bar.is_none());
+        assert_eq!(editor.active_entity_id, Some(first_block_id));
+    });
+
+    // Jumping to a match and then closing should leave focus at the match
+    // instead of snapping back to where it was before the bar opened.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().unwrap().query = "alpha".to_string();
+        editor.recompute_search_matches(cx);
+        editor.on_find_next(&FindNext, window, cx);
+    });
+    editor.update(cx, |editor, cx| {
+        editor.dismiss_contextual_overlays(cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.search_bar.is_none());
+        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
+    });
+}
+
+#[gpui::test]
+async fn search_jump_far_down_a_long_document_scrolls_the_match_into_view(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    // A row many pages away from the current scroll position sits on a
+    // virtualization "island" positioned from estimated, not-yet-measured
+    // row heights, so a single scroll nudge can undershoot. This document is
+    // long enough to exercise that: the match sits in the very last section.
+    let markdown = (0..200)
+        .map(|index| format!("## Section {index}\n\nNeedle paragraph body for section {index}.\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().unwrap().query =
+            "Needle paragraph body for section 199".to_string();
+        editor.recompute_search_matches(cx);
+        editor.on_find_next(&FindNext, window, cx);
+    });
+
+    // Give the estimate-based island position a few frames to converge, the
+    // same way the real app's 16ms scroll-recheck timer does automatically
+    // with no further clicks needed.
+    for _ in 0..5 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        assert!(
+            !editor.pending_scroll_active_block_into_view,
+            "scroll-into-view never settled"
+        );
+        let target = editor.search_bar.as_ref().unwrap().matches[0].entity_id;
+        let block = editor.focusable_entity_by_id(target).expect("match block");
+        let bounds = block.read(cx).last_bounds.expect("match block is mounted");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "match at {bounds:?} is not inside the viewport {viewport:?}"
+        );
     });
 }

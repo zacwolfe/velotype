@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::sync::{
     Arc,
@@ -213,6 +213,48 @@ fn launch_via_open(paths: &[PathBuf], activate: bool) -> bool {
     true
 }
 
+/// Creates `path` as an empty file, along with any missing parent
+/// directories, when nothing exists there yet — so `velotype ./notes/new.md`
+/// behaves like `touch` followed by open, instead of opening a window whose
+/// backing file only appears on the first successful save.
+///
+/// Runs before the launch handoff, because the single-instance path routes
+/// through LaunchServices `open`, which refuses a path that does not exist.
+///
+/// Returns `Ok(true)` when a file was created. An existing file is left
+/// untouched (`Ok(false)`); `create_new` means a concurrent writer can never
+/// be clobbered. A path that is already a directory is reported as an error,
+/// since it can never be opened as Markdown.
+fn ensure_markdown_file_exists(path: &Path) -> std::io::Result<bool> {
+    if path.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::IsADirectory,
+            "path is a directory",
+        ));
+    }
+    if path.exists() {
+        return Ok(false);
+    }
+    // `parent()` is Some("") for a bare filename, which is not a directory
+    // worth creating; the empty check keeps `create_dir_all` from erroring.
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(_) => Ok(true),
+        // Lost a race against another writer; the file exists now, which is
+        // all this function promises.
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -321,6 +363,19 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    // Create any named-but-missing file before the launch handoff below: the
+    // single-instance path routes through LaunchServices `open`, which refuses
+    // a nonexistent path, and a detached child would otherwise race the
+    // parent. Doing it here means every launch path sees a real file.
+    // Creation is silent on success, the way `touch` is; only failures (an
+    // unwritable directory, or a path that is really a directory) are worth
+    // reporting, and they stay non-fatal so the window still opens.
+    for path in &input_paths {
+        if let Err(err) = ensure_markdown_file_exists(path) {
+            eprintln!("failed to create '{}': {err}", path.display());
+        }
     }
 
     // Drain a stdin pipe once, up front, in whatever process the shell invoked.
@@ -551,5 +606,67 @@ mod tests {
             bundle_path_for_exe(Path::new("/opt/Velotype.app/Resources/bin/velotype")),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod file_creation_tests {
+    use super::ensure_markdown_file_exists;
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "velotype-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn creates_missing_file_and_parent_directories() {
+        let root = temp_dir("create-nested");
+        let target = root.join("a/b/some-nonexistent-file.md");
+
+        assert!(ensure_markdown_file_exists(&target).expect("creation succeeds"));
+        assert!(target.is_file());
+        assert_eq!(std::fs::read_to_string(&target).expect("read back"), "");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn leaves_an_existing_file_untouched() {
+        let root = temp_dir("existing");
+        let target = root.join("notes.md");
+        std::fs::write(&target, "# real content").expect("seed file");
+
+        assert!(
+            !ensure_markdown_file_exists(&target).expect("no-op succeeds"),
+            "an existing file should not report as created"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read back"),
+            "# real content",
+            "existing content must never be truncated"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reports_an_error_for_a_directory_path() {
+        let root = temp_dir("is-a-dir");
+
+        assert!(
+            ensure_markdown_file_exists(&root).is_err(),
+            "a directory can never be opened as markdown"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

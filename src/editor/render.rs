@@ -430,6 +430,13 @@ impl Editor {
         }
     }
 
+    /// Returns `true` once the caret is confirmed inside the viewport with
+    /// no further adjustment needed. A block many rows away from the
+    /// mounted run sits on an "island" positioned from estimated (not yet
+    /// measured) row heights, so a single nudge can undershoot; returning
+    /// `false` whenever an adjustment was just applied lets the caller
+    /// retry on the next frame, once nearby rows have real measurements and
+    /// the island's estimated position has tightened.
     fn ensure_focused_caret_visible(&mut self, window: &Window, cx: &App) -> bool {
         let Some(focused_block) = self.focused_edit_target(window, cx) else {
             return false;
@@ -461,7 +468,7 @@ impl Editor {
             self.scroll_handle.set_offset(offset);
         }
 
-        true
+        !changed
     }
 
     fn apply_pending_scroll_into_view(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -475,14 +482,17 @@ impl Editor {
 
         // scroll_to_item indexed children by position, which the spacers break;
         // the focused block is always mounted, so pixel math on its bounds works.
-        let has_bounds = self.ensure_focused_caret_visible(window, cx);
+        // `settled` is false both when there is no bounds yet (row not mounted)
+        // and when a correction was just applied (possibly still an
+        // estimate-based undershoot) — either way, another pass is needed.
+        let settled = self.ensure_focused_caret_visible(window, cx);
         if self.pending_scroll_recheck_after_layout {
             self.pending_scroll_recheck_after_layout = false;
             self.schedule_scroll_recheck(cx);
             return;
         }
 
-        if !has_bounds {
+        if !settled {
             self.schedule_scroll_recheck(cx);
             return;
         }
@@ -2051,6 +2061,9 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_close_window))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_toggle_workspace_action))
+            .on_action(cx.listener(Self::on_find))
+            .on_action(cx.listener(Self::on_find_next))
+            .on_action(cx.listener(Self::on_find_previous))
             .on_action(cx.listener(Self::on_page_up))
             .on_action(cx.listener(Self::on_page_down))
             .on_action(cx.listener(Self::on_jump_to_top))
@@ -2137,6 +2150,11 @@ impl Render for Editor {
         };
         let base = if let Some(table_dialog) = self.render_table_insert_dialog_overlay(&theme, cx) {
             base.child(table_dialog)
+        } else {
+            base
+        };
+        let base = if let Some(search_bar) = self.render_search_bar_overlay(&theme, cx) {
+            base.child(search_bar)
         } else {
             base
         };

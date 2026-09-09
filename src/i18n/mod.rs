@@ -245,6 +245,13 @@ pub struct I18nStrings {
     pub preferences_shortcut_dismiss_transient_ui: String,
     pub preferences_shortcut_toggle_view_mode: String,
     pub preferences_shortcut_toggle_workspace: String,
+    pub preferences_shortcut_find: String,
+    pub preferences_shortcut_find_next: String,
+    pub preferences_shortcut_find_previous: String,
+    /// Placeholder text shown in the empty find bar input.
+    pub search_placeholder: String,
+    /// Message shown in the find bar when the query has no matches.
+    pub search_no_matches: String,
     /// Workspace drawer Files tab.
     pub workspace_tab_files: String,
     /// Workspace drawer Outline tab.
@@ -486,6 +493,11 @@ struct I18nStringsDe {
     preferences_shortcut_dismiss_transient_ui: Option<String>,
     preferences_shortcut_toggle_view_mode: Option<String>,
     preferences_shortcut_toggle_workspace: Option<String>,
+    preferences_shortcut_find: Option<String>,
+    preferences_shortcut_find_next: Option<String>,
+    preferences_shortcut_find_previous: Option<String>,
+    search_placeholder: Option<String>,
+    search_no_matches: Option<String>,
     workspace_tab_files: Option<String>,
     workspace_tab_outline: Option<String>,
     workspace_no_file_title: Option<String>,
@@ -679,6 +691,11 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_shortcut_dismiss_transient_ui",
     "preferences_shortcut_toggle_view_mode",
     "preferences_shortcut_toggle_workspace",
+    "preferences_shortcut_find",
+    "preferences_shortcut_find_next",
+    "preferences_shortcut_find_previous",
+    "search_placeholder",
+    "search_no_matches",
     "workspace_tab_files",
     "workspace_tab_outline",
     "workspace_no_file_title",
@@ -1116,6 +1133,19 @@ impl I18nStringsDe {
             preferences_shortcut_toggle_workspace: self
                 .preferences_shortcut_toggle_workspace
                 .unwrap_or(defaults.preferences_shortcut_toggle_workspace),
+            preferences_shortcut_find: self
+                .preferences_shortcut_find
+                .unwrap_or(defaults.preferences_shortcut_find),
+            preferences_shortcut_find_next: self
+                .preferences_shortcut_find_next
+                .unwrap_or(defaults.preferences_shortcut_find_next),
+            preferences_shortcut_find_previous: self
+                .preferences_shortcut_find_previous
+                .unwrap_or(defaults.preferences_shortcut_find_previous),
+            search_placeholder: self
+                .search_placeholder
+                .unwrap_or(defaults.search_placeholder),
+            search_no_matches: self.search_no_matches.unwrap_or(defaults.search_no_matches),
             workspace_tab_files: self
                 .workspace_tab_files
                 .unwrap_or(defaults.workspace_tab_files),
@@ -1399,6 +1429,11 @@ impl I18nStrings {
             preferences_shortcut_dismiss_transient_ui: "关闭临时界面".into(),
             preferences_shortcut_toggle_view_mode: "切换视图模式".into(),
             preferences_shortcut_toggle_workspace: "切换工作区".into(),
+            preferences_shortcut_find: "查找".into(),
+            preferences_shortcut_find_next: "查找下一个".into(),
+            preferences_shortcut_find_previous: "查找上一个".into(),
+            search_placeholder: "查找".into(),
+            search_no_matches: "无匹配结果".into(),
             workspace_tab_files: "文件".into(),
             workspace_tab_outline: "大纲".into(),
             workspace_no_file_title: "未打开 Markdown 文件".into(),
@@ -1621,6 +1656,11 @@ impl I18nStrings {
             preferences_shortcut_dismiss_transient_ui: "Dismiss Temporary UI".into(),
             preferences_shortcut_toggle_view_mode: "Toggle View Mode".into(),
             preferences_shortcut_toggle_workspace: "Toggle Workspace".into(),
+            preferences_shortcut_find: "Find".into(),
+            preferences_shortcut_find_next: "Find Next".into(),
+            preferences_shortcut_find_previous: "Find Previous".into(),
+            search_placeholder: "Find".into(),
+            search_no_matches: "No matches".into(),
             workspace_tab_files: "Files".into(),
             workspace_tab_outline: "Outline".into(),
             workspace_no_file_title: "No Markdown File Open".into(),

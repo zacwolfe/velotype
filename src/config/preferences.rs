@@ -1464,6 +1464,9 @@ impl PreferencesWindow {
             }
             ShortcutCommand::SelectNextWindow => strings.menu_next_window.clone(),
             ShortcutCommand::SelectPreviousWindow => strings.menu_previous_window.clone(),
+            ShortcutCommand::Find => strings.preferences_shortcut_find.clone(),
+            ShortcutCommand::FindNext => strings.preferences_shortcut_find_next.clone(),
+            ShortcutCommand::FindPrevious => strings.preferences_shortcut_find_previous.clone(),
         }
     }
 
