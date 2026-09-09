@@ -332,6 +332,14 @@ pub(crate) fn render_custom_titlebar<T: 'static>(
     .on_click(|event, window, _cx| {
         if event.is_right_click() {
             window.show_window_menu(event.position());
+        } else if event.click_count() >= 2 {
+            // Platform-hit-test drag (macOS/Windows) does not zoom on its
+            // own here: the region is only marked as a drag area, not a
+            // real system title bar, so the OS never sees the double-click
+            // gesture. A single click or a drag never reaches `on_click`
+            // (no completed click at the same position), so this cannot
+            // fire mid-drag.
+            window.zoom_window();
         }
     });
 
