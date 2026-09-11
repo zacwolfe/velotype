@@ -1,0 +1,4 @@
+- src/i18n/mod.rs: Kept both upstream theme selector labels and feature branch foreground preference strings. (dc40918)
+- src/main.rs: Kept both relaunch_detached function and the original main function doc comment. (dc40918)
+- src/main.rs: Combined init_app_menu(cx, preferences.foreground_on_launch) with updater::init call. (dc40918)
+- src/app_menu.rs: Combined deferred quit logic (dc40918) with upstream exit guard check. (dc40918)

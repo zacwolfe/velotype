@@ -2210,8 +2210,8 @@ impl Render for Editor {
         } else {
             base
         };
-        let workspace_width =
-            workspace_panel_width_for_viewport(f32::from(window.viewport_size().width));
+        let viewport_width = f32::from(window.viewport_size().width);
+        let workspace_width = self.workspace_panel_width(viewport_width);
         let main_content = div()
             .w_full()
             .flex_1()
@@ -2220,7 +2220,7 @@ impl Render for Editor {
             .flex()
             .min_w(px(0.0));
         let main_content = if let Some(workspace_panel) =
-            self.render_workspace_panel(&theme, &strings, workspace_width, cx)
+            self.render_workspace_panel(&theme, &strings, workspace_width, viewport_width, cx)
         {
             main_content.child(workspace_panel)
         } else {

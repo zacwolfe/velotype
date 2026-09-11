@@ -48,7 +48,7 @@ mod workspace;
 
 use self::search::SearchBarState;
 use self::status_bar::StatusBarState;
-use self::workspace::WorkspaceState;
+use self::workspace::{WorkspaceResizeDrag, WorkspaceState};
 
 /// Link navigation request deferred until a `Window` is available.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +148,7 @@ pub struct Editor {
     info_dialog: Option<InfoDialogKind>,
     /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
+    workspace_resize_drag: Option<WorkspaceResizeDrag>,
     /// Hover state for status-bar controls.
     status_bar: StatusBarState,
     /// Currently open insert or table-axis context menu.
@@ -467,6 +468,7 @@ impl Editor {
             drop_replace_restore_focus: None,
             info_dialog: None,
             workspace: WorkspaceState::default(),
+            workspace_resize_drag: None,
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,
