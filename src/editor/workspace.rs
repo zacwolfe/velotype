@@ -16,6 +16,9 @@ const MARKDOWN_ICON: &str = "icon/workspace/markdown.svg";
 const WORKSPACE_PANEL_TARGET_RATIO: f32 = 0.15;
 const WORKSPACE_PANEL_MIN_WIDTH: f32 = 240.0;
 const WORKSPACE_PANEL_MAX_WIDTH: f32 = 360.0;
+// Manual drag allows a wider range than the automatic viewport-ratio width above.
+const WORKSPACE_PANEL_DRAG_MIN_WIDTH: f32 = 180.0;
+const WORKSPACE_PANEL_DRAG_MAX_WIDTH: f32 = 720.0;
 const WORKSPACE_NODE_HEIGHT: f32 = 28.0;
 const WORKSPACE_NODE_INDENT: f32 = 18.0;
 
@@ -58,6 +61,18 @@ pub(super) struct WorkspaceState {
     outline_source: Option<String>,
     expanded: HashSet<String>,
     selected: Option<WorkspaceSelection>,
+    /// `None` means the user has never dragged the resize handle; the width
+    /// then tracks the viewport automatically. Deliberately in-memory only.
+    width: Option<f32>,
+}
+
+/// In-flight sidebar resize. `max_width` is captured at drag start so the
+/// clamp does not shift if the window resizes mid-drag.
+#[derive(Clone, Copy)]
+pub(super) struct WorkspaceResizeDrag {
+    start_pointer_x: f32,
+    start_width: f32,
+    max_width: f32,
 }
 
 impl Editor {
@@ -163,6 +178,41 @@ impl Editor {
         }
     }
 
+    pub(super) fn workspace_panel_width(&self, viewport_width: f32) -> f32 {
+        resolve_workspace_panel_width(self.workspace.width, viewport_width)
+    }
+
+    pub(super) fn start_workspace_resize(
+        &mut self,
+        start_pointer_x: f32,
+        start_width: f32,
+        max_width: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_resize_drag = Some(WorkspaceResizeDrag {
+            start_pointer_x,
+            start_width,
+            max_width,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn update_workspace_resize(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
+        let Some(drag) = self.workspace_resize_drag else {
+            return;
+        };
+
+        let next = drag.start_width + (pointer_x - drag.start_pointer_x);
+        self.workspace.width = Some(next.clamp(WORKSPACE_PANEL_DRAG_MIN_WIDTH, drag.max_width));
+        cx.notify();
+    }
+
+    pub(super) fn end_workspace_resize(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_resize_drag.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn toggle_workspace_node(&mut self, id: &str, cx: &mut Context<Self>) {
         if !self.workspace.expanded.remove(id) {
             self.workspace.expanded.insert(id.to_string());
@@ -185,6 +235,7 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         panel_width: f32,
+        viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.workspace.is_open {
@@ -237,11 +288,15 @@ impl Editor {
             WorkspaceTab::Outline => self.render_workspace_outline_tree(theme, strings, &editor),
         };
 
+        let resize_max_width = workspace_panel_drag_max_width(viewport_width);
+        let resize_editor = editor.clone();
+
         Some(
             div()
                 .id("workspace-panel")
                 .h_full()
                 .w(px(panel_width))
+                .relative()
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
@@ -277,6 +332,61 @@ impl Editor {
                         .px(px(8.0))
                         .py(px(10.0))
                         .child(body),
+                )
+                .child(
+                    div()
+                        .id("workspace-resize-handle")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .h_full()
+                        .w(px(6.0))
+                        .cursor_ew_resize()
+                        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+                            let pointer_x = f32::from(event.position.x);
+                            let _ = resize_editor.update(cx, |editor, cx| {
+                                cx.stop_propagation();
+                                editor.start_workspace_resize(
+                                    pointer_x,
+                                    panel_width,
+                                    resize_max_width,
+                                    cx,
+                                );
+                            });
+                        })
+                        .child(
+                            canvas(
+                                |_, _, _| (),
+                                move |_bounds, _, window, _| {
+                                    window.on_mouse_event({
+                                        let editor = editor.clone();
+                                        move |_event: &MouseUpEvent, phase, _window, cx| {
+                                            if !phase.bubble() {
+                                                return;
+                                            }
+                                            let _ = editor.update(cx, |editor, cx| {
+                                                editor.end_workspace_resize(cx);
+                                            });
+                                        }
+                                    });
+
+                                    window.on_mouse_event({
+                                        let editor = editor.clone();
+                                        move |event: &MouseMoveEvent, phase, _window, cx| {
+                                            if !phase.bubble() || !event.dragging() {
+                                                return;
+                                            }
+
+                                            let pointer_x = f32::from(event.position.x);
+                                            let _ = editor.update(cx, |editor, cx| {
+                                                editor.update_workspace_resize(pointer_x, cx);
+                                            });
+                                        }
+                                    });
+                                },
+                            )
+                            .size_full(),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -575,6 +685,26 @@ pub(super) fn workspace_panel_width_for_viewport(viewport_width: f32) -> f32 {
     target.clamp(WORKSPACE_PANEL_MIN_WIDTH, WORKSPACE_PANEL_MAX_WIDTH)
 }
 
+/// Upper bound for a manually dragged width: never more than 80% of the
+/// viewport, so the sidebar cannot crowd out the editor on a small window.
+pub(super) fn workspace_panel_drag_max_width(viewport_width: f32) -> f32 {
+    (viewport_width * 0.8)
+        .min(WORKSPACE_PANEL_DRAG_MAX_WIDTH)
+        .max(WORKSPACE_PANEL_DRAG_MIN_WIDTH)
+}
+
+/// Effective panel width. A dragged width is re-clamped against the current
+/// viewport on every read, so shrinking the window cannot leave a previously
+/// dragged sidebar wider than the window allows.
+fn resolve_workspace_panel_width(stored_width: Option<f32>, viewport_width: f32) -> f32 {
+    stored_width
+        .unwrap_or_else(|| workspace_panel_width_for_viewport(viewport_width))
+        .clamp(
+            WORKSPACE_PANEL_DRAG_MIN_WIDTH,
+            workspace_panel_drag_max_width(viewport_width),
+        )
+}
+
 fn prune_outline_state(workspace: &mut WorkspaceState, outline: &[WorkspaceTreeNode]) {
     let mut current_ids = HashSet::new();
     collect_node_ids(outline, &mut current_ids);
@@ -688,7 +818,8 @@ fn is_closing_fence(trimmed: &str, marker: char, len: usize) -> bool {
 mod tests {
     use super::{
         WorkspaceSelection, WorkspaceState, WorkspaceTreeKind, build_outline_tree,
-        prune_outline_state, scan_workspace_dir, workspace_panel_width_for_viewport,
+        prune_outline_state, resolve_workspace_panel_width, scan_workspace_dir,
+        workspace_panel_drag_max_width, workspace_panel_width_for_viewport,
     };
     use std::fs;
 
@@ -761,5 +892,39 @@ mod tests {
         assert_eq!(workspace_panel_width_for_viewport(1000.0), 240.0);
         assert_eq!(workspace_panel_width_for_viewport(2000.0), 300.0);
         assert_eq!(workspace_panel_width_for_viewport(4000.0), 360.0);
+    }
+
+    #[test]
+    fn drag_max_width_is_bounded_by_viewport_share_and_constant() {
+        // 80% of the viewport while that is the smallest bound.
+        assert_eq!(workspace_panel_drag_max_width(500.0), 400.0);
+        // The absolute cap wins on a wide window.
+        assert_eq!(workspace_panel_drag_max_width(4000.0), 720.0);
+        // The floor wins on a very narrow window, so the max never falls
+        // below the min and `clamp` cannot panic.
+        assert_eq!(workspace_panel_drag_max_width(100.0), 180.0);
+    }
+
+    #[test]
+    fn undragged_width_tracks_the_viewport() {
+        assert_eq!(
+            resolve_workspace_panel_width(None, 2000.0),
+            workspace_panel_width_for_viewport(2000.0)
+        );
+    }
+
+    #[test]
+    fn dragged_width_is_kept_verbatim_when_it_fits() {
+        assert_eq!(resolve_workspace_panel_width(Some(480.0), 2000.0), 480.0);
+    }
+
+    #[test]
+    fn dragged_width_is_reclamped_when_the_window_shrinks() {
+        // Dragged wide on a large window, then the window shrank: the stored
+        // width must yield to the smaller viewport instead of crowding out
+        // the editor.
+        assert_eq!(resolve_workspace_panel_width(Some(700.0), 600.0), 480.0);
+        // And it is never squeezed below the drag floor.
+        assert_eq!(resolve_workspace_panel_width(Some(200.0), 100.0), 180.0);
     }
 }

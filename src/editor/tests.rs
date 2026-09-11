@@ -3679,3 +3679,50 @@ async fn search_jump_far_down_a_long_document_scrolls_the_match_into_view(
         );
     });
 }
+
+#[gpui::test]
+async fn open_workspace_drawer_draws_resize_handle_and_applies_dragged_width(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "# Doc".to_string(), None));
+    redraw(cx);
+
+    // Opening the drawer mounts the resize handle and its canvas child; a
+    // malformed element tree would panic during draw rather than fail an
+    // assertion, so the redraw itself is the assertion here.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.toggle_workspace_drawer(window, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.workspace.is_open);
+        // Never dragged yet, so the width still tracks the viewport.
+        assert_eq!(
+            editor.workspace_panel_width(2000.0),
+            super::workspace::workspace_panel_width_for_viewport(2000.0)
+        );
+    });
+
+    // Drag the handle 240px to the right from a 240px-wide panel.
+    editor.update(cx, |editor, cx| {
+        editor.start_workspace_resize(100.0, 240.0, 720.0, cx);
+        editor.update_workspace_resize(340.0, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.workspace_panel_width(2000.0), 480.0);
+        editor.end_workspace_resize(cx);
+    });
+    redraw(cx);
+
+    // The width survives the drag ending, and the drag session is cleared so
+    // later stray mouse-moves cannot keep resizing.
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.workspace_panel_width(2000.0), 480.0);
+        assert!(editor.workspace_resize_drag.is_none());
+    });
+}

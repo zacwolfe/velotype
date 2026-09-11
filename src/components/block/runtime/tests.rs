@@ -1330,6 +1330,98 @@ async fn word_start_boundaries_step_over_whole_words(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn select_word_at_selects_middle_word(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("alpha bravo charlie"),
+            ),
+        )
+    });
+
+    // "bravo" spans byte offsets 6..11; probe an offset inside it.
+    block.update(cx, |block, cx| {
+        assert!(block.select_word_at(8, cx));
+    });
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 6..11);
+        assert!(!block.selection_reversed);
+    });
+}
+
+#[gpui::test]
+async fn select_word_at_trailing_boundary_excludes_following_space(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("alpha bravo charlie"),
+            ),
+        )
+    });
+
+    // Offset 11 sits right at the end of "bravo" (6..11), before the space.
+    block.update(cx, |block, cx| {
+        assert!(block.select_word_at(11, cx));
+    });
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 6..11);
+    });
+}
+
+#[gpui::test]
+async fn select_word_at_whitespace_leaves_selection_unchanged(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("alpha  bravo"),
+            ),
+        )
+    });
+
+    block.update(cx, |block, cx| {
+        block.selected_range = 2..2;
+        // Two spaces separate the words (5..7); offset 6 sits strictly
+        // between them, past "alpha"'s trailing boundary at 5.
+        assert!(!block.select_word_at(6, cx));
+    });
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 2..2);
+    });
+}
+
+#[gpui::test]
+async fn select_word_at_handles_multibyte_word(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("café bar"),
+            ),
+        )
+    });
+
+    // "café" is 5 bytes ('é' is 2 bytes in UTF-8), so it spans 0..5.
+    block.update(cx, |block, cx| {
+        assert!(block.select_word_at(2, cx));
+    });
+    block.read_with(cx, |block, _cx| {
+        assert_eq!(block.selected_range, 0.."café".len());
+        assert_eq!("café".len(), 5);
+    });
+}
+
+#[gpui::test]
 async fn inline_link_projection_only_expands_touched_span(cx: &mut TestAppContext) {
     let block = cx.new(|cx| {
         Block::with_record(

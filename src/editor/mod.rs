@@ -47,7 +47,7 @@ mod workspace;
 
 use self::search::SearchBarState;
 use self::status_bar::StatusBarState;
-use self::workspace::WorkspaceState;
+use self::workspace::{WorkspaceResizeDrag, WorkspaceState};
 
 /// Link navigation request deferred until a `Window` is available.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,6 +110,7 @@ pub struct Editor {
     /// True while an online update check is running in the background.
     update_check_in_progress: bool,
     workspace: WorkspaceState,
+    workspace_resize_drag: Option<WorkspaceResizeDrag>,
     status_bar: StatusBarState,
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
@@ -347,6 +348,7 @@ impl Editor {
             info_dialog: None,
             update_check_in_progress: false,
             workspace: WorkspaceState::default(),
+            workspace_resize_drag: None,
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,

@@ -1380,6 +1380,24 @@ impl Block {
             return;
         }
 
+        // Double-click selects the word under the pointer, the standard
+        // text-editor gesture. Links and footnote references keep their existing
+        // double-click meaning (open / jump to definition), so no word is
+        // selected under them.
+        if event.click_count >= 2
+            && self.pointer_link_hit(event.position).is_none()
+            && self.pointer_footnote_hit(event.position).is_none()
+            && self.select_word_at(offset, cx)
+        {
+            // A live `is_selecting` would let the next mouse-move collapse the
+            // fresh word selection back to a caret.
+            self.is_selecting = false;
+            if !was_focused {
+                cx.emit(BlockEvent::RequestFocus);
+            }
+            return;
+        }
+
         if was_focused {
             self.is_selecting = true;
             if event.modifiers.shift {
@@ -1403,6 +1421,27 @@ impl Block {
             .zip(self.last_bounds)
             .and_then(|(lines, bounds)| {
                 super::element::link_at_position(
+                    self,
+                    lines,
+                    bounds,
+                    self.last_line_height,
+                    position,
+                )
+            })
+            .cloned()
+    }
+
+    /// Resolve the footnote reference under a pointer position against the
+    /// most recent rendered text layout, if any.
+    pub(crate) fn pointer_footnote_hit(
+        &self,
+        position: Point<Pixels>,
+    ) -> Option<super::InlineFootnoteHit> {
+        self.last_layout
+            .as_ref()
+            .zip(self.last_bounds)
+            .and_then(|(lines, bounds)| {
+                super::element::footnote_at_position(
                     self,
                     lines,
                     bounds,
@@ -1460,20 +1499,7 @@ impl Block {
         }
 
         if event.click_count >= 2 {
-            let footnote = self
-                .last_layout
-                .as_ref()
-                .zip(self.last_bounds)
-                .and_then(|(lines, bounds)| {
-                    super::element::footnote_at_position(
-                        self,
-                        lines,
-                        bounds,
-                        self.last_line_height,
-                        event.position,
-                    )
-                })
-                .cloned();
+            let footnote = self.pointer_footnote_hit(event.position);
             if let Some(footnote) = footnote {
                 cx.stop_propagation();
                 cx.emit(BlockEvent::RequestJumpToFootnoteDefinition { id: footnote.id });

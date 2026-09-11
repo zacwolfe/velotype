@@ -2184,6 +2184,44 @@ impl Block {
             .unwrap_or(text.len())
     }
 
+    /// Range of the word containing `offset`. Empty when the offset is not
+    /// inside a word, so a double-click on blank space leaves the caret alone
+    /// instead of selecting a whitespace run.
+    ///
+    /// `next_word_start` cannot express this: it returns the following word's
+    /// start, which would swallow the whitespace between the two.
+    pub fn word_range_at(&self, offset: usize) -> Range<usize> {
+        let text = self.display_text();
+        let offset = offset.min(text.len());
+        for (start, word) in text.unicode_word_indices() {
+            if offset < start {
+                break;
+            }
+            let end = start + word.len();
+            if offset <= end {
+                return start..end;
+            }
+        }
+        offset..offset
+    }
+
+    /// Selects the word under `offset`. Returns false (leaving the selection
+    /// untouched) when the offset is not inside a word.
+    pub fn select_word_at(&mut self, offset: usize, cx: &mut Context<Self>) -> bool {
+        let range = self.word_range_at(offset);
+        if range.is_empty() {
+            return false;
+        }
+        let limit = self.visible_len();
+        self.selected_range = range.start.min(limit)..range.end.min(limit);
+        self.selection_reversed = false;
+        self.cursor_blink_epoch = Instant::now();
+        self.clear_vertical_motion();
+        self.sync_collapsed_caret_affinity();
+        cx.notify();
+        true
+    }
+
     /// Reverse of `display_offset`: maps an expanded display offset
     /// back to the clean tree offset.
     fn unexpand_offset(&self, expanded: usize) -> usize {
