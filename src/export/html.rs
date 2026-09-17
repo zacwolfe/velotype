@@ -8,7 +8,7 @@ use gpui::{Hsla, Rgba};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
 
 use crate::components::{
-    inline_math_font_size, is_mermaid_closing_fence, parse_display_math_source,
+    MermaidPalette, inline_math_font_size, is_mermaid_closing_fence, parse_display_math_source,
     parse_html_image_block, parse_mermaid_fence_source, parse_mermaid_fence_start,
     render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export,
 };
@@ -85,7 +85,7 @@ fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Pat
     let rewritten = rewrite_unsafe_html_blocks(&rewritten, base_dir);
     let rewritten = rewrite_display_math_blocks(&rewritten, theme);
     let rewritten = rewrite_inline_math(&rewritten, theme);
-    let rewritten = rewrite_mermaid_blocks(&rewritten);
+    let rewritten = rewrite_mermaid_blocks(&rewritten, theme);
     let parser = Parser::new_ext(&rewritten, markdown_options())
         .map(|event| rewrite_local_image_event(event, base_dir));
     let mut body = String::new();
@@ -449,10 +449,11 @@ fn rewrite_display_math_blocks(markdown: &str, theme: &Theme) -> String {
     rewritten.join("\n")
 }
 
-fn rewrite_mermaid_blocks(markdown: &str) -> String {
+fn rewrite_mermaid_blocks(markdown: &str, theme: &Theme) -> String {
     let lines = markdown.split('\n').collect::<Vec<_>>();
     let mut rewritten = Vec::with_capacity(lines.len());
     let mut index = 0usize;
+    let palette = MermaidPalette::from_theme(theme);
 
     while index < lines.len() {
         let line = lines[index];
@@ -474,7 +475,7 @@ fn rewrite_mermaid_blocks(markdown: &str) -> String {
 
         let raw = lines[index..=end].join("\n");
         if let Some(source) = parse_mermaid_fence_source(&raw) {
-            match render_mermaid_to_svg(&source.body) {
+            match render_mermaid_to_svg(&source.body, &palette) {
                 Ok(svg) => {
                     let src = data_uri_for_bytes("image/svg+xml", svg.as_bytes());
                     rewritten.push(format!(

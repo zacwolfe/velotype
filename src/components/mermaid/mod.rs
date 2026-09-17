@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, anyhow};
 use directories::ProjectDirs;
+use gpui::{Hsla, Rgba};
+
+use crate::theme::Theme;
 
 const SIMPLE_MERMAID_LINE_LIMIT: usize = 8;
 const MERMAID_COMPLEX_TARGET_WIDTH_RATIO: f32 = 0.9;
@@ -54,6 +57,138 @@ pub(crate) struct MermaidSvgRender {
 pub(crate) struct MermaidSvgSize {
     pub(crate) width: f32,
     pub(crate) height: f32,
+}
+
+/// Theme colors substituted for the renderer's hardcoded light palette.
+///
+/// `mermaid-rs-renderer` emits a fixed set of seven hex colors as literal
+/// SVG attributes. This maps each of those exact colors onto the active
+/// theme so the diagram matches the surrounding editor.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct MermaidPalette {
+    background: String,
+    text: String,
+    node_fill: String,
+    alt_node_fill: String,
+    primary_line: String,
+    secondary_line: String,
+    subtle_line: String,
+}
+
+impl MermaidPalette {
+    pub(crate) fn from_theme(theme: &Theme) -> Self {
+        let c = &theme.colors;
+        Self {
+            background: svg_color(c.editor_background),
+            text: svg_color(c.text_default),
+            node_fill: svg_color(c.code_bg),
+            alt_node_fill: svg_color(c.dialog_surface),
+            primary_line: svg_color(c.separator_color),
+            secondary_line: svg_color(c.table_border),
+            subtle_line: svg_color(c.table_border),
+        }
+    }
+
+    /// The renderer's fixed hex colors mapped to their themed replacement,
+    /// keyed by uppercase 6-digit hex with no leading `#`.
+    fn mapping(&self) -> [(&'static str, &str); 7] {
+        [
+            ("FFFFFF", self.background.as_str()),
+            ("0F172A", self.text.as_str()),
+            ("F8FAFC", self.node_fill.as_str()),
+            ("F1F5F9", self.alt_node_fill.as_str()),
+            ("64748B", self.primary_line.as_str()),
+            ("94A3B8", self.secondary_line.as_str()),
+            ("CBD5E1", self.subtle_line.as_str()),
+        ]
+    }
+
+    fn lookup(&self, hex6_upper: &str) -> Option<&str> {
+        self.mapping()
+            .into_iter()
+            .find(|(key, _)| *key == hex6_upper)
+            .map(|(_, value)| value)
+    }
+
+    /// Stable fingerprint of the resolved colors, used in Mermaid cache keys
+    /// so a theme switch invalidates cached SVGs instead of serving stale colors.
+    pub(crate) fn cache_fingerprint(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    }
+}
+
+fn svg_color(color: Hsla) -> String {
+    let color = Rgba::from(color);
+    format!(
+        "rgba({},{},{},{})",
+        color_channel(color.r),
+        color_channel(color.g),
+        color_channel(color.b),
+        trim_float(f64::from(color.a.clamp(0.0, 1.0)))
+    )
+}
+
+fn color_channel(channel: f32) -> u8 {
+    (channel.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn trim_float(value: f64) -> String {
+    let formatted = format!("{value:.3}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Recolors every renderer-emitted `#RRGGBB` token found in the palette map,
+/// leaving everything else (including unmapped colors, 3-digit shorthands,
+/// and 8-digit alpha forms) untouched.
+///
+/// This must be a single pass over `svg`, not chained `.replace()` calls: a
+/// theme color substituted for one renderer color can itself equal another
+/// renderer color's search key, so a second `.replace()` pass would find and
+/// re-replace text this pass already wrote. Scanning once and copying
+/// matched/unmatched spans straight to the output avoids ever re-scanning
+/// text this function itself produced.
+pub(crate) fn recolor_mermaid_svg(svg: &str, palette: &MermaidPalette) -> String {
+    let chars: Vec<char> = svg.chars().collect();
+    let len = chars.len();
+    let mut result = String::with_capacity(svg.len());
+    let mut index = 0;
+
+    while index < len {
+        if chars[index] != '#' {
+            result.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let hex_start = index + 1;
+        let mut hex_end = hex_start;
+        while hex_end < len && chars[hex_end].is_ascii_hexdigit() {
+            hex_end += 1;
+        }
+
+        if hex_end - hex_start == 6 {
+            let token: String = chars[hex_start..hex_end].iter().collect();
+            match palette.lookup(&token.to_ascii_uppercase()) {
+                Some(replacement) => result.push_str(replacement),
+                None => {
+                    result.push('#');
+                    result.push_str(&token);
+                }
+            }
+            index = hex_end;
+            continue;
+        }
+
+        result.push('#');
+        index += 1;
+    }
+
+    result
 }
 
 /// Returns true when a fenced code info string declares Mermaid content.
@@ -125,19 +260,27 @@ pub(crate) fn render_mermaid_svg_for_display(
     source: &MermaidSource,
     available_width: f32,
     viewport_width: f32,
+    palette: &MermaidPalette,
 ) -> anyhow::Result<MermaidSvgRender> {
-    render_mermaid_svg_for_display_with(source, available_width, viewport_width, render_mermaid_raw)
+    render_mermaid_svg_for_display_with(
+        source,
+        available_width,
+        viewport_width,
+        palette,
+        render_mermaid_raw,
+    )
 }
 
 fn render_mermaid_svg_for_display_with(
     source: &MermaidSource,
     available_width: f32,
     viewport_width: f32,
+    palette: &MermaidPalette,
     renderer: MermaidRenderer,
 ) -> anyhow::Result<MermaidSvgRender> {
-    let base_key = mermaid_cache_key(&source.body);
+    let base_key = mermaid_cache_key(&source.body, palette);
     let base_path = mermaid_base_cache_path(&base_key)?;
-    let base_svg = render_mermaid_to_svg_cached_with(&source.body, &base_path, renderer)?;
+    let base_svg = render_mermaid_to_svg_cached_with(&source.body, &base_path, palette, renderer)?;
     let intrinsic = mermaid_svg_intrinsic_size(&base_svg)?;
     let scale = mermaid_display_scale(
         &source.body,
@@ -147,7 +290,7 @@ fn render_mermaid_svg_for_display_with(
         viewport_width,
     );
 
-    let display_key = mermaid_display_cache_key(&source.body, scale);
+    let display_key = mermaid_display_cache_key(&source.body, scale, palette);
     let display_path = mermaid_display_cache_path(&display_key)?;
     if display_path.exists() {
         let svg = fs::read_to_string(&display_path).with_context(|| {
@@ -183,10 +326,13 @@ fn render_mermaid_svg_for_display_with(
 }
 
 /// Render a Mermaid diagram body into cached SVG text.
-pub(crate) fn render_mermaid_to_svg(source: &str) -> anyhow::Result<String> {
-    let key = mermaid_cache_key(source);
+pub(crate) fn render_mermaid_to_svg(
+    source: &str,
+    palette: &MermaidPalette,
+) -> anyhow::Result<String> {
+    let key = mermaid_cache_key(source, palette);
     let path = mermaid_base_cache_path(&key)?;
-    render_mermaid_to_svg_cached_with(source, &path, render_mermaid_raw)
+    render_mermaid_to_svg_cached_with(source, &path, palette, render_mermaid_raw)
 }
 
 type MermaidRenderer = fn(&str) -> anyhow::Result<String>;
@@ -194,6 +340,7 @@ type MermaidRenderer = fn(&str) -> anyhow::Result<String>;
 fn render_mermaid_to_svg_cached_with(
     source: &str,
     path: &Path,
+    palette: &MermaidPalette,
     renderer: MermaidRenderer,
 ) -> anyhow::Result<String> {
     if path.exists() {
@@ -202,7 +349,9 @@ fn render_mermaid_to_svg_cached_with(
         });
     }
 
-    let svg = renderer(source)?;
+    // Recolor the base SVG before it hits the cache, so both the base file
+    // and any display SVG derived from it are already themed.
+    let svg = recolor_mermaid_svg(&renderer(source)?, palette);
     fs::write(path, &svg).with_context(|| {
         format!(
             "failed to write Mermaid base SVG cache '{}'",
@@ -223,17 +372,25 @@ fn render_mermaid_raw(source: &str) -> anyhow::Result<String> {
     Ok(svg)
 }
 
-/// Stable cache key for Mermaid content.
-pub(crate) fn mermaid_cache_key(source: &str) -> String {
+/// Stable cache key for Mermaid content and its resolved theme palette.
+///
+/// The palette must be part of the key: without it, switching themes would
+/// hit the previous theme's cached SVG and silently serve stale colors.
+pub(crate) fn mermaid_cache_key(source: &str, palette: &MermaidPalette) -> String {
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
+    palette.cache_fingerprint().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
-/// Stable cache key for editor display SVG content and scale.
-pub(crate) fn mermaid_display_cache_key(source: &str, scale: f32) -> String {
+/// Stable cache key for editor display SVG content, scale, and palette.
+pub(crate) fn mermaid_display_cache_key(
+    source: &str,
+    scale: f32,
+    palette: &MermaidPalette,
+) -> String {
     let mut hasher = DefaultHasher::new();
-    mermaid_cache_key(source).hash(&mut hasher);
+    mermaid_cache_key(source, palette).hash(&mut hasher);
     scale.max(0.1).to_bits().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
@@ -625,6 +782,22 @@ mod tests {
         }
     }
 
+    fn test_palette() -> MermaidPalette {
+        MermaidPalette::from_theme(&Theme::default_theme())
+    }
+
+    fn custom_palette() -> MermaidPalette {
+        MermaidPalette {
+            background: "#F8FAFC".to_string(),
+            text: "#000001".to_string(),
+            node_fill: "#ABCDEF".to_string(),
+            alt_node_fill: "#000002".to_string(),
+            primary_line: "#000003".to_string(),
+            secondary_line: "#000004".to_string(),
+            subtle_line: "#000005".to_string(),
+        }
+    }
+
     #[test]
     fn detects_mermaid_info_string() {
         assert!(is_mermaid_info_string(Some("mermaid")));
@@ -656,9 +829,36 @@ mod tests {
 
     #[test]
     fn cache_key_changes_with_source() {
+        let palette = test_palette();
         assert_ne!(
-            mermaid_cache_key("flowchart LR\nA --> B"),
-            mermaid_cache_key("flowchart LR\nA --> C")
+            mermaid_cache_key("flowchart LR\nA --> B", &palette),
+            mermaid_cache_key("flowchart LR\nA --> C", &palette)
+        );
+    }
+
+    #[test]
+    fn cache_key_changes_with_palette_and_stable_without_change() {
+        let source = "flowchart LR\nA --> B";
+        let default_palette = test_palette();
+        let custom = custom_palette();
+
+        assert_ne!(
+            mermaid_cache_key(source, &default_palette),
+            mermaid_cache_key(source, &custom)
+        );
+        assert_eq!(
+            mermaid_cache_key(source, &default_palette),
+            mermaid_cache_key(source, &test_palette())
+        );
+
+        let scale = 1.5;
+        assert_ne!(
+            mermaid_display_cache_key(source, scale, &default_palette),
+            mermaid_display_cache_key(source, scale, &custom)
+        );
+        assert_eq!(
+            mermaid_display_cache_key(source, scale, &default_palette),
+            mermaid_display_cache_key(source, scale, &test_palette())
         );
     }
 
@@ -700,9 +900,10 @@ mod tests {
     #[test]
     fn display_cache_key_changes_with_scale() {
         let source = "flowchart LR\nA --> B";
+        let palette = test_palette();
         assert_ne!(
-            mermaid_display_cache_key(source, 1.0),
-            mermaid_display_cache_key(source, 2.0)
+            mermaid_display_cache_key(source, 1.0, &palette),
+            mermaid_display_cache_key(source, 2.0, &palette)
         );
     }
 
@@ -745,16 +946,23 @@ mod tests {
 
     #[test]
     fn renders_basic_flowchart_svg() {
-        let svg = render_mermaid_to_svg("flowchart LR\nA --> B").expect("svg");
+        let svg = render_mermaid_to_svg("flowchart LR\nA --> B", &test_palette()).expect("svg");
         assert!(svg.contains("<svg"));
         assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn themed_render_has_no_leftover_white_background() {
+        let svg = render_mermaid_to_svg("flowchart LR\nA --> B", &test_palette()).expect("svg");
+        assert!(!svg.to_ascii_uppercase().contains("#FFFFFF"));
     }
 
     #[test]
     fn display_render_uses_scaled_intrinsic_size() {
         let source =
             parse_mermaid_fence_source("```mermaid\nflowchart LR\nA --> B\n```").expect("source");
-        let rendered = render_mermaid_svg_for_display(&source, 720.0, 960.0).expect("display svg");
+        let rendered = render_mermaid_svg_for_display(&source, 720.0, 960.0, &test_palette())
+            .expect("display svg");
 
         assert!(rendered.display_width > 1.0);
         assert!(rendered.display_height > 1.0);
@@ -774,24 +982,29 @@ mod tests {
 
     #[test]
     fn invalid_mermaid_returns_error() {
-        assert!(render_mermaid_to_svg("not a real mermaid diagram ::::").is_err());
+        assert!(
+            render_mermaid_to_svg("not a real mermaid diagram ::::", &test_palette()).is_err()
+        );
     }
 
     #[test]
     fn display_cache_hit_does_not_call_renderer_again() {
         let source = unique_mermaid_source("display-cache-hit-does-not-call-renderer-again");
-        let base_key = mermaid_cache_key(&source.body);
+        let palette = test_palette();
+        let base_key = mermaid_cache_key(&source.body, &palette);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");
         remove_cache_file(&base_path);
 
         reset_renderer_calls(&source.body);
-        let first = render_mermaid_svg_for_display_with(&source, 720.0, 960.0, test_renderer)
-            .expect("first render");
+        let first =
+            render_mermaid_svg_for_display_with(&source, 720.0, 960.0, &palette, test_renderer)
+                .expect("first render");
         assert_eq!(renderer_calls(&source.body), 1);
         let display_path = first.path.clone();
 
-        let second = render_mermaid_svg_for_display_with(&source, 720.0, 960.0, test_renderer)
-            .expect("cached render");
+        let second =
+            render_mermaid_svg_for_display_with(&source, 720.0, 960.0, &palette, test_renderer)
+                .expect("cached render");
         assert_eq!(renderer_calls(&source.body), 1);
         assert_eq!(second.path, display_path);
         assert_eq!(second.display_width, first.display_width);
@@ -804,18 +1017,21 @@ mod tests {
     #[test]
     fn display_cache_miss_reuses_base_cache() {
         let source = unique_mermaid_source("display-cache-miss-reuses-base-cache");
-        let base_key = mermaid_cache_key(&source.body);
+        let palette = test_palette();
+        let base_key = mermaid_cache_key(&source.body, &palette);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");
         remove_cache_file(&base_path);
 
         reset_renderer_calls(&source.body);
-        let first = render_mermaid_svg_for_display_with(&source, 720.0, 960.0, test_renderer)
-            .expect("first render");
+        let first =
+            render_mermaid_svg_for_display_with(&source, 720.0, 960.0, &palette, test_renderer)
+                .expect("first render");
         assert_eq!(renderer_calls(&source.body), 1);
         remove_cache_file(&first.path);
 
-        let second = render_mermaid_svg_for_display_with(&source, 720.0, 960.0, test_renderer)
-            .expect("display rebuild");
+        let second =
+            render_mermaid_svg_for_display_with(&source, 720.0, 960.0, &palette, test_renderer)
+                .expect("display rebuild");
         assert_eq!(renderer_calls(&source.body), 1);
         assert!(second.path.exists());
         assert_eq!(second.display_width, first.display_width);
@@ -828,22 +1044,87 @@ mod tests {
     #[test]
     fn display_scale_change_reuses_base_cache_with_new_display_file() {
         let source = unique_mermaid_source("display-scale-change-reuses-base-cache");
-        let base_key = mermaid_cache_key(&source.body);
+        let palette = test_palette();
+        let base_key = mermaid_cache_key(&source.body, &palette);
         let base_path = mermaid_base_cache_path(&base_key).expect("base path");
         remove_cache_file(&base_path);
 
         reset_renderer_calls(&source.body);
-        let narrow = render_mermaid_svg_for_display_with(&source, 240.0, 320.0, test_renderer)
-            .expect("narrow render");
+        let narrow =
+            render_mermaid_svg_for_display_with(&source, 240.0, 320.0, &palette, test_renderer)
+                .expect("narrow render");
         assert_eq!(renderer_calls(&source.body), 1);
 
-        let wide = render_mermaid_svg_for_display_with(&source, 900.0, 1200.0, test_renderer)
-            .expect("wide render");
+        let wide =
+            render_mermaid_svg_for_display_with(&source, 900.0, 1200.0, &palette, test_renderer)
+                .expect("wide render");
         assert_eq!(renderer_calls(&source.body), 1);
         assert!(wide.path.exists());
 
         remove_cache_file(&narrow.path);
         remove_cache_file(&wide.path);
         remove_cache_file(&base_path);
+    }
+
+    #[test]
+    fn recolor_maps_every_palette_entry() {
+        let palette = test_palette();
+        let svg = "#FFFFFF #0F172A #F8FAFC #F1F5F9 #64748B #94A3B8 #CBD5E1";
+        let recolored = recolor_mermaid_svg(svg, &palette);
+        let expected = [
+            &palette.background,
+            &palette.text,
+            &palette.node_fill,
+            &palette.alt_node_fill,
+            &palette.primary_line,
+            &palette.secondary_line,
+            &palette.subtle_line,
+        ]
+        .iter()
+        .map(|value| value.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+        assert_eq!(recolored, expected);
+    }
+
+    #[test]
+    fn recolor_is_single_pass_not_chained() {
+        let palette = custom_palette();
+        let svg = r##"<rect fill="#FFFFFF"/><rect fill="#F8FAFC"/>"##;
+        let recolored = recolor_mermaid_svg(svg, &palette);
+
+        // A chained `.replace("#FFFFFF", "#F8FAFC").replace("#F8FAFC", "#ABCDEF")`
+        // would turn both rects into #ABCDEF, because the first replacement's
+        // output becomes the second replacement's input. A single pass must
+        // not re-scan text it just wrote, so only the originally-#F8FAFC rect
+        // becomes #ABCDEF.
+        assert_eq!(
+            recolored,
+            r##"<rect fill="#F8FAFC"/><rect fill="#ABCDEF"/>"##
+        );
+    }
+
+    #[test]
+    fn recolor_leaves_unknown_colors_untouched() {
+        let palette = test_palette();
+        let svg = r##"<rect fill="#123456"/>"##;
+        assert_eq!(recolor_mermaid_svg(svg, &palette), svg);
+    }
+
+    #[test]
+    fn recolor_matches_lowercase_hex() {
+        let palette = test_palette();
+        let svg = r##"<rect fill="#0f172a"/>"##;
+        let recolored = recolor_mermaid_svg(svg, &palette);
+        assert_eq!(recolored, format!(r#"<rect fill="{}"/>"#, palette.text));
+    }
+
+    #[test]
+    fn recolor_leaves_non_six_digit_hex_forms_untouched() {
+        let palette = test_palette();
+        let three_digit = r##"<rect fill="#abc"/>"##;
+        let eight_digit = r##"<rect fill="#0F172A80"/>"##;
+        assert_eq!(recolor_mermaid_svg(three_digit, &palette), three_digit);
+        assert_eq!(recolor_mermaid_svg(eight_digit, &palette), eight_digit);
     }
 }

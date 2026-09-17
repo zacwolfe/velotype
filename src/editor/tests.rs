@@ -3726,3 +3726,305 @@ async fn open_workspace_drawer_draws_resize_handle_and_applies_dragged_width(
         assert!(editor.workspace_resize_drag.is_none());
     });
 }
+
+#[gpui::test]
+async fn clicking_an_outline_heading_navigates_the_editor_to_it(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let source = "# One\n\nAlpha\n\n## Two\n\nBravo\n\n## Three\n\nCharlie";
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, source.to_string(), None));
+    redraw(cx);
+
+    // Computed from the fixture rather than hardcoded, so the test survives
+    // edits to the source string above.
+    let (last_heading_line, last_heading_title) = source
+        .lines()
+        .enumerate()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find_map(|(index, line)| {
+            BlockKind::parse_atx_heading_line(line).map(|(_, title)| (index, title))
+        })
+        .expect("fixture has a heading");
+
+    let expected_entity_id = editor.update(cx, |editor, cx| {
+        editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|block| block.entity.read(cx).record.title.visible_text() == last_heading_title)
+            .map(|block| block.entity.entity_id())
+            .expect("heading block is mounted")
+    });
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(last_heading_line, cx));
+        assert_eq!(editor.active_entity_id, Some(expected_entity_id));
+        assert!(editor.pending_scroll_active_block_into_view);
+    });
+}
+
+#[gpui::test]
+async fn outline_jump_lands_on_the_matching_block_for_every_heading(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Several headings at mixed levels with body text between them: a
+    // nearest-mapping or off-by-one error would land on a neighbouring
+    // paragraph rather than the heading itself.
+    let markdown = "# One\n\nAlpha\n\n## Two\n\nBravo\n\n### Three\n\nCharlie\n\n# Four\n\nDelta";
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.to_string();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    redraw(cx);
+
+    let headings: Vec<(usize, String)> = markdown
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            BlockKind::parse_atx_heading_line(line).map(|(_level, title)| (index, title))
+        })
+        .collect();
+    assert_eq!(headings.len(), 4, "fixture should have four headings");
+
+    for (line, title) in headings {
+        // The jump and the assertion share one update: a redraw in between
+        // consumes the pending-scroll flag.
+        editor.update(cx, |editor, cx| {
+            assert!(
+                editor.jump_to_outline_heading(line, cx),
+                "jump reported failure for line {line} ({title})"
+            );
+            assert!(
+                editor.pending_scroll_active_block_into_view,
+                "line {line} ({title}) did not request a scroll"
+            );
+
+            let focused = editor
+                .active_entity_id
+                .and_then(|id| editor.focusable_entity_by_id(id))
+                .expect("a block should be focused");
+            assert_eq!(
+                focused.read(cx).display_text(),
+                title,
+                "line {line} jumped to the wrong block"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+async fn outline_jump_places_the_caret_at_the_heading_in_source_mode(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Source mode collapses the document into one raw buffer, so block
+    // identity proves nothing here; the within-block caret offset is the
+    // whole result.
+    let markdown = "# One\n\nAlpha\n\n## Two\n\nBravo";
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.to_string();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+    });
+    redraw(cx);
+
+    let heading_line = markdown
+        .lines()
+        .position(|line| line.starts_with("## Two"))
+        .expect("fixture has a second-level heading");
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(heading_line, cx));
+
+        let focused = editor
+            .active_entity_id
+            .and_then(|id| editor.focusable_entity_by_id(id))
+            .expect("the source buffer block should be focused");
+        let block = focused.read(cx);
+        let caret = block.selected_range.start;
+        assert!(
+            block.display_text()[caret..].starts_with("## Two"),
+            "caret landed at {caret}, which is not the heading line"
+        );
+    });
+}
+
+
+
+
+#[gpui::test]
+async fn outline_jump_back_toward_the_top_scrolls_despite_stale_bounds(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Reproduces clicking an outline child far down, then a higher-level entry
+    // near the top. The second target was culled while the document sat at a
+    // large scroll offset, so its cached bounds are left over from an earlier
+    // frame at offset 0. Those stale coordinates fall inside the current
+    // viewport, which used to make scroll-into-view report "already visible"
+    // and clear the pending scroll, leaving the jump undone until a repeat.
+    let markdown = (0..120)
+        .map(|index| format!("## Section {index}\n\nBody text for section {index}.\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.clone();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    let line_of = |needle: &str| {
+        markdown
+            .lines()
+            .position(|line| line.starts_with(needle))
+            .expect("fixture heading")
+    };
+
+    // Jump deep, so the scroll offset moves far from zero.
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(line_of("## Section 110"), cx));
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+    let deep_offset = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    assert!(
+        f32::from(deep_offset) < -1000.0,
+        "expected a large scroll offset after the deep jump, got {deep_offset:?}"
+    );
+
+    // Now back to a heading near the top.
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(line_of("## Section 2"), cx));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let target = editor
+            .active_entity_id
+            .and_then(|id| editor.focusable_entity_by_id(id))
+            .expect("target block");
+        let bounds = target
+            .read(cx)
+            .last_bounds
+            .expect("target should be mounted after scrolling to it");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "jump back to the top left the target at {bounds:?}, outside viewport {viewport:?} \
+             (scroll offset {:?})",
+            editor.scroll_handle.offset().y
+        );
+    });
+}
+
+#[gpui::test]
+async fn outline_jump_puts_the_heading_near_the_top_of_the_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Long bodies under each heading so a "minimal scroll" would park the
+    // heading at the BOTTOM of the viewport when jumping downward -- the
+    // behavior this alignment replaces.
+    let mut markdown = String::new();
+    for section in 0..12 {
+        markdown.push_str(&format!("## Section {section}\n\n"));
+        for line in 0..25 {
+            markdown.push_str(&format!("body line {line} of section {section}\n\n"));
+        }
+    }
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.clone();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    let heading_line = markdown
+        .lines()
+        .position(|line| line.starts_with("## Section 9"))
+        .expect("fixture heading");
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(heading_line, cx));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let target = editor
+            .active_entity_id
+            .and_then(|id| editor.focusable_entity_by_id(id))
+            .expect("target block");
+        let bounds = target.read(cx).last_bounds.expect("target mounted");
+        let viewport = editor.scroll_handle.bounds();
+        let from_top = f32::from(bounds.top() - viewport.top());
+        let viewport_height = f32::from(viewport.bottom() - viewport.top());
+
+        // Near the top, not merely "somewhere on screen". Generous bound so the
+        // test asserts intent rather than the exact padding constant.
+        assert!(
+            from_top >= 0.0 && from_top < viewport_height * 0.25,
+            "heading sat {from_top}px below the viewport top (viewport {viewport_height}px); \
+             expected it pulled to the top"
+        );
+    });
+}
+
+#[gpui::test]
+async fn caret_movement_still_scrolls_minimally_not_to_the_top(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Regression guard: Top alignment must apply only to outline jumps. If it
+    // leaked into ordinary focus changes, the view would yank the caret to the
+    // top of the screen on every arrow keypress.
+    let markdown = (0..80)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    // Focus a block a little below the fold via the ordinary focus path.
+    let target_id = editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks().to_vec();
+        let target = visible[8].entity.clone();
+        target.update(cx, |block, cx| {
+            block.selected_range = 0..0;
+            cx.notify();
+        });
+        editor.focus_block(target.entity_id());
+        target.entity_id()
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(
+            editor.pending_scroll_align,
+            super::ScrollAlign::Nearest,
+            "focus_block must leave alignment at Nearest"
+        );
+        let bounds = editor
+            .focusable_entity_by_id(target_id)
+            .expect("target block")
+            .read(cx)
+            .last_bounds
+            .expect("target mounted");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "caret target should be visible, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}
+

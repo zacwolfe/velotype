@@ -55,6 +55,25 @@ impl Default for StatusBarPreferences {
     }
 }
 
+/// Expanded/collapsed state of the sidebar drawer and its stacked sections.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WorkspacePreferences {
+    pub(crate) drawer_open: bool,
+    pub(crate) files_open: bool,
+    pub(crate) outline_open: bool,
+}
+
+impl Default for WorkspacePreferences {
+    fn default() -> Self {
+        Self {
+            // False preserves today's first-run behavior (sidebar hidden).
+            drawer_open: false,
+            files_open: true,
+            outline_open: true,
+        }
+    }
+}
+
 /// Startup document selection stored in `config.toml`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StartupOpenPreference {
@@ -127,6 +146,7 @@ pub(crate) struct AppPreferences {
     pub(crate) image_paste_behavior: ImagePasteBehavior,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     pub(crate) status_bar: StatusBarPreferences,
+    pub(crate) workspace: WorkspacePreferences,
 }
 
 impl Default for AppPreferences {
@@ -141,6 +161,7 @@ impl Default for AppPreferences {
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
+            workspace: WorkspacePreferences::default(),
         }
     }
 }
@@ -160,20 +181,30 @@ struct StatusBarSettings {
 pub struct EditorSettings {
     show_table_headers: bool,
     status_bar_settings: StatusBarSettings,
+    workspace: WorkspacePreferences,
 }
 
 impl Global for EditorSettings {}
 
 impl EditorSettings {
     pub fn init(cx: &mut App, show_table_headers: bool) {
-        let status_bar = read_app_preferences()
-            .ok()
-            .map(|p| p.status_bar)
+        let preferences = read_app_preferences().ok();
+        let status_bar = preferences
+            .as_ref()
+            .map(|p| p.status_bar.clone())
             .unwrap_or_default();
-        Self::set_global(cx, show_table_headers, &status_bar);
+        let workspace = preferences
+            .map(|p| p.workspace)
+            .unwrap_or_default();
+        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
     }
 
-    fn set_global(cx: &mut App, show_table_headers: bool, status_bar: &StatusBarPreferences) {
+    fn set_global(
+        cx: &mut App,
+        show_table_headers: bool,
+        status_bar: &StatusBarPreferences,
+        workspace: &WorkspacePreferences,
+    ) {
         cx.set_global(Self {
             show_table_headers,
             status_bar_settings: StatusBarSettings {
@@ -183,6 +214,7 @@ impl EditorSettings {
                 status_bar_show_sidebar_toggle: status_bar.show_sidebar_toggle,
                 status_bar_show_mode_switch: status_bar.show_mode_switch,
             },
+            workspace: workspace.clone(),
         });
     }
 
@@ -195,18 +227,9 @@ impl EditorSettings {
     }
 
     pub fn set_show_table_headers(cx: &mut App, show_table_headers: bool) {
-        let status_bar = cx
-            .try_global::<Self>()
-            .map(|s| StatusBarPreferences {
-                enabled: s.status_bar_settings.status_bar_enabled,
-                show_word_count: s.status_bar_settings.status_bar_show_word_count,
-                show_cursor_position: s.status_bar_settings.status_bar_show_cursor_position,
-                show_sidebar_toggle: s.status_bar_settings.status_bar_show_sidebar_toggle,
-                show_mode_switch: s.status_bar_settings.status_bar_show_mode_switch,
-                custom_buttons: Vec::new(),
-            })
-            .unwrap_or_default();
-        Self::set_global(cx, show_table_headers, &status_bar);
+        let status_bar = Self::status_bar_preferences(cx);
+        let workspace = Self::workspace_preferences(cx);
+        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
         match read_app_preferences() {
             Ok(mut preferences) => {
                 preferences.show_table_headers = show_table_headers;
@@ -215,6 +238,42 @@ impl EditorSettings {
                 }
             }
             Err(err) => eprintln!("failed to read table header preference: {err}"),
+        }
+    }
+
+    /// Sidebar section state. Defaults to both sections open when the global
+    /// has not been installed (e.g. in unit tests), so tests never depend on
+    /// the developer's own config file.
+    pub fn workspace_preferences(cx: &App) -> WorkspacePreferences {
+        cx.try_global::<Self>()
+            .map(|s| s.workspace.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_workspace_preferences(cx: &mut App, workspace: WorkspacePreferences) {
+        let show_table_headers = Self::show_table_headers(cx);
+        let status_bar = Self::status_bar_preferences(cx);
+        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
+
+        // The write below resolves the real system config directory, and several
+        // editor tests reach this setter through `toggle_workspace_drawer`. Left
+        // unguarded, running the suite rewrites the developer's own
+        // config.toml. The mirrored global above is what tests observe, so
+        // skipping only the disk write keeps them meaningful.
+        if cfg!(test) {
+            return;
+        }
+
+        // Re-read before writing so this cannot clobber unrelated preferences
+        // edited in the preferences window since startup.
+        match read_app_preferences() {
+            Ok(mut preferences) => {
+                preferences.workspace = workspace;
+                if let Err(err) = save_app_preferences(&preferences) {
+                    eprintln!("failed to save workspace section preference: {err}");
+                }
+            }
+            Err(err) => eprintln!("failed to read workspace section preference: {err}"),
         }
     }
 
@@ -239,6 +298,7 @@ struct PreferencesFile {
     theme: ThemePreferencesFile,
     editor: EditorPreferencesFile,
     status_bar: StatusBarPreferencesFile,
+    workspace: WorkspacePreferencesFile,
     keybindings: BTreeMap<String, Vec<String>>,
 }
 
@@ -289,6 +349,23 @@ impl From<&StatusBarPreferences> for StatusBarPreferencesFile {
     }
 }
 
+#[derive(Serialize)]
+struct WorkspacePreferencesFile {
+    drawer_open: bool,
+    files_open: bool,
+    outline_open: bool,
+}
+
+impl From<&WorkspacePreferences> for WorkspacePreferencesFile {
+    fn from(value: &WorkspacePreferences) -> Self {
+        Self {
+            drawer_open: value.drawer_open,
+            files_open: value.files_open,
+            outline_open: value.outline_open,
+        }
+    }
+}
+
 impl From<&AppPreferences> for PreferencesFile {
     fn from(value: &AppPreferences) -> Self {
         Self {
@@ -308,6 +385,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
+            workspace: WorkspacePreferencesFile::from(&value.workspace),
             keybindings: normalize_shortcut_config(&value.keybindings),
         }
     }
@@ -461,6 +539,29 @@ fn app_preferences_from_toml_value(
         })
         .unwrap_or_default();
 
+    let workspace = value
+        .get("workspace")
+        .map(|workspace| {
+            let drawer_open = workspace
+                .get("drawer_open")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let files_open = workspace
+                .get("files_open")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let outline_open = workspace
+                .get("outline_open")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            WorkspacePreferences {
+                drawer_open,
+                files_open,
+                outline_open,
+            }
+        })
+        .unwrap_or_default();
+
     AppPreferences {
         startup_open,
         foreground_on_launch,
@@ -471,6 +572,7 @@ fn app_preferences_from_toml_value(
         image_paste_behavior,
         keybindings,
         status_bar,
+        workspace,
     }
 }
 
@@ -1449,6 +1551,7 @@ impl PreferencesWindow {
             }
             ShortcutCommand::NewWindow => strings.preferences_shortcut_new_window.clone(),
             ShortcutCommand::OpenFile => strings.preferences_shortcut_open_file.clone(),
+            ShortcutCommand::OpenFolder => strings.menu_open_folder.clone(),
             ShortcutCommand::QuitApplication => {
                 strings.preferences_shortcut_quit_application.clone()
             }
@@ -2182,9 +2285,10 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
 mod tests {
     use super::{
         AppPreferences, EditorSettings, ImagePasteBehavior, StartupOpenPreference,
-        StatusBarPreferences, load_or_create_app_preferences_with_dirs_and_locales,
-        open_preferences_window_with_state, read_app_preferences_with_dirs,
-        save_app_preferences_with_dirs, save_preferences_from_window_with_dirs,
+        StatusBarPreferences, WorkspacePreferences,
+        load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
+        read_app_preferences_with_dirs, save_app_preferences_with_dirs,
+        save_preferences_from_window_with_dirs,
     };
     use crate::config::VelotypeConfigDirs;
     use crate::i18n::I18nManager;
@@ -2306,6 +2410,7 @@ mod tests {
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
+            workspace: WorkspacePreferences::default(),
         };
 
         save_app_preferences_with_dirs(&preferences, &dirs)
@@ -2393,6 +2498,7 @@ mod tests {
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
+            workspace: WorkspacePreferences::default(),
         };
         save_app_preferences_with_dirs(&preferences, &dirs)
             .expect("preferences should save to config.toml");
@@ -2543,5 +2649,76 @@ mod tests {
                     .has_unsaved_changes())
                 .expect("preferences window should remain updateable")
         );
+    }
+
+    #[test]
+    fn saves_and_reads_workspace_preferences() {
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-workspace-save-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let dirs = VelotypeConfigDirs::from_root(&root);
+        let preferences = AppPreferences {
+            workspace: WorkspacePreferences {
+                drawer_open: true,
+                files_open: false,
+                outline_open: true,
+            },
+            ..AppPreferences::default()
+        };
+
+        save_app_preferences_with_dirs(&preferences, &dirs)
+            .expect("preferences should save to config.toml");
+        let loaded = read_app_preferences_with_dirs(&dirs).expect("preferences should read back");
+        assert!(loaded.workspace.drawer_open);
+        assert!(!loaded.workspace.files_open);
+        assert!(loaded.workspace.outline_open);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn missing_workspace_table_defaults_to_both_open() {
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-workspace-missing-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should exist");
+        let dirs = VelotypeConfigDirs::from_root(&root);
+        std::fs::write(
+            dirs.app_config_file(),
+            r#"
+                [theme]
+                default_theme_id = "velotype-light"
+            "#,
+        )
+        .expect("preferences should be written");
+
+        let preferences = read_app_preferences_with_dirs(&dirs).expect("preferences should load");
+        assert_eq!(preferences.workspace, WorkspacePreferences::default());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn partial_workspace_table_falls_back_by_field() {
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-workspace-partial-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should exist");
+        let dirs = VelotypeConfigDirs::from_root(&root);
+        std::fs::write(
+            dirs.app_config_file(),
+            r#"
+                [workspace]
+                files_open = false
+            "#,
+        )
+        .expect("preferences should be written");
+
+        let preferences = read_app_preferences_with_dirs(&dirs).expect("preferences should load");
+        assert!(!preferences.workspace.drawer_open);
+        assert!(!preferences.workspace.files_open);
+        assert!(preferences.workspace.outline_open);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

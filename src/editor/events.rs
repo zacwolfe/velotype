@@ -202,6 +202,8 @@ impl Editor {
         self.pending_focus = Some(entity_id);
         self.active_entity_id = Some(entity_id);
         self.pending_scroll_active_block_into_view = true;
+        // Default alignment; callers wanting another one set it after this.
+        self.pending_scroll_align = super::ScrollAlign::Nearest;
     }
 
     fn reset_block_cursor(block: &Entity<super::Block>, cursor: usize, cx: &mut Context<Self>) {
@@ -215,7 +217,7 @@ impl Editor {
         });
     }
 
-    fn focus_block_range(
+    pub(super) fn focus_block_range(
         &mut self,
         block: &Entity<super::Block>,
         range: std::ops::Range<usize>,

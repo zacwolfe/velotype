@@ -255,6 +255,61 @@ fn ensure_markdown_file_exists(path: &Path) -> std::io::Result<bool> {
     }
 }
 
+/// What a launch argument resolves to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LaunchTarget {
+    /// Open this file (it may not exist yet; it gets created). `from_directory`
+    /// is true when the launch argument was a directory and this is the
+    /// markdown file chosen from inside it, which means the sidebar should
+    /// be revealed.
+    File { path: PathBuf, from_directory: bool },
+    /// The argument was a directory with no markdown file directly inside:
+    /// open an empty buffer and root the sidebar at this directory.
+    EmptyInDirectory(PathBuf),
+}
+
+/// First markdown file directly inside `dir`, case-insensitively
+/// alphabetical to match how the sidebar orders files. Subdirectories are
+/// intentionally not searched: opening a file buried in a subtree when an
+/// obvious top-level one exists is surprising.
+pub(crate) fn first_top_level_markdown_file(dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut markdown_files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        })
+        .collect();
+    markdown_files.sort_by_cached_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+    markdown_files.into_iter().next()
+}
+
+/// Resolves a launch argument. A non-directory (including a path that does
+/// not exist yet) is taken as a file.
+pub(crate) fn resolve_launch_target(path: &Path) -> LaunchTarget {
+    if !path.is_dir() {
+        return LaunchTarget::File {
+            path: path.to_path_buf(),
+            from_directory: false,
+        };
+    }
+    match first_top_level_markdown_file(path) {
+        Some(file) => LaunchTarget::File {
+            path: file,
+            from_directory: true,
+        },
+        None => LaunchTarget::EmptyInDirectory(path.to_path_buf()),
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -288,7 +343,7 @@ fn main() {
                 );
                 println!();
                 println!("USAGE:");
-                println!("    velotype [OPTIONS] [FILES...]");
+                println!("    velotype [OPTIONS] [PATHS...]");
                 println!();
                 println!("OPTIONS:");
                 println!("    -v, --version    Print version information");
@@ -308,10 +363,15 @@ fn main() {
                 );
                 println!();
                 println!("FILES:");
-                println!("    One or more markdown files to open. If no files are specified");
-                println!("    and markdown is piped in, it opens in a scratch window");
-                println!("    (e.g. 'cat notes.md | velotype'). Otherwise opens an empty");
-                println!("    document.");
+                println!("    One or more markdown files or directories to open. If no");
+                println!("    files are specified and markdown is piped in, it opens in a");
+                println!("    scratch window (e.g. 'cat notes.md | velotype'). Otherwise");
+                println!("    opens an empty document.");
+                println!();
+                println!("    A directory opens the first markdown file directly inside it");
+                println!("    (alphabetically; subdirectories are not searched), or an");
+                println!("    empty document with the sidebar rooted at that directory");
+                println!("    when it has none. Either way, the sidebar is revealed.");
                 return;
             }
             // Non-blocking launch is the default; these flags request it
@@ -373,8 +433,12 @@ fn main() {
     // unwritable directory, or a path that is really a directory) are worth
     // reporting, and they stay non-fatal so the window still opens.
     for path in &input_paths {
-        if let Err(err) = ensure_markdown_file_exists(path) {
-            eprintln!("failed to create '{}': {err}", path.display());
+        // A directory is a legitimate launch argument now; only a resolved
+        // file target ever needs creating.
+        if let LaunchTarget::File { path: file_path, .. } = resolve_launch_target(path)
+            && let Err(err) = ensure_markdown_file_exists(&file_path)
+        {
+            eprintln!("failed to create '{}': {err}", file_path.display());
         }
     }
 
@@ -544,32 +608,63 @@ fn main() {
             return;
         }
 
-        for path in &input_paths {
-            let absolute_path = if path.is_absolute() {
-                path.clone()
+        // Relative paths (files or directories) resolve against the launch
+        // cwd; falls back to the given path if the cwd can't be read.
+        let to_absolute = |path: &Path| -> PathBuf {
+            if path.is_absolute() {
+                path.to_path_buf()
             } else {
                 match std::env::current_dir() {
                     Ok(cwd) => cwd.join(path),
-                    Err(_) => path.clone(),
+                    Err(_) => path.to_path_buf(),
                 }
-            };
+            }
+        };
 
-            let markdown = match std::fs::read_to_string(&absolute_path) {
-                Ok(content) => {
-                    if let Err(err) = config::record_recent_file(&absolute_path) {
-                        eprintln!("failed to update recent file history: {err}");
+        for path in &input_paths {
+            match resolve_launch_target(path) {
+                LaunchTarget::File {
+                    path: file_path,
+                    from_directory,
+                } => {
+                    let absolute_path = to_absolute(&file_path);
+                    let markdown = match std::fs::read_to_string(&absolute_path) {
+                        Ok(content) => {
+                            if let Err(err) = config::record_recent_file(&absolute_path) {
+                                eprintln!("failed to update recent file history: {err}");
+                            }
+                            content
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "failed to read '{}': {err}. opened as empty document.",
+                                absolute_path.display()
+                            );
+                            String::new()
+                        }
+                    };
+                    let handle = open_editor_window(cx, markdown, Some(absolute_path));
+                    if from_directory {
+                        handle
+                            .update(cx, |editor, _window, cx| {
+                                editor.reveal_workspace_drawer(cx);
+                            })
+                            .expect("newly opened editor window should be updateable");
                     }
-                    content
                 }
-                Err(err) => {
-                    eprintln!(
-                        "failed to read '{}': {err}. opened as empty document.",
-                        absolute_path.display()
-                    );
-                    String::new()
+                LaunchTarget::EmptyInDirectory(dir) => {
+                    let absolute_dir = to_absolute(&dir);
+                    // No file path, so Save prompts for a location rather than
+                    // targeting a directory.
+                    let handle = open_editor_window(cx, String::new(), None);
+                    handle
+                        .update(cx, |editor, _window, cx| {
+                            editor.set_workspace_root_override(absolute_dir, cx);
+                            editor.reveal_workspace_drawer(cx);
+                        })
+                        .expect("newly opened editor window should be updateable");
                 }
-            };
-            open_editor_window(cx, markdown, Some(absolute_path));
+            }
         }
         app_menu::install_menus(cx);
         cx.refresh_windows();
@@ -665,6 +760,131 @@ mod file_creation_tests {
         assert!(
             ensure_markdown_file_exists(&root).is_err(),
             "a directory can never be opened as markdown"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod launch_target_tests {
+    use super::{LaunchTarget, first_top_level_markdown_file, resolve_launch_target};
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "velotype-{name}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    #[test]
+    fn picks_alphabetically_first_markdown_file_regardless_of_creation_order() {
+        let root = temp_dir("alpha-order");
+        // Created in reverse so directory-iteration order (unspecified) can't
+        // accidentally match alphabetical order and mask a sort bug.
+        std::fs::write(root.join("b.md"), "b").expect("write b.md");
+        std::fs::write(root.join("a.md"), "a").expect("write a.md");
+
+        assert_eq!(
+            resolve_launch_target(&root),
+            LaunchTarget::File {
+                path: root.join("a.md"),
+                from_directory: true,
+            }
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ordering_is_case_insensitive_and_extension_matching_ignores_case() {
+        let root = temp_dir("case-insensitive");
+        std::fs::write(root.join("B.md"), "b").expect("write B.md");
+        std::fs::write(root.join("a.MD"), "a").expect("write a.MD");
+
+        assert_eq!(
+            first_top_level_markdown_file(&root),
+            Some(root.join("a.MD"))
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn markdown_in_a_subdirectory_does_not_count() {
+        let root = temp_dir("subdir-only");
+        let nested = root.join("notes");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+        std::fs::write(nested.join("hidden.md"), "hidden").expect("write nested markdown");
+
+        assert_eq!(
+            resolve_launch_target(&root),
+            LaunchTarget::EmptyInDirectory(root.clone())
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn empty_directory_resolves_to_empty_in_directory() {
+        let root = temp_dir("empty-dir");
+
+        assert_eq!(
+            resolve_launch_target(&root),
+            LaunchTarget::EmptyInDirectory(root.clone())
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn directory_with_only_non_markdown_files_resolves_to_empty_in_directory() {
+        let root = temp_dir("non-markdown-only");
+        std::fs::write(root.join("notes.txt"), "not markdown").expect("write notes.txt");
+
+        assert_eq!(
+            resolve_launch_target(&root),
+            LaunchTarget::EmptyInDirectory(root.clone())
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_plain_file_path_resolves_to_itself() {
+        let root = temp_dir("plain-file");
+        let file = root.join("notes.md");
+        std::fs::write(&file, "content").expect("write notes.md");
+
+        assert_eq!(
+            resolve_launch_target(&file),
+            LaunchTarget::File {
+                path: file.clone(),
+                from_directory: false,
+            }
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_nonexistent_path_resolves_to_itself_as_a_file() {
+        let root = temp_dir("nonexistent");
+        let missing = root.join("does-not-exist-yet.md");
+
+        assert_eq!(
+            resolve_launch_target(&missing),
+            LaunchTarget::File {
+                path: missing.clone(),
+                from_directory: false,
+            }
         );
 
         std::fs::remove_dir_all(&root).ok();

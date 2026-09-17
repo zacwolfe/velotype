@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
-use super::{Editor, InfoDialogKind, MountedRun};
+use super::{Editor, InfoDialogKind, MountedRun, ScrollAlign};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
 use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
@@ -437,10 +437,46 @@ impl Editor {
     /// `false` whenever an adjustment was just applied lets the caller
     /// retry on the next frame, once nearby rows have real measurements and
     /// the island's estimated position has tightened.
+    /// Whether `target`'s row was mounted in the previous frame, and so whether
+    /// its cached bounds reflect the current scroll offset.
+    fn target_painted_last_frame(&self, target: &Entity<Block>) -> bool {
+        let entity_id = target.entity_id();
+        let Some(visible_index) = self
+            .document
+            .visible_index_for_entity_id(entity_id)
+            .or_else(|| {
+                self.table_cell_binding(entity_id).and_then(|binding| {
+                    self.document
+                        .visible_index_for_entity_id(binding.table_block.entity_id())
+                })
+            })
+        else {
+            // Not a windowed row (so never culled); its bounds are as good as
+            // they get.
+            return true;
+        };
+
+        self.prev_painted_visible
+            .iter()
+            .any(|&(start, end)| visible_index >= start && visible_index < end)
+    }
+
     fn ensure_focused_caret_visible(&mut self, window: &Window, cx: &App) -> bool {
         let Some(focused_block) = self.focused_edit_target(window, cx) else {
             return false;
         };
+        // A block's cached bounds are from the last frame it actually painted.
+        // For a row that virtualization culled, that can be a frame at a
+        // completely different scroll offset, and comparing those stale
+        // coordinates against the current viewport reported a far-off row as
+        // already visible — settling the pending scroll and leaving the jump
+        // undone until a second one. Only trust bounds from a row that painted
+        // in the previous frame; otherwise report unsettled so the row mounts
+        // (as the focus island) and is re-measured next frame.
+        if !self.target_painted_last_frame(&focused_block) {
+            return false;
+        }
+
         let Some(active_bounds) =
             focused_block.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds())
         else {
@@ -452,23 +488,39 @@ impl Editor {
         let top_limit = viewport.top() + padding;
         let bottom_limit = viewport.bottom() - padding;
         let mut offset = self.scroll_handle.offset();
-        let mut changed = false;
+        let current_y = offset.y;
 
-        if active_bounds.top() < top_limit {
-            offset.y += top_limit - active_bounds.top();
-            changed = true;
-        } else if active_bounds.bottom() > bottom_limit {
-            offset.y -= active_bounds.bottom() - bottom_limit;
-            changed = true;
+        let desired_y = match self.pending_scroll_align {
+            // Pull the target up to the top regardless of whether it is already
+            // on screen: a heading sitting mid-viewport still hides the content
+            // the jump was made to read.
+            ScrollAlign::Top => current_y + (top_limit - active_bounds.top()),
+            ScrollAlign::Nearest => {
+                if active_bounds.top() < top_limit {
+                    current_y + (top_limit - active_bounds.top())
+                } else if active_bounds.bottom() > bottom_limit {
+                    current_y - (active_bounds.bottom() - bottom_limit)
+                } else {
+                    current_y
+                }
+            }
+        };
+
+        let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
+        let clamped_y = desired_y.min(px(0.0)).max(-max_offset_y);
+
+        // Settle on whether the offset actually MOVED, not on whether a move was
+        // wanted. Near the end of a document the desired offset is unreachable,
+        // and reporting "adjusted" for a clamp that changed nothing left the
+        // caller rescheduling its 16ms recheck forever. The epsilon absorbs
+        // float noise so a sub-pixel residue cannot spin either.
+        if (f32::from(clamped_y) - f32::from(current_y)).abs() <= 0.5 {
+            return true;
         }
 
-        if changed {
-            let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
-            offset.y = offset.y.min(px(0.0)).max(-max_offset_y);
-            self.scroll_handle.set_offset(offset);
-        }
-
-        !changed
+        offset.y = clamped_y;
+        self.scroll_handle.set_offset(offset);
+        false
     }
 
     fn apply_pending_scroll_into_view(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -498,6 +550,7 @@ impl Editor {
         }
 
         self.pending_scroll_active_block_into_view = false;
+        self.pending_scroll_align = ScrollAlign::Nearest;
         self.scroll_recheck_task = None;
     }
 
@@ -1905,6 +1958,31 @@ impl Render for Editor {
         push_spacer(&mut block_rows, render_window.bottom_h);
         // Next frame reads the run's footprints back at these child indices, and
         // re-checks `child_count` before trusting them.
+        // Convert the mounted rows into visible-block ranges while `row_starts`
+        // is still in scope: a row can cover several blocks, so row indices are
+        // not comparable to a block's visible index.
+        let visible_end = visible_blocks.len();
+        let row_block_range = |row: usize| -> Option<(usize, usize)> {
+            let start = *row_starts.get(row)?;
+            let end = row_starts.get(row + 1).copied().unwrap_or(visible_end);
+            Some((start, end))
+        };
+        let mut painted = Vec::new();
+        if render_window.run_start < render_window.run_end
+            && let Some((start, _)) = row_block_range(render_window.run_start)
+        {
+            let end = row_starts
+                .get(render_window.run_end)
+                .copied()
+                .unwrap_or(visible_end);
+            painted.push((start, end));
+        }
+        if let Some(island) = render_window.focus_island
+            && let Some(range) = row_block_range(island.row)
+        {
+            painted.push(range);
+        }
+        self.prev_painted_visible = painted;
         self.prev_mounted_run = Some(MountedRun {
             row_start: render_window.run_start,
             row_end: render_window.run_end,

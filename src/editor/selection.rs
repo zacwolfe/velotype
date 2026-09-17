@@ -524,7 +524,7 @@ impl Editor {
         )
     }
 
-    fn endpoint_for_source_offset(
+    pub(super) fn endpoint_for_source_offset(
         &self,
         offset: usize,
         mappings: &[SourceTargetMapping],

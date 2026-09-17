@@ -1,5 +1,6 @@
 //! Rendered-mode context menus and native table insertion dialog.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::*;
@@ -32,6 +33,12 @@ pub(super) enum ContextMenuState {
     TableAxis {
         position: Point<Pixels>,
         selection: TableAxisSelection,
+    },
+    /// Context menu for a row in the workspace Files tree.
+    WorkspaceEntry {
+        position: Point<Pixels>,
+        path: PathBuf,
+        is_directory: bool,
     },
 }
 
@@ -93,6 +100,35 @@ impl Editor {
             selection,
         });
         cx.notify();
+    }
+
+    fn open_workspace_entry_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        path: PathBuf,
+        is_directory: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_menu_bar(cx);
+        self.context_menu_submenu_close_task = None;
+        self.context_menu = Some(ContextMenuState::WorkspaceEntry {
+            position,
+            path,
+            is_directory,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn on_workspace_entry_context_menu_mouse_down(
+        &mut self,
+        path: PathBuf,
+        is_directory: bool,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.stop_propagation();
+        self.open_workspace_entry_context_menu(event.position, path, is_directory, cx);
     }
 
     pub(super) fn close_table_insert_dialog(&mut self, cx: &mut Context<Self>) {
@@ -645,6 +681,57 @@ impl Editor {
         }
     }
 
+    fn active_workspace_entry_menu_path(&self) -> Option<PathBuf> {
+        match self.context_menu.as_ref() {
+            Some(ContextMenuState::WorkspaceEntry { path, .. }) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn on_workspace_entry_copy_path(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.active_workspace_entry_menu_path() else {
+            return;
+        };
+        self.dismiss_contextual_overlays(cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+    }
+
+    pub(super) fn on_workspace_entry_copy(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.active_workspace_entry_menu_path() else {
+            return;
+        };
+        self.dismiss_contextual_overlays(cx);
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => cx.write_to_clipboard(ClipboardItem::new_string(contents)),
+            Err(err) => eprintln!("failed to read '{}': {err}", path.display()),
+        }
+    }
+
+    pub(super) fn on_workspace_entry_open_in_new_window(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.active_workspace_entry_menu_path() else {
+            return;
+        };
+        self.dismiss_contextual_overlays(cx);
+        if let Err(err) = crate::app_menu::open_file_in_new_window(cx, &path) {
+            eprintln!("failed to open '{}' in a new window: {err}", path.display());
+        }
+    }
+
     fn render_axis_menu_item(
         theme: &Theme,
         id: &'static str,
@@ -1017,6 +1104,95 @@ impl Editor {
                         .into_any_element(),
                 )
             }
+            ContextMenuState::WorkspaceEntry {
+                position,
+                is_directory,
+                ..
+            } => {
+                let is_directory = *is_directory;
+                let menu_item = |id: &'static str,
+                                  label: String,
+                                  on_click: fn(
+                    &mut Editor,
+                    &ClickEvent,
+                    &mut Window,
+                    &mut Context<Editor>,
+                )| {
+                    div()
+                        .id(id)
+                        .h(px(d.menu_item_height))
+                        .px(px(d.menu_item_padding_x))
+                        .flex()
+                        .items_center()
+                        .rounded(px(d.menu_item_radius))
+                        .bg(c.dialog_surface)
+                        .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                        .cursor_pointer()
+                        .text_size(px(d.menu_text_size))
+                        .font_weight(t.dialog_body_weight.to_font_weight())
+                        .text_color(c.dialog_secondary_button_text)
+                        .child(label)
+                        .on_click(cx.listener(on_click))
+                        .into_any_element()
+                };
+
+                // Copy (file contents) has no meaning for a directory, so it
+                // is the one item omitted on a directory row.
+                let mut items = vec![menu_item(
+                    "workspace-entry-copy-path",
+                    s.context_menu_copy_path.clone(),
+                    Self::on_workspace_entry_copy_path,
+                )];
+                if !is_directory {
+                    items.push(menu_item(
+                        "workspace-entry-copy",
+                        s.context_menu_copy.clone(),
+                        Self::on_workspace_entry_copy,
+                    ));
+                }
+                items.push(menu_item(
+                    "workspace-entry-open-in-new-window",
+                    s.context_menu_open_in_new_window.clone(),
+                    Self::on_workspace_entry_open_in_new_window,
+                ));
+
+                Some(
+                    div()
+                        .id("workspace-entry-context-menu-overlay")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .occlude()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(Self::on_dismiss_context_menu_overlay),
+                        )
+                        .child(
+                            div()
+                                .id("workspace-entry-context-menu-panel")
+                                .absolute()
+                                .left(position.x)
+                                .top(position.y)
+                                .w(px(d.context_menu_panel_width))
+                                .p(px(d.menu_panel_padding))
+                                .flex()
+                                .flex_col()
+                                .gap(px(d.menu_panel_gap))
+                                .bg(c.dialog_surface)
+                                .border(px(d.dialog_border_width))
+                                .border_color(c.dialog_border)
+                                .rounded(px(d.menu_panel_radius))
+                                .shadow_lg()
+                                .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .children(items),
+                        )
+                        .into_any_element(),
+                )
+            }
         }
     }
 
@@ -1243,8 +1419,139 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::{ContextMenuState, Editor, TableInsertTarget};
-    use gpui::{AppContext, Point, TestAppContext, px};
+    use gpui::{AppContext, ClickEvent, MouseButton, MouseDownEvent, Point, TestAppContext, px};
+
+    /// Mirrors `editor::workspace::tests::init_editor_test_app`: installs
+    /// the globals a window needs before it can draw an `Editor`.
+    fn init_editor_test_app(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::i18n::I18nManager::init(cx);
+            crate::theme::ThemeManager::init(cx);
+            crate::components::init(cx);
+        });
+    }
+
+    #[gpui::test]
+    async fn right_click_on_a_file_row_opens_the_workspace_entry_menu(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
+        let path = PathBuf::from("/tmp/velotype-context-menu-test/notes.md");
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.on_workspace_entry_context_menu_mouse_down(
+                path.clone(),
+                false,
+                &MouseDownEvent {
+                    button: MouseButton::Right,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        });
+
+        editor.read_with(cx, |editor, _cx| {
+            let Some(ContextMenuState::WorkspaceEntry {
+                path: menu_path,
+                is_directory,
+                ..
+            }) = editor.context_menu.as_ref()
+            else {
+                panic!("expected a workspace entry context menu");
+            };
+            assert_eq!(menu_path, &path);
+            assert!(!is_directory);
+        });
+    }
+
+    #[gpui::test]
+    async fn right_click_on_a_directory_row_marks_the_menu_as_a_directory(
+        cx: &mut TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
+        let path = PathBuf::from("/tmp/velotype-context-menu-test/nested");
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.on_workspace_entry_context_menu_mouse_down(
+                path.clone(),
+                true,
+                &MouseDownEvent {
+                    button: MouseButton::Right,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+        });
+
+        editor.read_with(cx, |editor, _cx| {
+            let Some(ContextMenuState::WorkspaceEntry { is_directory, .. }) =
+                editor.context_menu.as_ref()
+            else {
+                panic!("expected a workspace entry context menu");
+            };
+            assert!(is_directory);
+        });
+    }
+
+    #[gpui::test]
+    async fn dismiss_contextual_overlays_clears_the_workspace_entry_menu(
+        cx: &mut TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.on_workspace_entry_context_menu_mouse_down(
+                PathBuf::from("/tmp/velotype-context-menu-test/notes.md"),
+                false,
+                &MouseDownEvent {
+                    button: MouseButton::Right,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            assert!(editor.context_menu.is_some());
+
+            editor.dismiss_contextual_overlays(cx);
+            assert!(editor.context_menu.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn copy_path_places_the_absolute_path_on_the_clipboard(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha".to_string(), None));
+        let path = PathBuf::from("/tmp/velotype-context-menu-test/notes.md");
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.on_workspace_entry_context_menu_mouse_down(
+                path.clone(),
+                false,
+                &MouseDownEvent {
+                    button: MouseButton::Right,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            editor.on_workspace_entry_copy_path(&ClickEvent::default(), window, cx);
+        });
+
+        cx.update(|_window, cx| {
+            let clipboard = cx.read_from_clipboard().expect("clipboard should be set");
+            assert_eq!(clipboard.text(), Some(path.display().to_string()));
+        });
+    }
 
     #[gpui::test]
     async fn context_submenu_stays_open_while_crossing_hover_gap(cx: &mut TestAppContext) {

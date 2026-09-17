@@ -99,6 +99,7 @@ pub struct I18nStrings {
     pub menu_previous_window: String,
     /// File menu item for opening Markdown files.
     pub menu_open_file: String,
+    pub menu_open_folder: String,
     /// File menu item for opening a recent file submenu.
     pub menu_open_recent_file: String,
     /// File menu item for opening app preferences.
@@ -127,6 +128,8 @@ pub struct I18nStrings {
     pub menu_toggle_workspace: String,
     /// Native file-dialog prompt for opening Markdown files.
     pub open_markdown_files_prompt: String,
+    /// Title of the native folder picker opened by File -> Open Folder.
+    pub open_folder_prompt: String,
     /// Native file-dialog prompt for importing a language pack.
     pub add_language_config_prompt: String,
     /// Native file-dialog prompt for importing a theme pack.
@@ -284,6 +287,15 @@ pub struct I18nStrings {
     pub context_menu_insert: String,
     /// Insert submenu item for tables.
     pub context_menu_table: String,
+    /// Workspace-entry context-menu item that copies a file's or directory's
+    /// absolute path to the clipboard.
+    pub context_menu_copy_path: String,
+    /// Workspace-entry context-menu item that copies a file's contents to
+    /// the clipboard. Files only.
+    pub context_menu_copy: String,
+    /// Workspace-entry context-menu item that opens the row's path in a new
+    /// window.
+    pub context_menu_open_in_new_window: String,
     /// Table-axis menu item for left-aligning a column.
     pub table_axis_align_column_left: String,
     /// Table-axis menu item for center-aligning a column.
@@ -389,6 +401,7 @@ struct I18nStringsDe {
     menu_next_window: Option<String>,
     menu_previous_window: Option<String>,
     menu_open_file: Option<String>,
+    menu_open_folder: Option<String>,
     menu_open_recent_file: Option<String>,
     menu_preferences: Option<String>,
     menu_no_recent_files: Option<String>,
@@ -403,6 +416,7 @@ struct I18nStringsDe {
     menu_uninstall_cli_tool: Option<String>,
     menu_toggle_workspace: Option<String>,
     open_markdown_files_prompt: Option<String>,
+    open_folder_prompt: Option<String>,
     add_language_config_prompt: Option<String>,
     add_theme_config_prompt: Option<String>,
     open_failed_title: Option<String>,
@@ -514,6 +528,9 @@ struct I18nStringsDe {
     view_mode_switch_to_rendered: Option<String>,
     context_menu_insert: Option<String>,
     context_menu_table: Option<String>,
+    context_menu_copy_path: Option<String>,
+    context_menu_copy: Option<String>,
+    context_menu_open_in_new_window: Option<String>,
     table_axis_align_column_left: Option<String>,
     table_axis_align_column_center: Option<String>,
     table_axis_align_column_right: Option<String>,
@@ -587,6 +604,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_next_window",
     "menu_previous_window",
     "menu_open_file",
+    "menu_open_folder",
     "menu_open_recent_file",
     "menu_preferences",
     "menu_no_recent_files",
@@ -601,6 +619,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_uninstall_cli_tool",
     "menu_toggle_workspace",
     "open_markdown_files_prompt",
+    "open_folder_prompt",
     "add_language_config_prompt",
     "add_theme_config_prompt",
     "open_failed_title",
@@ -712,6 +731,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "view_mode_switch_to_rendered",
     "context_menu_insert",
     "context_menu_table",
+    "context_menu_copy_path",
+    "context_menu_copy",
+    "context_menu_open_in_new_window",
     "table_axis_align_column_left",
     "table_axis_align_column_center",
     "table_axis_align_column_right",
@@ -841,6 +863,9 @@ impl I18nStringsDe {
                 .menu_previous_window
                 .unwrap_or(defaults.menu_previous_window),
             menu_open_file: self.menu_open_file.unwrap_or(defaults.menu_open_file),
+            menu_open_folder: self
+                .menu_open_folder
+                .unwrap_or(defaults.menu_open_folder),
             menu_open_recent_file: self
                 .menu_open_recent_file
                 .unwrap_or(defaults.menu_open_recent_file),
@@ -869,6 +894,9 @@ impl I18nStringsDe {
             open_markdown_files_prompt: self
                 .open_markdown_files_prompt
                 .unwrap_or(defaults.open_markdown_files_prompt),
+            open_folder_prompt: self
+                .open_folder_prompt
+                .unwrap_or(defaults.open_folder_prompt),
             add_language_config_prompt: self
                 .add_language_config_prompt
                 .unwrap_or(defaults.add_language_config_prompt),
@@ -1186,6 +1214,15 @@ impl I18nStringsDe {
             context_menu_table: self
                 .context_menu_table
                 .unwrap_or(defaults.context_menu_table),
+            context_menu_copy_path: self
+                .context_menu_copy_path
+                .unwrap_or(defaults.context_menu_copy_path),
+            context_menu_copy: self
+                .context_menu_copy
+                .unwrap_or(defaults.context_menu_copy),
+            context_menu_open_in_new_window: self
+                .context_menu_open_in_new_window
+                .unwrap_or(defaults.context_menu_open_in_new_window),
             table_axis_align_column_left: self
                 .table_axis_align_column_left
                 .unwrap_or(defaults.table_axis_align_column_left),
@@ -1331,6 +1368,7 @@ impl I18nStrings {
             menu_next_window: "下一个窗口".into(),
             menu_previous_window: "上一个窗口".into(),
             menu_open_file: "打开文件".into(),
+            menu_open_folder: "打开文件夹".into(),
             menu_open_recent_file: "打开最近文件".into(),
             menu_preferences: "偏好设置".into(),
             menu_no_recent_files: "无最近文件".into(),
@@ -1345,6 +1383,7 @@ impl I18nStrings {
             menu_uninstall_cli_tool: "卸载CLI命令".into(),
             menu_toggle_workspace: "切换工作区".into(),
             open_markdown_files_prompt: "打开 Markdown 文件".into(),
+            open_folder_prompt: "打开文件夹".into(),
             add_language_config_prompt: "选择语言配置文件".into(),
             add_theme_config_prompt: "选择主题配置文件".into(),
             open_failed_title: "打开失败".into(),
@@ -1451,6 +1490,9 @@ impl I18nStrings {
             view_mode_switch_to_rendered: "切换到渲染".into(),
             context_menu_insert: "插入".into(),
             context_menu_table: "表格".into(),
+            context_menu_copy_path: "复制路径".into(),
+            context_menu_copy: "复制".into(),
+            context_menu_open_in_new_window: "在新窗口中打开".into(),
             table_axis_align_column_left: "左对齐此列".into(),
             table_axis_align_column_center: "居中此列".into(),
             table_axis_align_column_right: "右对齐此列".into(),
@@ -1547,6 +1589,7 @@ impl I18nStrings {
             menu_next_window: "Next Window".into(),
             menu_previous_window: "Previous Window".into(),
             menu_open_file: "Open File".into(),
+            menu_open_folder: "Open Folder".into(),
             menu_open_recent_file: "Open Recent File".into(),
             menu_preferences: "Preferences".into(),
             menu_no_recent_files: "No Recent Files".into(),
@@ -1561,6 +1604,7 @@ impl I18nStrings {
             menu_uninstall_cli_tool: "Uninstall CLI Command".into(),
             menu_toggle_workspace: "Toggle Workspace".into(),
             open_markdown_files_prompt: "Open Markdown Files".into(),
+            open_folder_prompt: "Open Folder".into(),
             add_language_config_prompt: "Choose Language Config".into(),
             add_theme_config_prompt: "Choose Theme Config".into(),
             open_failed_title: "Open Failed".into(),
@@ -1678,6 +1722,9 @@ impl I18nStrings {
             view_mode_switch_to_rendered: "Switch to Rendered".into(),
             context_menu_insert: "Insert".into(),
             context_menu_table: "Table".into(),
+            context_menu_copy_path: "Copy Path".into(),
+            context_menu_copy: "Copy".into(),
+            context_menu_open_in_new_window: "Open in New Window".into(),
             table_axis_align_column_left: "Align Column Left".into(),
             table_axis_align_column_center: "Align Column Center".into(),
             table_axis_align_column_right: "Align Column Right".into(),
