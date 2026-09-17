@@ -11,7 +11,7 @@ const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime, InlineLinkHit};
 use crate::components::{
-    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript,
+    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, MermaidPalette,
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
     TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
     parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
@@ -672,7 +672,8 @@ impl Block {
         let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
         let available_width = effective_image_width(self, viewport_width, d);
 
-        match render_mermaid_svg_for_display(&source, available_width, viewport_width) {
+        let palette = MermaidPalette::from_theme(theme);
+        match render_mermaid_svg_for_display(&source, available_width, viewport_width, &palette) {
             Ok(rendered) => {
                 let display_width = rendered.display_width.max(1.0);
                 let display_height = rendered.display_height.max(1.0);

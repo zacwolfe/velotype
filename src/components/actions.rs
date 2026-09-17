@@ -55,6 +55,7 @@ actions!(
         SaveDocument,
         NewWindow,
         OpenFile,
+        OpenFolder,
         OpenPreferences,
         NoRecentFiles,
         SaveDocumentAs,
@@ -211,6 +212,7 @@ pub(crate) enum ShortcutCommand {
     NewWindow,
     /// Prompt to open a document.
     OpenFile,
+    OpenFolder,
     /// Request guarded application quit.
     QuitApplication,
     /// Request closing the current window.
@@ -571,6 +573,13 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: None,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::OpenFolder,
+        id: "open_folder",
+        category: ShortcutCategory::File,
+        default_keys: &["cmd-shift-o", "ctrl-shift-o"],
+        context: None,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::QuitApplication,
         id: "quit_application",
         category: ShortcutCategory::File,
@@ -859,6 +868,7 @@ fn key_binding_for(
         ShortcutCommand::SaveDocumentAs => KeyBinding::new(key, SaveDocumentAs, context),
         ShortcutCommand::NewWindow => KeyBinding::new(key, NewWindow, context),
         ShortcutCommand::OpenFile => KeyBinding::new(key, OpenFile, context),
+        ShortcutCommand::OpenFolder => KeyBinding::new(key, OpenFolder, context),
         ShortcutCommand::QuitApplication => KeyBinding::new(key, QuitApplication, context),
         ShortcutCommand::CloseWindow => KeyBinding::new(key, CloseWindow, context),
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),

@@ -212,6 +212,8 @@ impl Editor {
         self.pending_focus = Some(entity_id);
         self.active_entity_id = Some(entity_id);
         self.pending_scroll_active_block_into_view = true;
+        // Default alignment; callers wanting another one set it after this.
+        self.pending_scroll_align = super::ScrollAlign::Nearest;
     }
 
     /// Collapses a block selection at the supplied visible offset.

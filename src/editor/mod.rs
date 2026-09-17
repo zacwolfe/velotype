@@ -85,6 +85,9 @@ pub struct Editor {
     active_entity_id: Option<EntityId>,
     /// Queued caret scroll applied once layout bounds are available.
     pending_scroll_active_block_into_view: bool,
+    /// How the pending scroll should align its target. Reset to `Nearest` by
+    /// `focus_block`, so a jump that wants another alignment sets it afterward.
+    pending_scroll_align: ScrollAlign,
     /// Requests another caret scroll after a layout pass.
     pending_scroll_recheck_after_layout: bool,
     /// Save request deferred until a render pass has a window.
@@ -126,6 +129,11 @@ pub struct Editor {
     row_stride_width: Option<f32>,
     /// Where last frame's run sat among the scroll container's children.
     prev_mounted_run: Option<MountedRun>,
+    /// Half-open visible-block index ranges the previous frame actually
+    /// mounted (the run, plus the focus island when it sat outside it).
+    /// Recorded in visible-block space rather than row space because a row can
+    /// group several blocks. Identifies whose cached bounds are trustworthy.
+    prev_painted_visible: Vec<(usize, usize)>,
     /// Whether this window already has the unsaved-changes close callback.
     close_guard_installed: bool,
     /// Whether the guarded-close confirmation is visible.
@@ -149,6 +157,11 @@ pub struct Editor {
     /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
     workspace_resize_drag: Option<WorkspaceResizeDrag>,
+    /// Sidebar root requested explicitly (e.g. launching with a directory
+    /// argument), used when no open document implies one. Takes precedence so
+    /// the tree can stay rooted at a directory the user named even while the
+    /// buffer itself is untitled.
+    workspace_root_override: Option<PathBuf>,
     /// Hover state for status-bar controls.
     status_bar: StatusBarState,
     /// Currently open insert or table-axis context menu.
@@ -237,6 +250,20 @@ pub(super) struct TableAxisSelection {
     kind: TableAxisKind,
     /// Visual index, with row zero denoting the header.
     index: usize,
+}
+
+/// Where a pending scroll should place its target within the viewport.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ScrollAlign {
+    /// Scroll the minimum distance that brings the target into view. Correct
+    /// for caret movement, where yanking the view around while typing would be
+    /// disorienting.
+    #[default]
+    Nearest,
+    /// Put the target as near the top of the viewport as the document allows.
+    /// Used for outline jumps: the heading itself is just a label, and what the
+    /// user actually wants to read is the content beneath it.
+    Top,
 }
 
 /// Pixel geometry for the custom editor scrollbar.
@@ -439,6 +466,7 @@ impl Editor {
             pending_focus,
             active_entity_id: pending_focus,
             pending_scroll_active_block_into_view: true,
+            pending_scroll_align: ScrollAlign::Nearest,
             pending_scroll_recheck_after_layout: true,
             pending_save: false,
             pending_save_as: false,
@@ -457,6 +485,7 @@ impl Editor {
             row_stride_cache: HashMap::new(),
             row_stride_width: None,
             prev_mounted_run: None,
+            prev_painted_visible: Vec::new(),
             close_guard_installed: false,
             show_unsaved_changes_dialog: false,
             update_save_prompt_active: false,
@@ -467,8 +496,10 @@ impl Editor {
             pending_drop_replace_after_save: false,
             drop_replace_restore_focus: None,
             info_dialog: None,
-            workspace: WorkspaceState::default(),
+            update_check_in_progress: false,
+            workspace: WorkspaceState::from_settings(cx),
             workspace_resize_drag: None,
+            workspace_root_override: None,
             status_bar: StatusBarState::default(),
             context_menu: None,
             table_insert_dialog: None,

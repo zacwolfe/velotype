@@ -9,9 +9,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use gpui::*;
 
+use crate::{LaunchTarget, resolve_launch_target};
 use crate::components::{
     AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
-    InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile,
+    InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenFolder, OpenPreferences,
+    OpenRecentFile,
     QuitApplication, SaveDocument, SaveDocumentAs, SelectLanguage, SelectNextWindow,
     SelectPreviousWindow, SelectTheme, ShowAbout, ToggleWorkspace, UninstallCliTool,
 };
@@ -84,12 +86,37 @@ pub(crate) fn open_editor_window(
     handle
 }
 
-/// Reads a UTF-8 document, opens it, and records it in the recent-file menu.
+/// Handles a Finder/single-instance open request, which may name a file or a
+/// directory — the same resolution the CLI applies, so both paths behave
+/// identically.
 pub(crate) fn open_file_in_new_window(cx: &mut App, path: &Path) -> anyhow::Result<()> {
-    let markdown = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read '{}'", path.display()))?;
-    open_editor_window(cx, markdown, Some(path.to_path_buf()));
-    record_recent_file_and_refresh(path, cx);
+    match resolve_launch_target(path) {
+        LaunchTarget::File {
+            path: file_path,
+            from_directory,
+        } => {
+            let markdown = std::fs::read_to_string(&file_path)
+                .with_context(|| format!("failed to read '{}'", file_path.display()))?;
+            let handle = open_editor_window(cx, markdown, Some(file_path.clone()));
+            record_recent_file_and_refresh(&file_path, cx);
+            if from_directory {
+                handle
+                    .update(cx, |editor, _window, cx| {
+                        editor.reveal_workspace_drawer(cx);
+                    })
+                    .expect("newly opened editor window should be updateable");
+            }
+        }
+        LaunchTarget::EmptyInDirectory(dir) => {
+            let handle = open_editor_window(cx, String::new(), None);
+            handle
+                .update(cx, |editor, _window, cx| {
+                    editor.set_workspace_root_override(dir, cx);
+                    editor.reveal_workspace_drawer(cx);
+                })
+                .expect("newly opened editor window should be updateable");
+        }
+    }
     Ok(())
 }
 
@@ -436,6 +463,7 @@ fn is_editor_scoped_menu_action(action: &dyn Action) -> bool {
 fn is_window_context_menu_action(action: &dyn Action) -> bool {
     action.as_any().is::<NewWindow>()
         || action.as_any().is::<OpenFile>()
+        || action.as_any().is::<OpenFolder>()
         || action.as_any().is::<OpenPreferences>()
         || action.as_any().is::<OpenRecentFile>()
         || action.as_any().is::<NoRecentFiles>()
@@ -597,6 +625,8 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
         open_editor_window(cx, String::new(), None);
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files(cx);
+    } else if action.as_any().is::<OpenFolder>() {
+        prompt_and_open_folder(cx);
     } else if action.as_any().is::<OpenPreferences>() {
         open_preferences_window(cx);
     } else if let Some(action) = action.as_any().downcast_ref::<OpenRecentFile>() {
@@ -700,6 +730,8 @@ pub(crate) fn dispatch_menu_action_for_editor(
         open_editor_window(cx, String::new(), None);
     } else if action.as_any().is::<OpenFile>() {
         prompt_and_open_files_with_error_window(cx, current_window);
+    } else if action.as_any().is::<OpenFolder>() {
+        prompt_and_open_folder_with_error_window(cx, current_window);
     } else if action.as_any().is::<OpenPreferences>() {
         open_preferences_window(cx);
     } else if let Some(action) = action.as_any().downcast_ref::<OpenRecentFile>() {
@@ -843,6 +875,7 @@ fn build_menus(
                     MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                     MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                     MenuItem::action(strings.menu_open_file.clone(), OpenFile),
+                    MenuItem::action(strings.menu_open_folder.clone(), OpenFolder),
                     MenuItem::submenu(Menu {
                         name: strings.menu_open_recent_file.clone().into(),
                         disabled: false,
@@ -865,6 +898,7 @@ fn build_menus(
                 MenuItem::action(strings.menu_new_window.clone(), NewWindow),
                 MenuItem::action(strings.menu_close_window.clone(), CloseWindow),
                 MenuItem::action(strings.menu_open_file.clone(), OpenFile),
+                MenuItem::action(strings.menu_open_folder.clone(), OpenFolder),
                 MenuItem::submenu(Menu {
                     name: strings.menu_open_recent_file.clone().into(),
                     disabled: false,
@@ -1036,6 +1070,62 @@ fn prompt_and_open_files_with_error_window(cx: &mut App, error_window: Option<An
 }
 
 /// Starts language import with the active window as the error-prompt target.
+fn prompt_and_open_folder(cx: &mut App) {
+    let error_window = cx.active_window();
+    prompt_and_open_folder_with_error_window(cx, error_window);
+}
+
+/// Folder counterpart to [`prompt_and_open_files_with_error_window`]. The
+/// chosen directory goes through the same resolution as a `velotype <dir>`
+/// launch, so the menu item and the CLI cannot drift apart.
+fn prompt_and_open_folder_with_error_window(
+    cx: &mut App,
+    error_window: Option<AnyWindowHandle>,
+) {
+    let prompt_title = cx
+        .global::<I18nManager>()
+        .strings()
+        .open_folder_prompt
+        .clone();
+    let prompt = cx.prompt_for_paths(PathPromptOptions {
+        files: false,
+        directories: true,
+        multiple: false,
+        prompt: Some(prompt_title.into()),
+    });
+
+    cx.spawn(async move |cx| match prompt.await {
+        Ok(Ok(Some(paths))) => {
+            let _ = cx.update(move |cx| {
+                for path in paths {
+                    if let Err(err) = open_file_in_new_window(cx, &path) {
+                        let title = cx
+                            .global::<I18nManager>()
+                            .strings()
+                            .open_failed_title
+                            .clone();
+                        show_window_prompt(error_window, &title, &err.to_string(), cx);
+                    }
+                }
+            });
+        }
+        Ok(Err(err)) => {
+            let detail = err.to_string();
+            let _ = cx.update(move |cx| {
+                let title = cx
+                    .global::<I18nManager>()
+                    .strings()
+                    .open_failed_title
+                    .clone();
+                show_window_prompt(error_window, &title, &detail, cx);
+            });
+        }
+        Ok(Ok(None)) | Err(_) => {}
+    })
+    .detach();
+}
+
+
 fn prompt_and_import_language_config(cx: &mut App) {
     let error_window = cx.active_window();
     prompt_and_import_language_config_with_error_window(cx, error_window);
@@ -1181,6 +1271,9 @@ pub(crate) fn init(cx: &mut App, activate: bool) {
     });
     cx.on_action(|_: &OpenFile, cx| {
         dispatch_menu_action(&OpenFile, cx);
+    });
+    cx.on_action(|_: &OpenFolder, cx| {
+        dispatch_menu_action(&OpenFolder, cx);
     });
     cx.on_action(|_: &OpenPreferences, cx| {
         dispatch_menu_action(&OpenPreferences, cx);
