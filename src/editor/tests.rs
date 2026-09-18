@@ -1318,6 +1318,84 @@ async fn setting_column_alignment_updates_record_and_selection(cx: &mut TestAppC
 }
 
 #[gpui::test]
+async fn setting_column_width_persists_and_survives_rebuild(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        editor.set_table_column_width(&table, 0, 0.75, cx);
+
+        let record = table.read(cx).record.table.as_ref().expect("table record");
+        let widths = record.widths.clone().expect("widths should be Some");
+        assert_eq!(widths.len(), record.alignments.len());
+        // Seeded from an equal 0.5/0.5 split, then column 0 set to 0.75 and
+        // renormalized: 0.75 / 1.25 = 0.6.
+        assert!((widths[0] - 0.6).abs() < 0.01);
+        assert!((widths[1] - 0.4).abs() < 0.01);
+
+        // Rebuilding runtimes (e.g. a later structural edit) must not drop
+        // the persisted width.
+        editor.rebuild_table_runtimes(cx);
+        let record = table
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .expect("table record after rebuild");
+        let widths = record.widths.clone().expect("widths should survive rebuild");
+        assert!((widths[0] - 0.6).abs() < 0.01);
+    });
+}
+
+#[gpui::test]
+async fn setting_column_width_is_a_single_undo_step(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        assert!(
+            table
+                .read(cx)
+                .record
+                .table
+                .as_ref()
+                .expect("table record")
+                .widths
+                .is_none()
+        );
+
+        editor.set_table_column_width(&table, 0, 0.75, cx);
+        assert_eq!(editor.undo_history.len(), 1);
+        assert!(
+            table
+                .read(cx)
+                .record
+                .table
+                .as_ref()
+                .expect("table record")
+                .widths
+                .is_some()
+        );
+
+        editor.undo_document(cx);
+        // Undo reparses markdown into fresh root blocks, so re-fetch the
+        // table entity rather than reusing the pre-undo handle.
+        let table_after_undo = editor.document.first_root().expect("table root after undo");
+        let widths = table_after_undo
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .expect("table record after undo")
+            .widths
+            .clone();
+        assert!(widths.is_none());
+    });
+}
+
+#[gpui::test]
 async fn moving_table_row_updates_focus_and_selection(cx: &mut TestAppContext) {
     let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"].join("\n");
     let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
