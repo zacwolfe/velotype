@@ -1534,6 +1534,7 @@ impl Block {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     };
                 }
                 ExpandedInlineSegmentKind::OpeningDelimiter(_)
@@ -1546,6 +1547,7 @@ impl Block {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     };
                 }
                 ExpandedInlineSegmentKind::ClosingDelimiter(_)
@@ -1558,6 +1560,7 @@ impl Block {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     };
                 }
                 // Caret just outside a span: after a closing delimiter or before
@@ -1602,6 +1605,7 @@ impl Block {
             link: fragment.link.clone(),
             footnote: fragment.footnote.clone(),
             math: None,
+            image: None,
         }
     }
 

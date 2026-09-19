@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result};
 use gpui::*;
 
 use super::{BlockKind, Editor};
+use crate::components::InlineTextTree;
 use crate::config::EditorSettings;
 use crate::config::preferences::WorkspacePreferences;
 use crate::i18n::I18nStrings;
@@ -1177,7 +1178,7 @@ fn build_outline_tree(markdown: &str) -> Vec<WorkspaceTreeNode> {
 
         let node = WorkspaceTreeNode {
             id: format!("outline:{line_index}"),
-            label: title,
+            label: InlineTextTree::from_markdown(&title).plain_label(),
             kind: WorkspaceTreeKind::Heading {
                 line: line_index,
                 level,
@@ -1547,6 +1548,19 @@ mod tests {
         assert_eq!(outline[0].children[0].label, "Child");
         assert_eq!(outline[0].children[0].children[0].label, "Grandchild");
         assert_eq!(outline[1].label, "Next");
+    }
+
+    #[test]
+    fn outline_tree_renders_a_leading_icon_heading_as_plain_text() {
+        // A common README pattern: an inline `<img>` icon in front of a link
+        // title. The raw heading text is not readable chrome; the outline
+        // label must flatten it down to plain words.
+        let outline = build_outline_tree(
+            "# <img alt=\"Smithy\" src=\"./anvil.png\" width=\"32\"> [Smithy Plugin](https://example.com/p)",
+        );
+
+        assert_eq!(outline.len(), 1);
+        assert_eq!(outline[0].label, "Smithy Plugin");
     }
 
     #[test]

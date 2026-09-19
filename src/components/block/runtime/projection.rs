@@ -331,6 +331,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: None,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + open_len,
@@ -353,6 +354,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: Some(footnote.clone()),
                         math: None,
+                        image: None,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + id_len,
@@ -388,6 +390,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: None,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + close_len,
@@ -463,6 +466,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: None,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + open_len,
@@ -522,6 +526,7 @@ impl ExpandedInlineProjection {
                             link: None,
                             footnote: None,
                             math: None,
+                            image: None,
                         });
                         segments.push(ExpandedInlineSegment {
                             display_range: display_cursor..display_cursor + middle_len,
@@ -549,6 +554,7 @@ impl ExpandedInlineProjection {
                                 link: Some(link.clone()),
                                 footnote: None,
                                 math: None,
+                                image: None,
                             });
                             segments.push(ExpandedInlineSegment {
                                 display_range: display_cursor..display_cursor + target_len,
@@ -574,6 +580,7 @@ impl ExpandedInlineProjection {
                         link: None,
                         footnote: None,
                         math: None,
+                        image: None,
                     });
                     segments.push(ExpandedInlineSegment {
                         display_range: display_cursor..display_cursor + close_len,
@@ -1025,6 +1032,7 @@ fn push_projected_fragment(
             link: None,
             footnote: None,
             math: None,
+            image: None,
         });
         segments.push(ExpandedInlineSegment {
             display_range: *display_cursor..*display_cursor + marker_len,
@@ -1071,6 +1079,7 @@ fn push_projected_fragment(
             link: None,
             footnote: None,
             math: None,
+            image: None,
         });
         segments.push(ExpandedInlineSegment {
             display_range: *display_cursor..*display_cursor + marker_len,
