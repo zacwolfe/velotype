@@ -164,7 +164,7 @@ impl Editor {
     fn open_search_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(search) = self.search_bar.as_ref() {
             let handle = search.focus_handle.clone();
-            window.focus(&handle);
+            window.focus(&handle, cx);
             return;
         }
         let previous_focus = self.focused_edit_target_entity_id(window, cx);
@@ -176,7 +176,7 @@ impl Editor {
             active_index: None,
             previous_focus,
         });
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         cx.notify();
     }
 

@@ -995,6 +995,7 @@ fn build_menus(
             help_index,
             Menu {
                 name: "Window".into(),
+                disabled: false,
                 items: vec![
                     MenuItem::action(strings.menu_next_window.clone(), SelectNextWindow),
                     MenuItem::action(strings.menu_previous_window.clone(), SelectPreviousWindow),
