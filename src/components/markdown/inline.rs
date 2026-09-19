@@ -12,9 +12,10 @@ use super::footnote::{
     superscript_ordinal,
 };
 use super::html::{
-    HtmlAttr, HtmlInlineStyle, HtmlNode, HtmlNodeKind, has_dangerous_attrs, is_inline_tag,
-    parse_html_attrs, style_for_node,
+    HtmlAttr, HtmlImageLength, HtmlInlineStyle, HtmlNode, HtmlNodeKind, has_dangerous_attrs,
+    html_image_from_attrs, is_inline_tag, parse_html_attrs, style_for_node,
 };
+use super::image::{ImageTarget, parse_inline_image_at};
 use super::link::{LinkReferenceDefinition, LinkReferenceDefinitions, parse_link_target};
 
 /// Bitfield of active inline formatting flags for a span of text.
@@ -110,6 +111,43 @@ pub struct InlineFragment {
     pub link: Option<InlineLink>,
     pub footnote: Option<InlineFootnoteReference>,
     pub math: Option<InlineMath>,
+    pub image: Option<InlineImage>,
+}
+
+/// Source-preserving inline HTML `<img>` metadata.
+///
+/// Like [`InlineMath`], the fragment's visible text stays the raw tag source so
+/// caret offsets, selection, and Markdown serialization need no special cases;
+/// only the renderer swaps in a widget.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineImage {
+    /// Full tag source, e.g. `<img src="a.png" width="32">`.
+    pub source: String,
+    /// `src` attribute, unresolved (may be relative or remote).
+    pub src: String,
+    /// `alt` attribute, empty when absent.
+    pub alt: String,
+    /// `width` presentation attribute, when usable.
+    pub width: Option<HtmlImageLength>,
+    /// `height` presentation attribute, when usable.
+    pub height: Option<HtmlImageLength>,
+    /// `style="zoom: N%"` factor, `1.0` when absent.
+    pub zoom: f32,
+}
+
+impl Eq for InlineImage {}
+
+impl InlineFragment {
+    /// Raw Markdown/HTML source for fragments whose visible text *is* their
+    /// source (inline math, inline `<img>`). These serialize verbatim and never
+    /// take delimiter markers, so callers use this to opt them out of the
+    /// style-marker serialization path.
+    pub(crate) fn verbatim_source(&self) -> Option<String> {
+        self.math
+            .as_ref()
+            .map(|math| math.source.clone())
+            .or_else(|| self.image.as_ref().map(|image| image.source.clone()))
+    }
 }
 
 /// Source-preserving inline LaTeX math metadata.
@@ -214,6 +252,26 @@ impl InlineLink {
     }
 }
 
+/// Squeezes every whitespace run down to one space and trims the ends, so a
+/// label stays single-line and shows no seam where a widget fragment was
+/// dropped.
+fn collapse_label_whitespace(text: &str) -> String {
+    let mut label = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            pending_space = !label.is_empty();
+            continue;
+        }
+        if pending_space {
+            label.push(' ');
+            pending_space = false;
+        }
+        label.push(ch);
+    }
+    label
+}
+
 fn format_inline_link_target(destination: &str, title: Option<&str>) -> String {
     match title {
         Some(title) => format!("{destination} \"{}\"", escape_link_title(title)),
@@ -252,6 +310,7 @@ pub struct InlineSpan {
     pub link: Option<InlineLinkHit>,
     pub footnote: Option<InlineFootnoteHit>,
     pub math: Option<InlineMath>,
+    pub image: Option<InlineImage>,
 }
 
 /// Fragment attributes inherited by inserted text at a caret position.
@@ -262,6 +321,7 @@ pub struct InlineInsertionAttributes {
     pub link: Option<InlineLink>,
     pub footnote: Option<InlineFootnoteReference>,
     pub math: Option<InlineMath>,
+    pub image: Option<InlineImage>,
 }
 
 /// Pre-computed view of an [`InlineTextTree`] optimized for rendering.
@@ -339,6 +399,7 @@ impl InlineRenderCache {
                         .as_ref()
                         .and_then(InlineFootnoteReference::hit),
                     math: fragment.math.clone(),
+                    image: fragment.image.clone(),
                 });
             }
 
@@ -420,6 +481,14 @@ impl InlineRenderCache {
             .find(|span| span.range.start <= offset && offset < span.range.end)
             .and_then(|span| span.math.as_ref())
     }
+
+    #[allow(dead_code)]
+    pub fn inline_image_at(&self, offset: usize) -> Option<&InlineImage> {
+        self.spans
+            .iter()
+            .find(|span| span.range.start <= offset && offset < span.range.end)
+            .and_then(|span| span.image.as_ref())
+    }
 }
 
 /// A sequence of [`InlineFragment`]s representing inline-formatted text.
@@ -446,6 +515,7 @@ impl InlineTextTree {
             link: None,
             footnote: None,
             math: None,
+            image: None,
         }])
     }
 
@@ -504,6 +574,37 @@ impl InlineTextTree {
         text
     }
 
+    /// Single-line plain-text label for chrome with no room for inline widgets
+    /// (the outline sidebar). Markdown markers are already absent from fragment
+    /// text; source-preserving fragments collapse to something readable.
+    ///
+    /// An inline image sitting beside words is decoration, so it contributes
+    /// nothing: `# <img alt="Smithy"> Smithy Plugin` must read "Smithy Plugin",
+    /// not "Smithy Smithy Plugin". Its `alt` is only used when the image is all
+    /// the title has.
+    pub(crate) fn plain_label(&self) -> String {
+        let mut text = String::new();
+        let mut image_alts = String::new();
+        for fragment in &self.fragments {
+            match (&fragment.image, &fragment.math) {
+                (Some(image), _) => {
+                    image_alts.push_str(&image.alt);
+                    image_alts.push(' ');
+                }
+                // The `$x$` source is the only readable form math has.
+                (None, Some(math)) => text.push_str(&math.source),
+                (None, None) => text.push_str(&fragment.text),
+            }
+        }
+
+        let label = collapse_label_whitespace(&text);
+        if label.is_empty() {
+            collapse_label_whitespace(&image_alts)
+        } else {
+            label
+        }
+    }
+
     pub fn visible_len(&self) -> usize {
         self.fragments
             .iter()
@@ -519,6 +620,7 @@ impl InlineTextTree {
                 .is_some_and(InlineLink::is_source_preserving)
                 || fragment.footnote.is_some()
                 || fragment.math.is_some()
+                || fragment.image.is_some()
         })
     }
 
@@ -533,9 +635,13 @@ impl InlineTextTree {
     }
 
     pub(crate) fn has_mixed_inline_visuals(&self) -> bool {
-        self.fragments
-            .iter()
-            .any(|fragment| fragment.math.is_some() || fragment.style.has_script())
+        self.fragments.iter().any(|fragment| {
+            fragment.math.is_some() || fragment.image.is_some() || fragment.style.has_script()
+        })
+    }
+
+    pub(crate) fn has_inline_images(&self) -> bool {
+        self.fragments.iter().any(|fragment| fragment.image.is_some())
     }
 
     pub(crate) fn has_footnote_references(&self) -> bool {
@@ -625,8 +731,10 @@ impl InlineTextTree {
                 continue;
             }
 
-            if let Some(math) = self.fragments[index].math.clone() {
-                let raw_markdown = math.source;
+            // Inline math and inline `<img>` both keep their raw source as the
+            // fragment's visible text, so serialization is a verbatim copy with
+            // an identity offset map.
+            if let Some(raw_markdown) = self.fragments[index].verbatim_source() {
                 let raw_len = raw_markdown.len();
                 let run_visible_len = self.fragments[index].text.len();
                 let run_start = output.len();
@@ -654,7 +762,7 @@ impl InlineTextTree {
             while end < self.fragments.len()
                 && self.fragments[end].link == link
                 && self.fragments[end].footnote.is_none()
-                && self.fragments[end].math.is_none()
+                && self.fragments[end].verbatim_source().is_none()
             {
                 end += 1;
             }
@@ -911,6 +1019,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     });
                 }
                 if split_offset < fragment_len {
@@ -921,6 +1030,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     });
                 }
             }
@@ -970,6 +1080,7 @@ impl InlineTextTree {
                     link: fragment.link.clone(),
                     footnote: fragment.footnote.clone(),
                     math: None,
+                    image: None,
                 };
             }
 
@@ -986,6 +1097,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     }
                 };
             }
@@ -1000,6 +1112,7 @@ impl InlineTextTree {
                         link: fragment.link.clone(),
                         footnote: fragment.footnote.clone(),
                         math: None,
+                        image: None,
                     }
                 };
             }
@@ -1080,6 +1193,7 @@ impl InlineTextTree {
                 link: inserted_attributes.link,
                 footnote: inserted_attributes.footnote,
                 math: inserted_attributes.math,
+                image: inserted_attributes.image,
             });
         }
         temp.append_tree(after);
@@ -1110,6 +1224,7 @@ impl InlineTextTree {
                 link: inserted_attributes.link,
                 footnote: inserted_attributes.footnote,
                 math: inserted_attributes.math,
+                image: inserted_attributes.image,
             });
         }
         temp.append_tree(after);
@@ -1195,8 +1310,8 @@ impl InlineTextTree {
                 && last.html_style == fragment.html_style
                 && last.link == fragment.link
                 && last.footnote == fragment.footnote
-                && last.math.is_none()
-                && fragment.math.is_none()
+                && last.verbatim_source().is_none()
+                && fragment.verbatim_source().is_none()
             {
                 last.text.push_str(&fragment.text);
                 continue;
@@ -1421,6 +1536,7 @@ impl NormalizeBuilder {
             && last.link.is_none()
             && last.footnote.is_none()
             && last.math.is_none()
+            && last.image.is_none()
         {
             last.text.push_str(&text);
             return;
@@ -1433,6 +1549,7 @@ impl NormalizeBuilder {
             link: None,
             footnote: None,
             math: None,
+            image: None,
         });
     }
 
@@ -1443,13 +1560,43 @@ impl NormalizeBuilder {
         extra_style: InlineStyle,
         extra_html_style: Option<HtmlInlineStyle>,
     ) {
+        self.emit_verbatim_fragment(tokens, InlineFragment {
+            text: math.source.clone(),
+            style: extra_style,
+            html_style: extra_html_style,
+            link: None,
+            footnote: None,
+            math: Some(math),
+            image: None,
+        });
+    }
+
+    fn emit_inline_image(
+        &mut self,
+        tokens: &[CharToken],
+        image: InlineImage,
+        extra_style: InlineStyle,
+        extra_html_style: Option<HtmlInlineStyle>,
+    ) {
+        self.emit_verbatim_fragment(tokens, InlineFragment {
+            text: image.source.clone(),
+            style: extra_style,
+            html_style: extra_html_style,
+            link: None,
+            footnote: None,
+            math: None,
+            image: Some(image),
+        });
+    }
+
+    /// Emits one fragment whose visible text is the consumed source verbatim,
+    /// mapping every source boundary straight through to the normalized offset.
+    fn emit_verbatim_fragment(&mut self, tokens: &[CharToken], fragment: InlineFragment) {
         let source_start = tokens
             .first()
             .map(|token| token.source_range.start)
             .unwrap_or(0);
         let normalized_start = self.normalized_len;
-        let source = math.source.clone();
-        let visible_len = source.len();
 
         for token in tokens {
             let token_len = token.source_range.len();
@@ -1459,15 +1606,8 @@ impl NormalizeBuilder {
             }
         }
 
-        self.normalized_len += visible_len;
-        self.fragments.push(InlineFragment {
-            text: source,
-            style: extra_style,
-            html_style: extra_html_style,
-            link: None,
-            footnote: None,
-            math: Some(math),
-        });
+        self.normalized_len += fragment.text.len();
+        self.fragments.push(fragment);
     }
 }
 
@@ -1583,6 +1723,32 @@ fn parse_until(
                 builder,
                 reference_definitions,
             ) {
+                index = next_index;
+                continue;
+            }
+
+            if tokens[index].ch == '!'
+                && let Some(next_index) = parse_inline_markdown_image(
+                    tokens,
+                    index,
+                    extra_style,
+                    extra_html_style,
+                    builder,
+                )
+            {
+                index = next_index;
+                continue;
+            }
+
+            if tokens[index].ch == '<'
+                && let Some(next_index) = parse_inline_html_image(
+                    tokens,
+                    index,
+                    extra_style,
+                    extra_html_style,
+                    builder,
+                )
+            {
                 index = next_index;
                 continue;
             }
@@ -1817,6 +1983,7 @@ fn parse_footnote_reference(
             occurrence_index: 0,
         }),
         math: None,
+        image: None,
     }];
 
     let normalized_start = builder.normalized_len;
@@ -1837,8 +2004,8 @@ fn parse_footnote_reference(
             && last.html_style == fragment.html_style
             && last.link == fragment.link
             && last.footnote == fragment.footnote
-            && last.math.is_none()
-            && fragment.math.is_none()
+            && last.verbatim_source().is_none()
+            && fragment.verbatim_source().is_none()
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -1908,8 +2075,8 @@ fn parse_inline_link(
             && last.html_style == fragment.html_style
             && last.link == fragment.link
             && last.footnote == fragment.footnote
-            && last.math.is_none()
-            && fragment.math.is_none()
+            && last.verbatim_source().is_none()
+            && fragment.verbatim_source().is_none()
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -1940,6 +2107,7 @@ fn parse_autolink(
         }),
         footnote: None,
         math: None,
+        image: None,
     }];
 
     let normalized_start = builder.normalized_len;
@@ -1971,8 +2139,8 @@ fn parse_autolink(
             && last.html_style == fragment.html_style
             && last.link == fragment.link
             && last.footnote == fragment.footnote
-            && last.math.is_none()
-            && fragment.math.is_none()
+            && last.verbatim_source().is_none()
+            && fragment.verbatim_source().is_none()
         {
             last.text.push_str(&fragment.text);
         } else {
@@ -1989,6 +2157,98 @@ struct InlineHtmlTag {
     attrs: Vec<HtmlAttr>,
     end_index: usize,
     self_closing: bool,
+}
+
+/// Parses an inline `<img ...>` (or `<img ... />`) into a single
+/// source-preserving image fragment.
+///
+/// `img` is a void element, so it can never be handled by
+/// [`parse_inline_html_container`], which needs a matching close tag. Must run
+/// before both the container parser and the autolink parser so neither claims
+/// the `<`.
+/// Parses an inline Markdown image `![alt](src "title")` into a
+/// source-preserving image fragment, so a row of badges renders as images
+/// instead of literal text.
+///
+/// Reference-style images (`![alt][label]`) stay literal: the inline tree
+/// carries link reference definitions, not image ones, so the target could not
+/// be resolved here.
+fn parse_inline_markdown_image(
+    tokens: &[CharToken],
+    index: usize,
+    extra_style: InlineStyle,
+    extra_html_style: Option<HtmlInlineStyle>,
+    builder: &mut NormalizeBuilder,
+) -> Option<usize> {
+    if tokens.get(index)?.ch != '!'
+        || tokens.get(index + 1)?.ch != '['
+        || token_is_backslash_escaped(tokens, index)
+    {
+        return None;
+    }
+
+    let source = tokens_to_string(&tokens[index..]);
+    let (raw_source, syntax, end) = parse_inline_image_at(&source, 0)?;
+    let ImageTarget::Direct { src, .. } = syntax.target else {
+        return None;
+    };
+    if src.trim().is_empty() {
+        return None;
+    }
+
+    // `end` is a byte offset into the string rebuilt from `tokens[index..]`, so
+    // walk the same tokens back to a token count.
+    let mut consumed = 0usize;
+    let mut bytes = 0usize;
+    while bytes < end {
+        bytes += tokens.get(index + consumed)?.ch.len_utf8();
+        consumed += 1;
+    }
+    if bytes != end {
+        return None;
+    }
+
+    let image = InlineImage {
+        source: raw_source,
+        src: src.trim().to_string(),
+        alt: syntax.alt,
+        width: None,
+        height: None,
+        zoom: 1.0,
+    };
+    builder.emit_inline_image(
+        &tokens[index..index + consumed],
+        image,
+        extra_style,
+        extra_html_style,
+    );
+    Some(index + consumed)
+}
+
+fn parse_inline_html_image(
+    tokens: &[CharToken],
+    index: usize,
+    extra_style: InlineStyle,
+    extra_html_style: Option<HtmlInlineStyle>,
+    builder: &mut NormalizeBuilder,
+) -> Option<usize> {
+    let tag = locate_inline_html_open_tag(tokens, index)?;
+    if tag.name != "img" {
+        return None;
+    }
+
+    let parsed = html_image_from_attrs(&tag.attrs)?;
+    let consumed = &tokens[index..=tag.end_index];
+    let image = InlineImage {
+        source: tokens_to_string(consumed),
+        zoom: parsed.zoom_factor(),
+        src: parsed.src,
+        alt: parsed.alt,
+        width: parsed.width,
+        height: parsed.height,
+    };
+    builder.emit_inline_image(consumed, image, extra_style, extra_html_style);
+    Some(tag.end_index + 1)
 }
 
 fn parse_inline_html_container(
@@ -3034,8 +3294,8 @@ pub(crate) fn can_use_markdown_script_delimiters(
         && previous.link == fragment.link
         && previous.footnote.is_none()
         && fragment.footnote.is_none()
-        && previous.math.is_none()
-        && fragment.math.is_none()
+        && previous.verbatim_source().is_none()
+        && fragment.verbatim_source().is_none()
         && styles_match_ignoring_script(previous.style, fragment.style)
 }
 
@@ -3227,8 +3487,9 @@ fn can_close_emphasis(tokens: &[CharToken], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        InlineFragment, InlineInsertionAttributes, InlineLinkHit, InlineMathDelimiter,
-        InlineScript, InlineStyle, InlineTextTree, LinkReferenceDefinitions, StyleFlag,
+        HtmlImageLength, InlineFragment, InlineInsertionAttributes, InlineLinkHit,
+        InlineMathDelimiter, InlineScript, InlineStyle, InlineTextTree, LinkReferenceDefinitions,
+        StyleFlag,
     };
     use crate::components::HtmlCssColor;
 
@@ -4114,6 +4375,7 @@ mod tests {
                 link: None,
                 footnote: None,
                 math: None,
+                image: None,
             }]);
             let serialized = tree.serialize_markdown();
             let reparsed = InlineTextTree::from_markdown(&serialized);
@@ -4168,5 +4430,251 @@ mod tests {
         let cache = tree.render_cache();
         assert!(!cache.style_at(0).code);
         assert_eq!(tree.serialize_markdown(), "\\`not code\\`");
+    }
+
+    #[test]
+    fn parses_inline_html_image_alongside_a_link() {
+        let markdown = "<img alt=\"Smithy\" src=\"https://example.com/anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/plugin)";
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        // Visible text keeps the tag source verbatim, so offsets stay stable.
+        assert_eq!(
+            tree.visible_text(),
+            "<img alt=\"Smithy\" src=\"https://example.com/anvil.svg\" width=\"32\"> Smithy Plugin"
+        );
+        assert_eq!(tree.serialize_markdown(), markdown);
+
+        let image = tree
+            .render_cache()
+            .inline_image_at(0)
+            .expect("inline image span")
+            .clone();
+        assert_eq!(image.src, "https://example.com/anvil.svg");
+        assert_eq!(image.alt, "Smithy");
+        assert_eq!(image.width, Some(HtmlImageLength::Pixels(32.0)));
+        assert_eq!(image.height, None);
+        assert_eq!(image.zoom, 1.0);
+        assert!(tree.has_mixed_inline_visuals());
+
+        // The link after the image still resolves.
+        let link_offset = tree.visible_text().find("Smithy Plugin").expect("label");
+        assert_eq!(
+            tree.render_cache().link_at(link_offset),
+            Some("https://example.com/plugin")
+        );
+    }
+
+    #[test]
+    fn plain_label_drops_a_decorative_inline_image_beside_words() {
+        let markdown = "<img alt=\"Smithy\" src=\"./anvil.png\" width=\"32\"> tail";
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        assert_eq!(tree.plain_label(), "tail");
+    }
+
+    #[test]
+    fn plain_label_falls_back_to_alt_when_the_image_is_the_whole_title() {
+        let tree =
+            InlineTextTree::from_markdown("<img alt=\"Smithy\" src=\"./anvil.png\" width=\"32\">");
+
+        assert_eq!(tree.plain_label(), "Smithy");
+    }
+
+    #[test]
+    fn plain_label_is_empty_when_an_alt_less_image_is_the_whole_title() {
+        let tree = InlineTextTree::from_markdown("<img src=\"./anvil.png\">");
+
+        assert_eq!(tree.plain_label(), "");
+    }
+
+    #[test]
+    fn plain_label_drops_an_alt_less_image_without_leaving_a_double_space() {
+        let tree = InlineTextTree::from_markdown("<img src=\"x.png\"> tail");
+
+        assert_eq!(tree.plain_label(), "tail");
+    }
+
+    #[test]
+    fn plain_label_flattens_bold_link_and_image_into_plain_text() {
+        let markdown = "**bold** [text](url) <img alt=\"icon\" src=\"a.png\">";
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        assert_eq!(tree.plain_label(), "bold text");
+    }
+
+    #[test]
+    fn plain_label_keeps_inline_math_source() {
+        let tree = InlineTextTree::from_markdown("before $x^2$ after");
+
+        assert_eq!(tree.plain_label(), "before $x^2$ after");
+    }
+
+    #[test]
+    fn parses_self_closing_and_bare_inline_html_images() {
+        for markdown in [
+            "a <img src=\"x.png\" /> b",
+            "a <img src=\"x.png\"> b",
+            "a <IMG SRC=\"x.png\"> b",
+        ] {
+            let tree = InlineTextTree::from_markdown(markdown);
+            assert_eq!(tree.visible_text(), markdown, "{markdown}");
+            assert_eq!(tree.serialize_markdown(), markdown, "{markdown}");
+            assert_eq!(
+                tree.render_cache()
+                    .inline_image_at(2)
+                    .map(|image| image.src.clone()),
+                Some("x.png".to_string()),
+                "{markdown}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_html_image_inside_styled_text_keeps_its_context() {
+        let tree = InlineTextTree::from_markdown("**bold <img src=\"x.png\" width=\"16\"> tail**");
+        assert_eq!(
+            tree.visible_text(),
+            "bold <img src=\"x.png\" width=\"16\"> tail"
+        );
+        // Verbatim-source fragments break the surrounding style run, so the
+        // bold markers re-emit around the tag. Same behavior inline math has
+        // had since it was added; visible text and styles still round-trip.
+        assert_eq!(
+            tree.serialize_markdown(),
+            "**bold **<img src=\"x.png\" width=\"16\">** tail**"
+        );
+
+        let cache = tree.render_cache();
+        let offset = cache.visible_text().find("<img").expect("tag offset");
+        assert!(cache.style_at(offset).bold);
+        assert_eq!(
+            cache.inline_image_at(offset).map(|image| image.src.clone()),
+            Some("x.png".to_string())
+        );
+    }
+
+    #[test]
+    fn unsafe_or_incomplete_inline_html_images_stay_literal_text() {
+        for markdown in [
+            "<img alt=\"no src\">",
+            "<img src=\"\">",
+            "<img src=\"x.png\" onerror=\"alert(1)\">",
+            "<img src=\"x.png\"",
+        ] {
+            let tree = InlineTextTree::from_markdown(markdown);
+            assert!(
+                !tree.has_mixed_inline_visuals(),
+                "{markdown} should not produce an image"
+            );
+            assert!(
+                tree.render_cache().inline_image_at(0).is_none(),
+                "{markdown} should not produce an image"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_html_image_does_not_shadow_autolinks_or_containers() {
+        // An unstyled `<span>` stays literal (pre-existing behavior), but the
+        // autolink and the container must still not be claimed as images.
+        let tree = InlineTextTree::from_markdown("<https://example.com/> <span>x</span>");
+        assert_eq!(tree.visible_text(), "https://example.com/ <span>x</span>");
+        assert!(tree.render_cache().inline_image_at(0).is_none());
+
+        let styled = InlineTextTree::from_markdown("<span style=\"color: red\">x</span>");
+        assert_eq!(styled.visible_text(), "x");
+        assert!(styled.render_cache().inline_image_at(0).is_none());
+    }
+
+    #[test]
+    fn parses_a_row_of_inline_markdown_badge_images() {
+        let markdown = concat!(
+            "![JetBrains Plugins](https://img.shields.io/jetbrains/plugin/v/18717-smithy?style=for-the-badge) ",
+            "![Downloads](https://img.shields.io/jetbrains/plugin/d/18717-smithy?style=for-the-badge) ",
+            "![License](https://img.shields.io/github/license/iancaffey/smithy-intellij-plugin?style=for-the-badge)",
+        );
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        // Source-preserving, so the visible text and the round trip are byte-identical.
+        assert_eq!(tree.visible_text(), markdown);
+        assert_eq!(tree.serialize_markdown(), markdown);
+        assert!(tree.has_mixed_inline_visuals());
+
+        let cache = tree.render_cache();
+        let images = cache
+            .spans()
+            .iter()
+            .filter_map(|span| span.image.as_ref())
+            .map(|image| (image.alt.clone(), image.src.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            images,
+            vec![
+                (
+                    "JetBrains Plugins".to_string(),
+                    "https://img.shields.io/jetbrains/plugin/v/18717-smithy?style=for-the-badge"
+                        .to_string()
+                ),
+                (
+                    "Downloads".to_string(),
+                    "https://img.shields.io/jetbrains/plugin/d/18717-smithy?style=for-the-badge"
+                        .to_string()
+                ),
+                (
+                    "License".to_string(),
+                    "https://img.shields.io/github/license/iancaffey/smithy-intellij-plugin?style=for-the-badge"
+                        .to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_an_inline_markdown_image_with_a_title_and_balanced_parens() {
+        let markdown = "before ![a](pic(1).png \"A ) title\") after";
+        let tree = InlineTextTree::from_markdown(markdown);
+
+        assert_eq!(tree.serialize_markdown(), markdown);
+        let image = tree
+            .render_cache()
+            .inline_image_at("before ".len())
+            .expect("inline image")
+            .clone();
+        assert_eq!(image.src, "pic(1).png");
+        assert_eq!(image.alt, "a");
+    }
+
+    #[test]
+    fn reference_and_escaped_inline_markdown_images_stay_literal_text() {
+        for markdown in [
+            "![cover][ref]",
+            "![cover][]",
+            "\\![not an image](x.png)",
+            "![missing target]",
+        ] {
+            let tree = InlineTextTree::from_markdown(markdown);
+            assert!(
+                tree.render_cache().inline_image_at(0).is_none(),
+                "{markdown} should not become an inline image"
+            );
+        }
+    }
+
+    #[test]
+    fn typing_next_to_an_inline_html_image_inserts_plain_text() {
+        let tree = InlineTextTree::from_markdown("<img src=\"x.png\"> tail");
+        let end = tree.visible_len();
+        let result =
+            tree.replace_visible_range(end..end, "!", tree.attributes_for_insertion_at(end));
+
+        assert_eq!(result.tree.serialize_markdown(), "<img src=\"x.png\"> tail!");
+        assert_eq!(
+            result
+                .tree
+                .render_cache()
+                .inline_image_at(0)
+                .map(|image| image.src.clone()),
+            Some("x.png".to_string())
+        );
     }
 }

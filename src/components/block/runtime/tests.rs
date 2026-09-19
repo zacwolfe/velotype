@@ -83,6 +83,7 @@ fn expanded_code_cursor_offset_stays_before_closing_backtick() {
         link: None,
         footnote: None,
         math: None,
+        image: None,
     }];
 
     assert_eq!(expanded_display_offset_for_clean(&fragments, 0), 1);
@@ -101,6 +102,7 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
             link: None,
             footnote: None,
             math: None,
+            image: None,
         },
         InlineFragment {
             text: "bc".to_string(),
@@ -112,6 +114,7 @@ fn expanded_code_cursor_offset_keeps_plain_text_boundaries() {
             link: None,
             footnote: None,
             math: None,
+            image: None,
         },
     ];
 
@@ -137,6 +140,7 @@ fn typing_inside_manual_backticks_keeps_cursor_inside_code_span() {
             link: None,
             footnote: None,
             math: None,
+            image: None,
         }]
     );
 
@@ -224,6 +228,159 @@ async fn inline_math_focus_stays_rendered_rich_and_keeps_links(cx: &mut TestAppC
             block.record.title.serialize_markdown(),
             "**bold** $x^2$ [repo](https://example.com)"
         );
+    });
+}
+
+#[gpui::test]
+async fn inline_html_image_in_a_heading_renders_rich_and_keeps_the_link(cx: &mut TestAppContext) {
+    let markdown =
+        "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/p)";
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Heading { level: 1 },
+                InlineTextTree::from_markdown(markdown),
+            ),
+        )
+    });
+
+    block.update(cx, |block, cx| {
+        // The tag source is the visible text, so search and caret offsets see it.
+        assert_eq!(
+            block.display_text(),
+            "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> Smithy Plugin"
+        );
+        assert!(block.record.title.has_mixed_inline_visuals());
+
+        let image_span = block
+            .inline_spans()
+            .iter()
+            .find_map(|span| span.image.clone())
+            .expect("inline image span reaches the renderer");
+        assert_eq!(image_span.src, "anvil.svg");
+        assert_eq!(image_span.alt, "Smithy");
+
+        // Caret inside the tag keeps the rich projection; the sibling link and
+        // the round-tripped source both survive.
+        block.move_to("<img alt=\"Smi".len(), cx);
+        block.sync_inline_projection_for_focus(true);
+        assert!(!block.uses_raw_text_editing());
+        assert!(block.record.title.has_inline_links());
+        assert_eq!(block.record.title.serialize_markdown(), markdown);
+    });
+}
+
+#[gpui::test]
+async fn inline_image_heading_focus_does_not_auto_expand(cx: &mut TestAppContext) {
+    let markdown =
+        "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/p)";
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Heading { level: 1 },
+                InlineTextTree::from_markdown(markdown),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        // Nothing has requested the click-to-edit expansion yet, so the gate
+        // `render_text_or_mixed_inline_visuals` reads must report "still
+        // rendered" even though a real window would report this block as
+        // focused (the editor auto-focuses the first block on open).
+        assert!(block.record.title.has_inline_images());
+        assert!(!block.image_edit_expanded());
+        assert_eq!(
+            block.display_text(),
+            "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> Smithy Plugin"
+        );
+        assert_eq!(block.record.title.serialize_markdown(), markdown);
+    });
+}
+
+#[gpui::test]
+async fn requested_inline_image_expansion_enters_raw_heading_editing(cx: &mut TestAppContext) {
+    let markdown =
+        "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/p)";
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Heading { level: 1 },
+                InlineTextTree::from_markdown(markdown),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        // An explicit click (modeled here as request + focus-sync, mirroring
+        // the standalone-image click gesture) swaps the block into the
+        // caret-hosting text path.
+        block.request_image_edit_expansion();
+        assert!(block.sync_image_focus_state(true));
+        assert!(block.image_edit_expanded());
+        assert_eq!(block.cursor_offset(), block.visible_len());
+    });
+}
+
+#[gpui::test]
+async fn blurred_inline_image_heading_reverts_to_rendered_icon(cx: &mut TestAppContext) {
+    let markdown =
+        "<img alt=\"Smithy\" src=\"anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/p)";
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Heading { level: 1 },
+                InlineTextTree::from_markdown(markdown),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        block.request_image_edit_expansion();
+        assert!(block.sync_image_focus_state(true));
+        assert!(block.image_edit_expanded());
+
+        // Moving focus away (or clicking elsewhere) restores the rendered
+        // icon, exactly like blurring a standalone image block.
+        assert!(block.sync_image_focus_state(false));
+        assert!(!block.image_edit_expanded());
+    });
+}
+
+#[gpui::test]
+async fn inline_math_heading_expansion_gate_is_unaffected_by_image_generalization(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("**bold** $x^2$ [repo](https://example.com)"),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        // Inline math (unlike an inline image) never carries the
+        // click-to-edit expansion, so mere focus keeps revealing source for
+        // it the same way it always has — confirming the generalized gate in
+        // `image.rs` did not leak into non-image mixed visuals.
+        assert!(!block.record.title.has_inline_images());
+        assert!(block.record.title.has_mixed_inline_visuals());
+
+        block.request_image_edit_expansion();
+        assert!(!block.sync_image_focus_state(true));
+        assert!(!block.image_edit_expanded());
     });
 }
 

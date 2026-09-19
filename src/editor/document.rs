@@ -3296,6 +3296,80 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn imports_inline_html_images_inside_titles_without_leaving_the_native_runtime(
+        cx: &mut TestAppContext,
+    ) {
+        let markdown = [
+            "# <img alt=\"Smithy\" src=\"https://example.com/anvil.svg\" width=\"32\"> [Smithy Plugin](https://example.com/p)",
+            "",
+            "Body with an <img src=\"./icon.png\" width=\"16\"> inline icon.",
+            "",
+            "- item with <img src=\"./icon.png\" width=\"16\"> an icon",
+        ]
+        .join("\n");
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            let kinds = visible
+                .iter()
+                .map(|block| block.entity.read(cx).kind())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                kinds,
+                vec![
+                    BlockKind::Heading { level: 1 },
+                    BlockKind::Paragraph,
+                    BlockKind::BulletedListItem,
+                ],
+                "inline <img> must not push the block into a raw-Markdown fallback"
+            );
+
+            for block in visible {
+                let block = block.entity.read(cx);
+                assert!(
+                    block.record.title.has_mixed_inline_visuals(),
+                    "{:?} should carry an inline image",
+                    block.kind()
+                );
+            }
+
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
+    async fn imports_a_badge_row_as_one_paragraph_of_inline_images(cx: &mut TestAppContext) {
+        // Several images on one line is a README badge row, not a standalone
+        // image block: it must stay one paragraph carrying inline images.
+        let markdown = concat!(
+            "![JetBrains Plugins](https://img.shields.io/jetbrains/plugin/v/18717-smithy?style=for-the-badge) ",
+            "![Downloads](https://img.shields.io/jetbrains/plugin/d/18717-smithy?style=for-the-badge) ",
+            "![License](https://img.shields.io/github/license/iancaffey/smithy-intellij-plugin?style=for-the-badge)",
+        )
+        .to_string();
+        let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+        editor.update(cx, |editor, cx| {
+            let visible = editor.document.visible_blocks();
+            assert_eq!(visible.len(), 1);
+            let block = visible[0].entity.read(cx);
+            assert_eq!(block.kind(), BlockKind::Paragraph);
+            assert!(block.record.title.has_inline_images());
+            assert_eq!(
+                block
+                    .inline_spans()
+                    .iter()
+                    .filter(|span| span.image.is_some())
+                    .count(),
+                3,
+                "each badge must render as its own inline image"
+            );
+            assert_eq!(editor.document.markdown_text(cx), markdown);
+        });
+    }
+
+    #[gpui::test]
     async fn imports_list_items_with_inline_span_style_as_text_not_links(cx: &mut TestAppContext) {
         let markdown = [
             "- Anaconda的安装需要留意<span style='color:blue;'>磁盘预留空间、系统环境变量</span>等问题",
@@ -3978,3 +4052,4 @@ mod tests {
         });
     }
 }
+

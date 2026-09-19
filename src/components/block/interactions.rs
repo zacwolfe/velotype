@@ -1369,6 +1369,26 @@ impl Block {
             return;
         }
 
+        // A title carrying inline images (e.g. an icon heading) renders through
+        // the mixed-visual widget row while unexpanded, which cannot host a
+        // caret. Any click inside it — not just on the image — requests the
+        // same click-to-edit expansion a standalone image block uses above. A
+        // modifier-click on a link stops propagation before it reaches here
+        // (see `on_rendered_link_mouse_down`), so link-following is unaffected.
+        if self.record.title.has_inline_images() && !self.image_edit_expanded() {
+            self.is_selecting = false;
+            self.request_image_edit_expansion();
+            if self.focus_handle.is_focused(window) {
+                if self.sync_image_focus_state(true) {
+                    cx.notify();
+                }
+            } else {
+                cx.emit(BlockEvent::RequestFocus);
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         let offset = self.index_for_mouse_position(event.position);
         let was_focused = self.focus_handle.is_focused(window);
 

@@ -94,13 +94,39 @@ pub(crate) struct HtmlInlineStyle {
 
 impl Eq for HtmlInlineStyle {}
 
+/// Explicit size from an HTML `width`/`height` presentation attribute.
+///
+/// HTML treats a bare number as CSS pixels; a trailing `%` is relative to the
+/// containing box. Anything else (`em`, `auto`, junk) is dropped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum HtmlImageLength {
+    Pixels(f32),
+    Percent(f32),
+}
+
+impl HtmlImageLength {
+    /// Attribute text as written back out on export.
+    fn to_attr_value(self) -> String {
+        match self {
+            Self::Pixels(value) => css_number(value),
+            Self::Percent(value) => format!("{}%", css_number(value)),
+        }
+    }
+}
+
 /// Safe data extracted from a standalone HTML `<img>` block.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HtmlImageBlock {
     pub(crate) src: String,
     pub(crate) alt: String,
     pub(crate) zoom: f32,
+    /// `width="..."` presentation attribute, when it parses to a usable size.
+    pub(crate) width: Option<HtmlImageLength>,
+    /// `height="..."` presentation attribute, when it parses to a usable size.
+    pub(crate) height: Option<HtmlImageLength>,
 }
+
+impl Eq for HtmlImageBlock {}
 
 impl HtmlImageBlock {
     pub(crate) fn zoom_factor(&self) -> f32 {
@@ -112,6 +138,16 @@ impl HtmlImageBlock {
         if !self.alt.is_empty() {
             html.push_str(" alt=\"");
             html.push_str(&escape_html_attr(&self.alt));
+            html.push('"');
+        }
+        if let Some(width) = self.width {
+            html.push_str(" width=\"");
+            html.push_str(&escape_html_attr(&width.to_attr_value()));
+            html.push('"');
+        }
+        if let Some(height) = self.height {
+            html.push_str(" height=\"");
+            html.push_str(&escape_html_attr(&height.to_attr_value()));
             html.push('"');
         }
         if (self.zoom_factor() - 1.0).abs() > f32::EPSILON {
@@ -787,23 +823,87 @@ pub(crate) fn parse_html_image_block(raw_source: &str) -> Option<HtmlImageBlock>
     {
         return None;
     }
-    if has_dangerous_attrs(&token.attrs) {
+    html_image_from_attrs(&token.attrs)
+}
+
+/// Whether the whole fragment is a single `<img>` tag, safe or not.
+///
+/// `parse_html_image_block` folds "not an image" and "an image with a
+/// dangerous attribute" into the same `None`, but export has to treat those
+/// differently: the first passes through, the second must be escaped.
+pub(crate) fn is_img_tag_source(raw_source: &str) -> bool {
+    let trimmed = raw_source.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Some(token) = parse_tag_token(trimmed, 0) else {
+        return false;
+    };
+    token.kind == TagKind::Open && token.name == "img" && token.source_range == (0..trimmed.len())
+}
+
+/// Extracts the safe `<img>` payload from already-parsed tag attributes.
+///
+/// Shared by the block-level `<img>` path and inline `<img>` parsing, which
+/// reaches the attributes through the inline tokenizer instead of a raw slice.
+pub(crate) fn html_image_from_attrs(attrs: &[HtmlAttr]) -> Option<HtmlImageBlock> {
+    if has_dangerous_attrs(attrs) {
         return None;
     }
 
-    let src = attr_value_in_attrs(&token.attrs, "src")?.trim().to_string();
+    let src = attr_value_in_attrs(attrs, "src")?.trim().to_string();
     if src.is_empty() {
         return None;
     }
 
-    let alt = attr_value_in_attrs(&token.attrs, "alt")
+    let alt = attr_value_in_attrs(attrs, "alt")
         .unwrap_or_default()
         .to_string();
-    let zoom = attr_value_in_attrs(&token.attrs, "style")
+    let zoom = attr_value_in_attrs(attrs, "style")
         .and_then(parse_html_zoom)
         .unwrap_or(1.0);
+    let width = attr_value_in_attrs(attrs, "width").and_then(parse_html_image_length);
+    let height = attr_value_in_attrs(attrs, "height").and_then(parse_html_image_length);
 
-    Some(HtmlImageBlock { src, alt, zoom })
+    Some(HtmlImageBlock {
+        src,
+        alt,
+        zoom,
+        width,
+        height,
+    })
+}
+
+/// Parses a `width`/`height` presentation attribute value.
+///
+/// Accepts a bare number (CSS pixels), an explicit `px` suffix, or a
+/// percentage. Zero and negative sizes are rejected so a bad attribute falls
+/// back to the intrinsic size instead of collapsing the image.
+fn parse_html_image_length(value: &str) -> Option<HtmlImageLength> {
+    let trimmed = value.trim();
+    let (number, is_percent) = match trimmed.strip_suffix('%') {
+        Some(rest) => (rest.trim_end(), true),
+        None => (
+            trimmed
+                .strip_suffix("px")
+                .or_else(|| trimmed.strip_suffix("PX"))
+                .unwrap_or(trimmed)
+                .trim_end(),
+            false,
+        ),
+    };
+
+    let parsed = parse_css_number(number)?;
+    if parsed <= 0.0 {
+        return None;
+    }
+
+    if is_percent {
+        Some(HtmlImageLength::Percent(parsed))
+    } else {
+        Some(HtmlImageLength::Pixels(parsed))
+    }
 }
 
 fn attr_value_in_attrs<'a>(attrs: &'a [HtmlAttr], name: &str) -> Option<&'a str> {
@@ -1217,6 +1317,99 @@ mod tests {
         assert!(parse_html_image_block("<img alt=\"missing src\" />").is_none());
         assert!(parse_html_image_block("<img src=\"\" />").is_none());
         assert!(parse_html_image_block("<span><img src=\"x.png\" /></span>").is_none());
+    }
+
+    #[test]
+    fn parses_width_presentation_attribute_as_pixels() {
+        let image = parse_html_image_block("<img src=\"a.png\" alt=\"A\" width=\"32\">")
+            .expect("html image");
+
+        assert_eq!(image.width, Some(HtmlImageLength::Pixels(32.0)));
+        assert_eq!(image.height, None);
+    }
+
+    #[test]
+    fn parses_width_and_height_with_percent_and_px_suffix() {
+        let image = parse_html_image_block(
+            "<img src=\"a.png\" alt=\"A\" width=\"50%\" height=\"20px\">",
+        )
+        .expect("html image");
+
+        assert_eq!(image.width, Some(HtmlImageLength::Percent(50.0)));
+        assert_eq!(image.height, Some(HtmlImageLength::Pixels(20.0)));
+    }
+
+    #[test]
+    fn invalid_width_values_leave_the_field_unset() {
+        assert_eq!(
+            parse_html_image_block("<img src=\"a.png\" width=\"0\">")
+                .expect("html image")
+                .width,
+            None
+        );
+        assert_eq!(
+            parse_html_image_block("<img src=\"a.png\" width=\"-8\">")
+                .expect("html image")
+                .width,
+            None
+        );
+        assert_eq!(
+            parse_html_image_block("<img src=\"a.png\" width=\"auto\">")
+                .expect("html image")
+                .width,
+            None
+        );
+        assert_eq!(
+            parse_html_image_block("<img src=\"a.png\" width=\"\">")
+                .expect("html image")
+                .width,
+            None
+        );
+        assert_eq!(
+            parse_html_image_block("<img src=\"a.png\" width=\"12em\">")
+                .expect("html image")
+                .width,
+            None
+        );
+    }
+
+    #[test]
+    fn export_round_trip_includes_width_and_height_attributes() {
+        let image = parse_html_image_block(
+            "<img src=\"a.png\" alt=\"a\" width=\"32\" height=\"50%\" style=\"zoom:150%;\" />",
+        )
+        .expect("html image");
+
+        assert_eq!(
+            image.to_sanitized_html_with_src("a.png"),
+            "<img src=\"a.png\" alt=\"a\" width=\"32\" height=\"50%\" style=\"zoom: 150%;\">"
+        );
+    }
+
+    #[test]
+    fn export_omits_width_and_height_attributes_when_absent() {
+        let image = parse_html_image_block("<img src=\"a.png\" alt=\"a\" />").expect("html image");
+
+        let html = image.to_sanitized_html_with_src("a.png");
+        assert_eq!(html, "<img src=\"a.png\" alt=\"a\">");
+        assert!(!html.contains("width"));
+        assert!(!html.contains("height"));
+    }
+
+    #[test]
+    fn zoom_style_is_unaffected_by_width_and_height_attributes() {
+        let image = parse_html_image_block(
+            "<img src=\"a.png\" alt=\"a\" width=\"10px\" height=\"20\" style=\"color:red; zoom: 120%; width:10px\" />",
+        )
+        .expect("html image");
+
+        assert_eq!(image.zoom, 1.2);
+        assert_eq!(image.width, Some(HtmlImageLength::Pixels(10.0)));
+        assert_eq!(image.height, Some(HtmlImageLength::Pixels(20.0)));
+        assert_eq!(
+            image.to_sanitized_html_with_src("a.png"),
+            "<img src=\"a.png\" alt=\"a\" width=\"10\" height=\"20\" style=\"zoom: 120%;\">"
+        );
     }
 
     #[test]

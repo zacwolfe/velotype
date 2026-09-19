@@ -11,8 +11,8 @@ const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::components::{
-    Editor, HtmlCssColor, HtmlDocument, HtmlNode, HtmlNodeKind, InlineScript, MermaidPalette,
-    TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
+    Editor, HtmlCssColor, HtmlDocument, HtmlImageLength, HtmlNode, HtmlNodeKind, InlineScript,
+    MermaidPalette, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
     TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
     parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
     parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
@@ -64,6 +64,18 @@ fn header_axis_emphasis(color: Hsla) -> Hsla {
     }
 }
 
+/// Converts an HTML `width`/`height` attribute to a concrete inline size.
+///
+/// Percentages are dropped: an inline image has no meaningful percentage
+/// reference box inside a wrapping text row, so the caller falls back to the
+/// line-box cap instead of guessing one.
+fn inline_image_pixel_length(length: Option<HtmlImageLength>, zoom: f32) -> Option<Pixels> {
+    match length? {
+        HtmlImageLength::Pixels(value) => Some(px(value * zoom)),
+        HtmlImageLength::Percent(_) => None,
+    }
+}
+
 fn fallback_image_label(alt: &str, strings: &I18nStrings) -> SharedString {
     if alt.trim().is_empty() {
         SharedString::from(strings.image_placeholder.clone())
@@ -96,6 +108,26 @@ fn render_image_placeholder(
         .text_center()
         .text_size(px(t.text_size))
         .text_color(c.image_placeholder_text)
+        .child(fallback_image_label(&runtime.alt, strings))
+        .into_any_element()
+}
+
+/// Fallback for an inline `<img>` whose source cannot be loaded.
+///
+/// Deliberately not the boxed [`render_image_placeholder`]: that one forces a
+/// fixed width, so its label spills over the neighboring words in a wrapping
+/// text row. Browsers show alt text inline for a broken inline image, and plain
+/// text always lays out inside the row it belongs to.
+fn render_inline_image_fallback(
+    runtime: &ImageRuntime,
+    font_size: f32,
+    color: Hsla,
+    strings: &I18nStrings,
+) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .text_size(px(font_size))
+        .text_color(color)
         .child(fallback_image_label(&runtime.alt, strings))
         .into_any_element()
 }
@@ -663,7 +695,15 @@ impl Block {
         // Mixed inline visuals are display-only. Once focused, the text element
         // takes over so caret movement, projection markers, and IME ranges stay
         // anchored to editable text rather than rendered SVG/script offsets.
-        if focused || is_placeholder || !self.has_mixed_inline_visuals() {
+        //
+        // An inline image is decoration in a mostly-textual title, so mere focus
+        // must not replace it with its raw tag the way it does for inline math.
+        // Revealing source takes the same explicit click-to-edit gesture a
+        // standalone image block uses, and reverts on blur.
+        let suppress_focus_reveal =
+            self.record.title.has_inline_images() && !self.image_edit_expanded();
+        if (focused && !suppress_focus_reveal) || is_placeholder || !self.has_mixed_inline_visuals()
+        {
             return match placeholder_text {
                 Some(placeholder) => BlockTextElement::with_placeholder(
                     cx.entity(),
@@ -749,6 +789,7 @@ impl Block {
                     link: None,
                     footnote: None,
                     math: None,
+                    image: None,
                 };
                 children.extend(self.render_inline_text_word_segments(
                     &text[cursor..span.range.start],
@@ -766,6 +807,8 @@ impl Block {
                 children.push(
                     self.render_inline_math_segment(math, span, theme, base_color, font_size, cx),
                 );
+            } else if let Some(image) = span.image.as_ref() {
+                children.push(self.render_inline_html_image_segment(image, theme, font_size, cx));
             } else {
                 children.extend(self.render_inline_text_word_segments(
                     span_text,
@@ -788,6 +831,7 @@ impl Block {
                 link: None,
                 footnote: None,
                 math: None,
+                image: None,
             };
             children.extend(self.render_inline_text_word_segments(
                 &text[cursor..],
@@ -976,6 +1020,95 @@ impl Block {
                 cx,
             ),
         }
+    }
+
+    /// Renders an inline `<img>` embedded in a block title as a widget sized to
+    /// sit on the text line.
+    ///
+    /// Explicit pixel `width`/`height` attributes win; otherwise the image is
+    /// capped to the line box so a large source cannot blow up the row.
+    /// Percentage sizes have no sensible inline reference box, so they fall back
+    /// to the line-box cap.
+    fn render_inline_html_image_segment(
+        &self,
+        image: &crate::components::InlineImage,
+        theme: &Theme,
+        font_size: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let runtime = ImageRuntime {
+            alt: image.alt.clone(),
+            src: image.src.clone(),
+            title: None,
+            resolved_source: resolve_image_source(&image.src, self.image_base_dir()),
+        };
+        let strings = cx.global::<I18nManager>().strings_arc();
+        self.render_inline_sized_image(
+            &runtime,
+            inline_image_pixel_length(image.width, image.zoom),
+            inline_image_pixel_length(image.height, image.zoom),
+            px(font_size * 1.65),
+            font_size,
+            theme,
+            &strings,
+        )
+    }
+
+    /// Builds the inline image element, honoring explicit pixel sizes and
+    /// falling back to a line-box-capped intrinsic size.
+    fn render_inline_sized_image(
+        &self,
+        runtime: &ImageRuntime,
+        explicit_width: Option<Pixels>,
+        explicit_height: Option<Pixels>,
+        line_box: Pixels,
+        font_size: f32,
+        theme: &Theme,
+        strings: &I18nStrings,
+    ) -> AnyElement {
+        let source = runtime.resolved_source.clone();
+        // A loading image reserves its box so the row does not reflow when the
+        // bytes land; explicit sizes win, otherwise fall back to the line box
+        // and the cell placeholder aspect used elsewhere.
+        let reserved_height = explicit_height.unwrap_or(line_box);
+        let reserved_width = explicit_width.unwrap_or(px(f32::from(reserved_height) * 1.6));
+        let fallback_color = theme.colors.image_placeholder_text;
+        let fallback_strings = strings.clone();
+        let runtime_for_fallback = runtime.clone();
+
+        let mut image = match source {
+            ImageResolvedSource::Local(path) => img(path),
+            ImageResolvedSource::Remote(uri) => img(uri),
+        }
+        .object_fit(ObjectFit::Contain)
+        .with_fallback(move || {
+            render_inline_image_fallback(
+                &runtime_for_fallback,
+                font_size,
+                fallback_color,
+                &fallback_strings,
+            )
+        })
+        .with_loading(move || div().w(reserved_width).h(reserved_height).into_any_element());
+
+        // `img` publishes the decoded image's aspect ratio to the layout, so a
+        // single explicit axis derives the other one the way HTML does. With
+        // neither axis given, cap the height to the line box instead of letting
+        // the intrinsic size dictate the row height.
+        image = match (explicit_width, explicit_height) {
+            (Some(width), Some(height)) => image.w(width).h(height),
+            (Some(width), None) => image.w(width),
+            (None, Some(height)) => image.h(height),
+            (None, None) => image.max_h(line_box),
+        };
+
+        div()
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .child(image)
+            .into_any_element()
     }
 
     fn render_inline_image_content(

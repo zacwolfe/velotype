@@ -8,7 +8,7 @@ use gpui::{Hsla, Rgba};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
 
 use crate::components::{
-    MermaidPalette, collect_pipeless_table_region, inline_math_font_size,
+    MermaidPalette, collect_pipeless_table_region, inline_math_font_size, is_img_tag_source,
     is_mermaid_closing_fence, parse_display_math_source, parse_html_image_block,
     parse_mermaid_fence_source, parse_mermaid_fence_start, parse_table_region,
     render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export,
@@ -608,8 +608,40 @@ fn rewrite_local_image_event<'a>(event: Event<'a>, base_dir: Option<&Path>) -> E
                 id,
             })
         }
+        Event::InlineHtml(raw) => rewrite_inline_html_image_event(raw, base_dir),
         event => event,
     }
+}
+
+/// Rewrites an inline raw-HTML `<img>` tag (e.g. one embedded in a heading,
+/// paragraph, or list item) the same way `rewrite_unsafe_html_blocks` already
+/// rewrites a standalone block-level `<img>` line: resolve a local/relative
+/// `src` to a data URI, then re-emit through the same sanitizer so unsafe
+/// attributes are filtered.
+///
+/// Only `Event::InlineHtml` is handled here. Block-level raw HTML
+/// (`Event::Html`) has already been sanitized upstream by
+/// `rewrite_unsafe_html_blocks` before pulldown-cmark ever parses it, so
+/// touching it again here would mean reprocessing already-sanitized output.
+///
+/// `parse_html_image_block` only matches when the entire trimmed payload is
+/// a single, *safe* `<img>` tag, so a fragment with surrounding text,
+/// multiple tags, or a non-`img` tag is returned untouched. An `<img>` tag
+/// that fails only because of a dangerous attribute (e.g. `onerror`) is
+/// downgraded to `Event::Text`: raw HTML events render unescaped, so passing
+/// it through as `Event::InlineHtml` would let the attribute reach the
+/// browser live (an XSS vector, since exported HTML/PDF gets opened in a
+/// real browser). `Event::Text` goes through `push_html`'s HTML-escaping
+/// path, so the tag shows up as inert visible text instead.
+fn rewrite_inline_html_image_event<'a>(raw: CowStr<'a>, base_dir: Option<&Path>) -> Event<'a> {
+    if let Some(image) = parse_html_image_block(raw.as_ref()) {
+        let src = local_image_data_uri(&image.src, base_dir).unwrap_or_else(|| image.src.clone());
+        return Event::InlineHtml(CowStr::from(image.to_sanitized_html_with_src(&src)));
+    }
+    if is_img_tag_source(raw.as_ref()) {
+        return Event::Text(raw);
+    }
+    Event::InlineHtml(raw)
 }
 
 fn local_image_data_uri(source: &str, base_dir: Option<&Path>) -> Option<String> {
@@ -1401,6 +1433,80 @@ mod tests {
 
         assert!(html.contains("src=\"missing.png\""));
         assert!(!html.contains("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn exports_inline_html_image_in_heading_as_data_uri() {
+        let root = std::env::temp_dir().join(format!("velotype-html-export-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("create temp export dir");
+        fs::write(root.join("anvil.png"), [137, 80, 78, 71]).expect("write local image");
+
+        let html = render_html_with_base_dir(
+            "# <img alt=\"Smithy\" src=\"anvil.png\" width=\"32\"> Smithy Plugin",
+            &Theme::default_theme(),
+            "Doc",
+            Some(&root),
+        );
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(html.contains("<img src=\"data:image/png;base64,"));
+        assert!(!html.contains("src=\"anvil.png\""));
+        assert!(html.contains("Smithy Plugin"));
+    }
+
+    #[test]
+    fn exports_inline_html_image_remote_src_unchanged() {
+        let html = render_html(
+            "# <img src=\"https://example.com/x.png\" width=\"32\"> Title",
+            &Theme::default_theme(),
+            "Doc",
+        );
+
+        assert!(html.contains("<img src=\"https://example.com/x.png\""));
+        assert!(!html.contains("data:image"));
+    }
+
+    #[test]
+    fn exports_inline_html_image_preserves_width_and_height() {
+        let html = render_html(
+            "# <img src=\"https://example.com/x.png\" width=\"32\" height=\"16\"> Title",
+            &Theme::default_theme(),
+            "Doc",
+        );
+
+        assert!(html.contains("width=\"32\""));
+        assert!(html.contains("height=\"16\""));
+    }
+
+    #[test]
+    fn inline_html_non_image_fragment_passed_through_unchanged() {
+        let html = render_html("before <span>x</span> after", &Theme::default_theme(), "Doc");
+
+        assert!(html.contains("<span>x</span>"));
+    }
+
+    #[test]
+    fn exports_inline_html_image_escapes_dangerous_attribute() {
+        let html = render_html(
+            "# <img src=\"x.png\" onerror=\"alert(1)\"> Title",
+            &Theme::default_theme(),
+            "Doc",
+        );
+
+        assert!(!html.contains("<img src=\"x.png\""));
+        assert!(html.contains("&lt;img"));
+    }
+
+    #[test]
+    fn exports_inline_html_image_safe_tag_still_renders_live() {
+        let html = render_html(
+            "# <img src=\"https://example.com/x.png\" alt=\"x\"> Title",
+            &Theme::default_theme(),
+            "Doc",
+        );
+
+        assert!(html.contains("<img src=\"https://example.com/x.png\""));
+        assert!(!html.contains("&lt;img"));
     }
 
     #[test]

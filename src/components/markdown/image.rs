@@ -139,16 +139,24 @@ pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
 
     let alt = unescape_ascii_punctuation(&markdown[2..alt_end]);
     match bytes.get(alt_end + 1) {
-        Some(b'(') if markdown.ends_with(')') => {
-            let inner = &markdown[alt_end + 2..markdown.len() - 1];
+        Some(b'(') => {
+            let close_paren = find_matching_target_close_paren(markdown, alt_end + 1)?;
+            if close_paren != markdown.len() - 1 {
+                return None;
+            }
+            let inner = &markdown[alt_end + 2..close_paren];
             let (src, title) = parse_image_target(inner)?;
             Some(ImageSyntax {
                 alt,
                 target: ImageTarget::Direct { src, title },
             })
         }
-        Some(b'[') if markdown.ends_with(']') => {
-            let raw_label = &markdown[alt_end + 2..markdown.len() - 1];
+        Some(b'[') => {
+            let close_bracket = find_unescaped_char(markdown, alt_end + 2, b']')?;
+            if close_bracket != markdown.len() - 1 {
+                return None;
+            }
+            let raw_label = &markdown[alt_end + 2..close_bracket];
             let label_source = if raw_label.is_empty() {
                 alt.as_str()
             } else {
@@ -226,7 +234,15 @@ pub(crate) fn parse_table_cell_inline_images(markdown: &str) -> Vec<TableCellInl
     }
 }
 
-fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageSyntax, usize)> {
+/// Parses one Markdown image starting at `start`, returning its raw source, the
+/// parsed syntax, and the byte offset just past it.
+///
+/// Shared by table-cell inline image scanning and by the inline text tree, which
+/// renders `![alt](src)` as a widget inside otherwise-editable text.
+pub(crate) fn parse_inline_image_at(
+    markdown: &str,
+    start: usize,
+) -> Option<(String, ImageSyntax, usize)> {
     if !markdown[start..].starts_with("![") {
         return None;
     }
@@ -237,7 +253,9 @@ fn parse_inline_image_at(markdown: &str, start: usize) -> Option<(String, ImageS
 
     match next {
         Some(b'(') => {
-            let close = find_unescaped_char(markdown, alt_end + 2, b')')?;
+            // Depth- and title-aware, so `![a](pic(1).png "A ) title")` closes on
+            // the right paren instead of the first one.
+            let close = find_matching_target_close_paren(markdown, alt_end + 1)?;
             let inner = &markdown[alt_end + 2..close];
             let (src, title) = parse_image_target(inner)?;
             let end = close + 1;
@@ -675,6 +693,33 @@ fn find_unescaped_char(input: &str, start: usize, target: u8) -> Option<usize> {
     (start..bytes.len()).find(|&index| bytes[index] == target && !is_escaped(input, index))
 }
 
+/// Finds the `)` that closes the image target opened at `open_paren`
+/// (the index of the `(` itself), respecting escapes, balanced nested
+/// parentheses inside the source (`![a](foo(bar).png)`), and `)` inside
+/// a quoted title (`![a](pic.png "a ) title")`).
+fn find_matching_target_close_paren(input: &str, open_paren: usize) -> Option<usize> {
+    let bytes = input.as_bytes();
+    let mut depth = 1usize;
+    let mut index = open_paren + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            quote @ (b'"' | b'\'') if !is_escaped(input, index) => {
+                index = find_unescaped_char(input, index + 1, quote)?;
+            }
+            b'(' if !is_escaped(input, index) => depth += 1,
+            b')' if !is_escaped(input, index) => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
 fn is_escaped(input: &str, index: usize) -> bool {
     if index == 0 {
         return false;
@@ -825,6 +870,50 @@ mod tests {
         assert!(parse_standalone_image("[![alt](./img.png)](https://example.com)").is_none());
         assert!(parse_standalone_image("![][]").is_none());
         assert!(parse_standalone_image("![]").is_none());
+    }
+
+    #[test]
+    fn rejects_three_badge_line_as_single_image() {
+        // real-world readme line: three separate badge images on one line
+        // must not collapse into a single image with a garbage src.
+        let line = concat!(
+            "![JetBrains Plugins](https://img.shields.io/jetbrains/plugin/v/18717-smithy?style=for-the-badge) ",
+            "![JetBrains plugins](https://img.shields.io/jetbrains/plugin/d/18717-smithy?style=for-the-badge) ",
+            "![License](https://img.shields.io/github/license/iancaffey/smithy-intellij-plugin?style=for-the-badge)",
+        );
+        assert!(parse_standalone_image(line).is_none());
+    }
+
+    #[test]
+    fn rejects_two_image_line_as_single_image() {
+        assert!(parse_standalone_image("![a](x.png) ![b](y.png)").is_none());
+    }
+
+    #[test]
+    fn parses_balanced_parens_in_image_source() {
+        let parsed = parse_standalone_image("![a](foo(bar).png)").expect("image syntax");
+        assert_eq!(parsed.alt, "a");
+        assert_eq!(
+            parsed.target,
+            ImageTarget::Direct {
+                src: "foo(bar).png".to_string(),
+                title: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_title_containing_close_paren() {
+        let parsed =
+            parse_standalone_image("![a](pic.png \"a ) title\")").expect("image syntax");
+        assert_eq!(parsed.alt, "a");
+        assert_eq!(
+            parsed.target,
+            ImageTarget::Direct {
+                src: "pic.png".to_string(),
+                title: Some("a ) title".to_string()),
+            }
+        );
     }
 
     #[test]

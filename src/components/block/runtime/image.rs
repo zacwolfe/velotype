@@ -78,14 +78,22 @@ impl Block {
             .then_some(serialized)
     }
 
+    /// Whether this block renders an image the user may want to edit as source:
+    /// a standalone image block, or a title carrying inline images.
+    fn has_editable_image_visual(&self) -> bool {
+        self.image_runtime.is_some() || self.record.title.has_inline_images()
+    }
+
     pub(crate) fn request_image_edit_expansion(&mut self) {
-        if self.image_runtime.is_some() {
+        if self.has_editable_image_visual() {
             self.image_expand_requested = true;
         }
     }
 
     pub(super) fn consume_requested_image_edit_expansion(&mut self) -> bool {
-        if self.image_runtime.is_some() && self.image_expand_requested && !self.image_edit_expanded
+        if self.has_editable_image_visual()
+            && self.image_expand_requested
+            && !self.image_edit_expanded
         {
             self.image_expand_requested = false;
             self.image_edit_expanded = true;
@@ -104,7 +112,7 @@ impl Block {
     }
 
     pub(crate) fn sync_image_focus_state(&mut self, focused: bool) -> bool {
-        if self.image_runtime.is_none() {
+        if !self.has_editable_image_visual() {
             if self.image_edit_expanded || self.image_expand_requested {
                 self.image_edit_expanded = false;
                 self.image_expand_requested = false;
@@ -129,5 +137,12 @@ impl Block {
 
     pub(crate) fn showing_rendered_image(&self) -> bool {
         self.image_runtime.is_some() && !self.is_source_raw_mode() && !self.image_edit_expanded
+    }
+
+    /// Whether a click-to-edit expansion (image or inline-image title) has
+    /// been consumed and is currently showing raw source instead of the
+    /// rendered visual.
+    pub(crate) fn image_edit_expanded(&self) -> bool {
+        self.image_edit_expanded
     }
 }
