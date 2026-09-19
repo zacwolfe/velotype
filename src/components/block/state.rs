@@ -531,6 +531,11 @@ pub struct BlockRecord {
     pub content: Vec<Uuid>,
     /// Current preserved source for opaque Markdown block kinds.
     pub raw_fallback: Option<String>,
+    /// True while a `Table` block is showing its raw Markdown for text
+    /// editing (see the `edit_tables_as_markdown` preference) rather than
+    /// the native grid. Transient render-driven state, not user content;
+    /// always `false` for freshly built or parsed records.
+    pub table_markdown_editing: bool,
 }
 
 impl BlockRecord {
@@ -545,6 +550,7 @@ impl BlockRecord {
             parent: None,
             content: Vec::new(),
             raw_fallback: None,
+            table_markdown_editing: false,
         };
         record.sync_raw_fallback();
         record
@@ -622,7 +628,12 @@ impl BlockRecord {
     }
 
     /// Returns true for block kinds that keep their original source text
-    /// in `raw_fallback` because they are preserved as opaque Markdown.
+    /// in `raw_fallback` because they are preserved as opaque Markdown. A
+    /// `Table` block joins this set only while it is showing raw Markdown
+    /// for editing (`table_markdown_editing`), so `raw_fallback` mirrors the
+    /// live text a user is typing even before it reparses into `table` at
+    /// blur — otherwise a save mid-edit would silently emit the pre-edit
+    /// table instead of the text on screen.
     pub fn kind_uses_raw_fallback(&self) -> bool {
         matches!(
             self.kind,
@@ -631,7 +642,7 @@ impl BlockRecord {
                 | BlockKind::HtmlBlock
                 | BlockKind::MathBlock
                 | BlockKind::MermaidBlock
-        )
+        ) || (self.kind == BlockKind::Table && self.table_markdown_editing)
     }
 
     /// Serializes this block's own Markdown, including nested indentation and
@@ -679,7 +690,18 @@ impl BlockRecord {
             BlockKind::FootnoteDefinition => {
                 format!("{indentation}[^{}]: ", self.title.visible_text())
             }
-            BlockKind::Table => String::new(),
+            BlockKind::Table => {
+                if self.table_markdown_editing {
+                    let raw = self.raw_fallback.clone().unwrap_or(title_markdown);
+                    if depth == 0 {
+                        raw
+                    } else {
+                        indent_multiline(&raw, &indentation)
+                    }
+                } else {
+                    String::new()
+                }
+            }
             BlockKind::CodeBlock { .. } => title_markdown,
             BlockKind::RawMarkdown
             | BlockKind::Comment
@@ -927,6 +949,21 @@ pub enum BlockEvent {
         /// Pointer position where the menu should open.
         position: Point<Pixels>,
     },
+    /// A column-resize divider was pressed, starting a drag on the editor.
+    /// `start_fractions` is the whole table's fraction vector at drag start
+    /// (stored explicit widths if present and the right length, else the
+    /// currently measured fractions), so an auto-sized table's drag starts
+    /// from what is on screen rather than snapping to equal shares.
+    RequestStartTableColumnResize {
+        left_column: usize,
+        pointer_x: f32,
+        table_width: f32,
+        start_fractions: Vec<f32>,
+    },
+    /// Pointer moved while a table column-resize drag is active.
+    RequestUpdateTableColumnResize { pointer_x: f32 },
+    /// Pointer released, committing the active table column-resize drag.
+    RequestEndTableColumnResize,
     /// Cursor reached the top of this block; move focus to the previous
     /// visible block, preserving the preferred horizontal position.
     RequestFocusPrev {
@@ -1142,6 +1179,22 @@ mod tests {
         assert_eq!(paragraph.markdown_line(1, None), "  plain");
         assert_eq!(comment.markdown_line(0, None), "<!--\ncomment\n-->");
         assert_eq!(comment.markdown_line(1, None), "  <!--\n  comment\n  -->");
+    }
+
+    #[test]
+    fn table_in_markdown_edit_mode_uses_raw_fallback_for_markdown_line() {
+        let mut table = BlockRecord::table(crate::components::TableData::new_empty(1, 2));
+        assert!(!table.kind_uses_raw_fallback());
+        assert_eq!(table.markdown_line(0, None), "");
+
+        table.table_markdown_editing = true;
+        table.set_title(InlineTextTree::plain("| A | B |\n| --- | --- |\n| 1 | 2 |"));
+        assert!(table.kind_uses_raw_fallback());
+        assert_eq!(table.markdown_line(0, None), "| A | B |\n| --- | --- |\n| 1 | 2 |");
+        assert_eq!(
+            table.markdown_line(1, None),
+            "  | A | B |\n  | --- | --- |\n  | 1 | 2 |"
+        );
     }
 
     #[test]

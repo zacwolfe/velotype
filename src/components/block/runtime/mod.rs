@@ -132,6 +132,12 @@ pub struct Block {
     pub selection_reversed: bool,
     /// Editor-owned selection spanning multiple blocks, when present.
     pub(crate) editor_selection_range: Option<Range<usize>>,
+    /// True while this block sits inside a cross-block selection that has
+    /// SETTLED (the drag finished). Reveals inline Markdown delimiters, so the
+    /// selection shows what will actually be copied. Deliberately not set mid
+    /// drag: expanding delimiters lengthens the text, and reflowing under a
+    /// moving pointer makes the selection jump.
+    pub(crate) editor_selection_settled: bool,
     /// UTF-8 IME composition range in the current display text.
     pub marked_range: Option<Range<usize>>,
     /// Last wrapped body layout, used for hit testing and caret geometry.
@@ -194,6 +200,11 @@ pub struct Block {
     pub(crate) table_axis_preview: Option<TableAxisMarker>,
     /// Selected table axis marker.
     pub(crate) table_axis_selection: Option<TableAxisMarker>,
+    /// Live column fractions from an in-progress divider drag, overriding
+    /// `TableColumnLayout::measure` for this render only. Set on every
+    /// mouse-move and cleared on release; never written to `record.table`
+    /// until the drag commits, so dragging never touches undo history.
+    pub(crate) table_resize_preview_widths: Option<Vec<f32>>,
     /// Highlight state for table row or column controls.
     pub(crate) table_axis_highlight: TableAxisHighlight,
     /// Whether the pointer is over the append-column edge.
@@ -286,6 +297,7 @@ impl Block {
             selected_range: 0..0,
             selection_reversed: false,
             editor_selection_range: None,
+            editor_selection_settled: false,
             marked_range: None,
             last_layout: None,
             last_bounds: None,
@@ -316,6 +328,7 @@ impl Block {
             table_cell_alignment: None,
             table_axis_preview: None,
             table_axis_selection: None,
+            table_resize_preview_widths: None,
             table_axis_highlight: TableAxisHighlight::None,
             table_append_column_edge_hovered: false,
             table_append_column_hovered: false,

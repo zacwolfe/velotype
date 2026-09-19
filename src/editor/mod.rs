@@ -22,7 +22,8 @@ use crate::components::{
 };
 use crate::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
-    TableData, TableRuntime, UndoCaptureKind, serialize_table_cell_markdown,
+    TableData, TableRuntime, UndoCaptureKind, minimum_column_width, resize_column_boundary,
+    serialize_table_cell_markdown,
 };
 mod close;
 mod context_menu;
@@ -49,6 +50,7 @@ mod workspace;
 
 use self::search::SearchBarState;
 use self::status_bar::StatusBarState;
+use self::table_edit::TableColumnResizeDrag;
 use self::workspace::{WorkspaceResizeDrag, WorkspaceState};
 
 /// Link navigation request deferred until a `Window` is available.
@@ -186,6 +188,7 @@ pub struct Editor {
     table_axis_preview: Option<TableAxisSelection>,
     /// Committed table row or column selection.
     table_axis_selection: Option<TableAxisSelection>,
+    table_column_resize_drag: Option<TableColumnResizeDrag>,
     /// Selection spanning visible rendered blocks.
     cross_block_selection: Option<CrossBlockSelection>,
     /// Anchor held during a rendered cross-block pointer drag.
@@ -520,6 +523,7 @@ impl Editor {
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,
+            table_column_resize_drag: None,
             cross_block_selection: None,
             cross_block_drag: None,
             rendered_select_all_cycle: None,
