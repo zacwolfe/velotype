@@ -4106,3 +4106,349 @@ async fn caret_movement_still_scrolls_minimally_not_to_the_top(cx: &mut TestAppC
     });
 }
 
+
+#[gpui::test]
+async fn switching_view_mode_does_not_scroll_to_the_caret(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Long enough that a caret far down the document would force a large
+    // scroll if the mode switch chased it.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    // Put the caret far down the document, then scroll back to the top so the
+    // caret is off screen -- the situation where chasing it is most visible.
+    editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks().to_vec();
+        let target = visible[120].entity.clone();
+        target.update(cx, |block, cx| {
+            block.selected_range = 0..0;
+            cx.notify();
+        });
+        editor.active_entity_id = Some(target.entity_id());
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+    editor.update(cx, |editor, _cx| {
+        editor.scroll_handle.set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    });
+    redraw(cx);
+
+    let before = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+        assert!(
+            !editor.pending_scroll_active_block_into_view,
+            "a mode switch must not request a scroll-into-view"
+        );
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+
+    let after = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    assert!(
+        (f32::from(after) - f32::from(before)).abs() < 1.0,
+        "view-mode switch scrolled the viewport from {before:?} to {after:?}"
+    );
+}
+
+#[gpui::test]
+async fn source_mode_caret_movement_scrolls_the_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Regression guard: in source mode the whole document is ONE block, so an
+    // ordinary arrow-key/Home/End caret move never fires `focus_block` or a
+    // `BlockEvent` -- the only thing that can notice it moved is the
+    // caret-follow poll in `Editor::follow_caret_movement`.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    let before = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    // Source mode collapses the whole document into a single block, so this
+    // caret move is entirely intra-block.
+    let block = editor.update(cx, |editor, _cx| {
+        editor.document.visible_blocks().to_vec()[0].entity.clone()
+    });
+    let far_offset = block.update(cx, |block, _cx| block.visible_len().saturating_sub(5));
+    block.update(cx, |block, cx| {
+        block.move_to(far_offset, cx);
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let after = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(after) < f32::from(before) - 50.0,
+            "caret move deep in the single source block did not scroll the viewport \
+             (before {before:?}, after {after:?})"
+        );
+        let bounds = block
+            .read(cx)
+            .active_range_or_cursor_bounds()
+            .expect("caret bounds");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "caret should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}
+
+#[gpui::test]
+async fn source_mode_selection_drag_scrolls_the_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Same regression as above, but through `Block::select_to` -- the exact
+    // method `Block::on_mouse_move` calls while dragging a selection.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    let block = editor.update(cx, |editor, _cx| {
+        editor.document.visible_blocks().to_vec()[0].entity.clone()
+    });
+    // Anchor the selection a few characters before the end of the document,
+    // deep off screen. Keeping the anchor-to-focus span short means the
+    // union of the selection's bounds stays a compact box near the document's
+    // end rather than one spanning the whole document, so "is it inside the
+    // viewport" is a meaningful check after the drag.
+    let end_len = block.update(cx, |block, _cx| block.visible_len());
+    let anchor_offset = end_len.saturating_sub(10);
+    let far_offset = end_len.saturating_sub(5);
+    block.update(cx, |block, cx| {
+        block.move_to(anchor_offset, cx);
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+
+    // Scroll back to the top so the selection anchor is off screen, mirroring
+    // a drag that starts from a spot the user just scrolled away from.
+    editor.update(cx, |editor, _cx| {
+        editor
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    });
+    redraw(cx);
+    let before = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    block.update(cx, |block, cx| {
+        block.select_to(far_offset, cx);
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let after = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(after) < f32::from(before) - 50.0,
+            "extending a selection deep into the single source block did not scroll \
+             the viewport (before {before:?}, after {after:?})"
+        );
+        let bounds = block
+            .read(cx)
+            .active_range_or_cursor_bounds()
+            .expect("selection bounds");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "selection end should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}
+
+#[gpui::test]
+async fn rendered_mode_intra_block_caret_movement_scrolls_the_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Regression guard: the active block does NOT change here -- only the
+    // caret moves within an already-focused block -- which is exactly the
+    // case `focus_block`'s own scroll-into-view request cannot cover.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    // Focus a block far down the document directly through its focus handle --
+    // deliberately NOT `Editor::focus_block`, which would itself request the
+    // very scroll-into-view this test exists to prove happens without it.
+    let target = editor.update_in(cx, |editor, window, cx| {
+        let target = editor.document.visible_blocks().to_vec()[120].entity.clone();
+        target.update(cx, |block, cx| {
+            block.selected_range = 0..0;
+            cx.notify();
+        });
+        target.read(cx).focus_handle.focus(window);
+        editor.active_entity_id = Some(target.entity_id());
+        target
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+
+    // Scroll back to the top so the focused block is off screen, then note the
+    // flat baseline offset before moving the caret again.
+    editor.update(cx, |editor, _cx| {
+        editor
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    });
+    redraw(cx);
+    let before = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    target.update(cx, |block, cx| {
+        let far = block.visible_len().saturating_sub(1);
+        block.move_to(far, cx);
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let after = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(after) < f32::from(before) - 50.0,
+            "intra-block caret move on an already-focused block did not scroll the \
+             viewport (before {before:?}, after {after:?})"
+        );
+        let bounds = target
+            .read(cx)
+            .active_range_or_cursor_bounds()
+            .expect("caret bounds");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "caret should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}
+
+#[gpui::test]
+async fn view_mode_switch_suppression_does_not_outlive_the_switch(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // The suppression set by `toggle_view_mode` must be scoped to exactly the
+    // restore it performs -- it must not silently disable caret-follow for
+    // every subsequent move.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    // Same far-down-caret setup as `switching_view_mode_does_not_scroll_to_the_caret`.
+    editor.update(cx, |editor, cx| {
+        let visible = editor.document.visible_blocks().to_vec();
+        let target = visible[120].entity.clone();
+        target.update(cx, |block, cx| {
+            block.selected_range = 0..0;
+            cx.notify();
+        });
+        editor.active_entity_id = Some(target.entity_id());
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+    editor.update(cx, |editor, _cx| {
+        editor
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(0.0)));
+    });
+    redraw(cx);
+
+    let before_switch = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+    });
+    for _ in 0..6 {
+        redraw(cx);
+    }
+
+    let after_switch = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    assert!(
+        (f32::from(after_switch) - f32::from(before_switch)).abs() < 1.0,
+        "view-mode switch itself must not scroll (before {before_switch:?}, \
+         after {after_switch:?})"
+    );
+
+    // The suppression must be one-shot: a caret move AFTER the switch should
+    // scroll normally, not stay silently disabled.
+    let block = editor.update(cx, |editor, _cx| {
+        editor.document.visible_blocks().to_vec()[0].entity.clone()
+    });
+    let far_offset = block.update(cx, |block, _cx| block.visible_len().saturating_sub(5));
+    block.update(cx, |block, cx| {
+        block.move_to(far_offset, cx);
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        let after_move = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(after_move) < f32::from(after_switch) - 50.0,
+            "caret move after a view-mode switch should scroll the viewport \
+             (after switch {after_switch:?}, after move {after_move:?})"
+        );
+        let bounds = block
+            .read(cx)
+            .active_range_or_cursor_bounds()
+            .expect("caret bounds");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "caret should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}

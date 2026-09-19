@@ -353,8 +353,14 @@ impl Editor {
         }
 
         self.apply_selection_snapshot_in_current_mode(&selection_snapshot, cx);
-        self.pending_scroll_active_block_into_view = true;
-        self.pending_scroll_recheck_after_layout = true;
+        // Deliberately no scroll-into-view here. The caret is restored in the
+        // new mode, but chasing it yanked the viewport to wherever the cursor
+        // happened to sit, which is jarring when the user only wanted to change
+        // how the document is presented. The suppression is scoped to exactly
+        // this restore: the caret-follow poll in `follow_caret_movement` takes
+        // the restored position as its new baseline and keeps scrolling normally
+        // for every subsequent caret move.
+        self.suppress_caret_scroll_follow = true;
         self.last_scroll_viewport_size = None;
         self.pending_window_title_refresh = true;
         self.close_dialog_restore_focus = None;

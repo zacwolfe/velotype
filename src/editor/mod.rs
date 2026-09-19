@@ -6,6 +6,7 @@
 //! order metadata.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -76,6 +77,16 @@ pub struct Editor {
     /// `focus_block`, so a jump that wants another alignment sets it afterward.
     pending_scroll_align: ScrollAlign,
     pending_scroll_recheck_after_layout: bool,
+    /// Focused target plus its caret/selection range as of the last frame, so
+    /// the viewport can follow the caret however it moved. Caret motion inside a
+    /// single block emits no editor-level event — and in source mode the whole
+    /// document *is* one block — so polling this each frame is what keeps arrow
+    /// keys, Home/End, word selection, and drag selection scrolling.
+    last_caret_position: Option<(EntityId, Range<usize>)>,
+    /// Set by operations that restore a caret but must leave the viewport where
+    /// the user left it, so the next observed caret becomes the baseline instead
+    /// of a scroll target. See `Editor::follow_caret_movement`.
+    suppress_caret_scroll_follow: bool,
     pending_save: bool,
     pending_save_as: bool,
     pending_open_link: Option<PendingOpenLink>,
@@ -352,6 +363,8 @@ impl Editor {
             pending_scroll_active_block_into_view: true,
             pending_scroll_align: ScrollAlign::Nearest,
             pending_scroll_recheck_after_layout: true,
+            last_caret_position: None,
+            suppress_caret_scroll_follow: false,
             pending_save: false,
             pending_save_as: false,
             pending_open_link: None,

@@ -523,6 +523,40 @@ impl Editor {
         false
     }
 
+    /// Reads the focused target's caret and requests a scroll-into-view when it
+    /// moved since the last frame.
+    ///
+    /// Caret motion inside one block reaches the editor through no event at all
+    /// — `move_to`/`select_to` only `cx.notify()` the block, and `on_move_left`
+    /// and `on_move_right` bypass even those in their projected-move branch. In
+    /// source mode the whole document is a single block, so *every* arrow key,
+    /// Home/End, word selection, and drag selection is intra-block and would
+    /// never scroll. Polling the caret here catches all of them in one place,
+    /// and cannot be forgotten by some future caret path.
+    fn follow_caret_movement(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let Some(position) = self
+            .focused_edit_target(window, cx)
+            .map(|target| (target.entity_id(), target.read(cx).selected_range.clone()))
+        else {
+            // Nothing focused (or the target is not mounted yet). Keep the last
+            // known caret so a transient gap is not mistaken for a move.
+            return;
+        };
+        if self.last_caret_position.as_ref() == Some(&position) {
+            return;
+        }
+
+        self.last_caret_position = Some(position);
+        // A caret restored by something that must not move the viewport (a view
+        // mode switch) is recorded as the new baseline without being chased.
+        // Held until the caret is actually observed rather than consumed on the
+        // next frame, because the restored target may take a frame to mount.
+        if std::mem::take(&mut self.suppress_caret_scroll_follow) {
+            return;
+        }
+        self.pending_scroll_active_block_into_view = true;
+    }
+
     fn apply_pending_scroll_into_view(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.scrollbar_drag.is_some() {
             return;
@@ -1558,6 +1592,7 @@ impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.install_close_guard(cx, window);
         self.apply_pending_focus(window, cx);
+        self.follow_caret_movement(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.sync_pending_save(window, cx);
