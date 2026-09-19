@@ -651,6 +651,21 @@ impl Editor {
         cx.notify();
     }
 
+    pub(super) fn on_toggle_edit_tables_as_markdown(
+        &mut self,
+        _event: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let next = !crate::config::EditorSettings::edit_tables_as_markdown(cx);
+        crate::config::EditorSettings::set_edit_tables_as_markdown(cx, next);
+        self.close_context_menu(cx);
+        // Read live off `cx` by every table block's `render`, so a plain
+        // re-render is enough to flip already-open tables between raw
+        // Markdown and the native grid; no block rebuild needed.
+        cx.notify();
+    }
+
     pub(super) fn on_delete_table_column(
         &mut self,
         _event: &ClickEvent,
@@ -1014,6 +1029,29 @@ impl Editor {
                                     .hover(|this| this.bg(c.dialog_secondary_button_hover))
                                     .cursor_pointer()
                                     .on_click(cx.listener(Self::on_toggle_table_headers))
+                                    .into_any_element(),
+                            );
+                            let edit_as_markdown =
+                                crate::config::EditorSettings::edit_tables_as_markdown(cx);
+                            items.push(
+                                div()
+                                    .id("table-edit-as-markdown-toggle")
+                                    .h(px(d.menu_item_height))
+                                    .px(px(d.menu_item_padding_x))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap(px(d.menu_item_padding_x))
+                                    .rounded(px(d.menu_item_radius))
+                                    .bg(c.dialog_surface)
+                                    .text_size(px(d.menu_text_size))
+                                    .font_weight(t.dialog_body_weight.to_font_weight())
+                                    .text_color(c.dialog_secondary_button_text)
+                                    .child(s.table_edit_as_markdown.clone())
+                                    .child(if edit_as_markdown { "✓" } else { "" })
+                                    .hover(|this| this.bg(c.dialog_secondary_button_hover))
+                                    .cursor_pointer()
+                                    .on_click(cx.listener(Self::on_toggle_edit_tables_as_markdown))
                                     .into_any_element(),
                             );
                             items.push(

@@ -4,7 +4,7 @@
 //! list items render a marker column (bullet / ordinal), and raw Markdown
 //! fallback renders as plain text.
 
-use gpui::*;
+use gpui::{prelude::FluentBuilder, *};
 
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 
@@ -13,10 +13,11 @@ use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::components::{
     Editor, HtmlCssColor, HtmlDocument, HtmlImageLength, HtmlNode, HtmlNodeKind, InlineScript,
     MermaidPalette, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
-    TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
-    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
-    parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
-    render_mermaid_svg_for_display, resolve_image_source, style_for_node,
+    TableColumnLayout, attr_value, column_boundary_count, display_math_font_size,
+    inline_math_font_size, parse_display_math_source, parse_html_image_block,
+    parse_mermaid_fence_source, parse_table_cell_inline_images, render_display_math_svg,
+    render_inline_math_svg, render_mermaid_svg_for_display, resolve_image_source,
+    seed_resize_baseline, style_for_node,
 };
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -1778,13 +1779,22 @@ impl Render for Block {
         if self.sync_image_focus_state(focused) {
             cx.notify();
         }
+        let edit_tables_as_markdown = crate::config::EditorSettings::edit_tables_as_markdown(cx);
+        if self.sync_table_markdown_focus_state(focused, edit_tables_as_markdown) {
+            cx.notify();
+        }
 
         let showing_rendered_image = self.showing_rendered_image();
         // Inline math stays in the projected view while focused (its `$...$`
         // source shows as editable text), so links and other styling in the same
         // block keep their attributes instead of collapsing to raw Markdown, the
         // same way script spans already behave.
-        self.sync_inline_projection_for_focus(focused && !showing_rendered_image);
+        // A settled cross-block selection also reveals delimiters, so what is
+        // highlighted matches the Markdown that copying will produce.
+        let reveal_for_selection = self.editor_selection_settled;
+        self.sync_inline_projection_for_focus(
+            (focused || reveal_for_selection) && !showing_rendered_image,
+        );
 
         if input_active && self.cursor_blink_task.is_none() {
             self.start_cursor_blink(cx);
@@ -2543,6 +2553,17 @@ impl Render for Block {
                 }
             }
             BlockKind::Table => {
+                // Opt-in `edit_tables_as_markdown` preference: while raw-edit
+                // mode is active (see `sync_table_markdown_focus_state`),
+                // show the table's Markdown as plain editable text instead of
+                // the native grid, exactly like `MathBlock`/`MermaidBlock`.
+                if self.is_table_markdown_editing() {
+                    return focused_base
+                        .w_full()
+                        .child(BlockTextElement::new(cx.entity(), is_placeholder))
+                        .into_any_element();
+                }
+
                 let Some(runtime) = self.table_runtime.clone() else {
                     return focused_base
                         .text_size(px(t.text_size))
@@ -2564,12 +2585,22 @@ impl Render for Block {
 
                 let viewport_width = f32::from(window.viewport_size().width.max(px(1.0)));
                 let table_width = effective_table_width(self, viewport_width, d);
-                let column_layout = self
-                    .record
-                    .table
-                    .as_ref()
-                    .map(|table| TableColumnLayout::measure(table, table_width, window, &theme))
-                    .unwrap_or_else(|| TableColumnLayout::equal(runtime.header.len()));
+                // A live column-resize drag overrides measurement entirely: it
+                // is rendering-only state (never written to `record.table`
+                // until release), and re-deriving through `measure` on every
+                // mouse-move would redo the minimum-width flooring the drag
+                // math already applied.
+                let column_layout = match &self.table_resize_preview_widths {
+                    Some(preview_fractions) => {
+                        TableColumnLayout::from_fractions(preview_fractions.clone())
+                    }
+                    None => self
+                        .record
+                        .table
+                        .as_ref()
+                        .map(|table| TableColumnLayout::measure(table, table_width, window, &theme))
+                        .unwrap_or_else(|| TableColumnLayout::equal(runtime.header.len())),
+                };
                 let preview_marker = self.table_axis_preview;
                 let selected_marker = self.table_axis_selection;
                 let body_row_count = runtime.rows.len();
@@ -2597,6 +2628,16 @@ impl Render for Block {
                 let weak_table_block = cx.entity().downgrade();
 
                 let header_cells = runtime.header;
+                let column_count = header_cells.len();
+                let divider_count = column_boundary_count(column_count);
+                // Baseline for a drag that starts this frame: the stored
+                // explicit widths if present, else what is on screen right
+                // now, so an auto-sized table's drag starts from the
+                // measured layout instead of snapping to equal shares.
+                let resize_start_fractions = seed_resize_baseline(
+                    self.record.table.as_ref().and_then(|table| table.widths.as_deref()),
+                    column_layout.fractions(),
+                );
                 let column_axis_row = (top_gutter > px(0.0)).then(|| {
                     div().w_full().h(top_gutter).flex().gap(px(0.0)).children(
                         header_cells.iter().enumerate().map(|(column, _cell)| {
@@ -2746,6 +2787,10 @@ impl Render for Block {
                         let hover_block = weak_table_block.clone();
                         let select_block = weak_table_block.clone();
                         let menu_block = weak_table_block.clone();
+                        let resize_mouse_down_block = weak_table_block.clone();
+                        let resize_canvas_block = weak_table_block.clone();
+                        let resize_start_fractions = resize_start_fractions.clone();
+                        let has_divider = column < divider_count;
                         div()
                             .relative()
                             .flex_none()
@@ -2799,6 +2844,83 @@ impl Render for Block {
                                     .block_mouse_except_scroll(),
                             )
                             .child(cell)
+                            .when(has_divider, |header_cell| {
+                                header_cell.child(
+                                    div()
+                                        .id(ElementId::Name(
+                                            format!(
+                                                "table-column-resize-handle-{}-{}",
+                                                self.record.id, column
+                                            )
+                                            .into(),
+                                        ))
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right(px(-3.0))
+                                        .w(px(6.0))
+                                        .cursor_ew_resize()
+                                        // A 6px target needs to take the press
+                                        // itself, or the cell's own text
+                                        // editing swallows the mouse-down first.
+                                        .occlude()
+                                        .on_mouse_down(MouseButton::Left, move |event, _window, cx| {
+                                            let pointer_x = f32::from(event.position.x);
+                                            let start_fractions = resize_start_fractions.clone();
+                                            let _ = resize_mouse_down_block.update(cx, |_block, cx| {
+                                                cx.stop_propagation();
+                                                cx.emit(BlockEvent::RequestStartTableColumnResize {
+                                                    left_column: column,
+                                                    pointer_x,
+                                                    table_width,
+                                                    start_fractions,
+                                                });
+                                            });
+                                        })
+                                        .child(
+                                            // Window-level listeners are required: an
+                                            // element-scoped handler stops firing the
+                                            // instant the pointer leaves this 6px strip,
+                                            // which happens on the very first move.
+                                            canvas(
+                                                |_, _, _| (),
+                                                move |_bounds, _, window, _| {
+                                                    window.on_mouse_event({
+                                                        let block = resize_canvas_block.clone();
+                                                        move |_event: &MouseUpEvent, phase, _window, cx| {
+                                                            if !phase.bubble() {
+                                                                return;
+                                                            }
+                                                            let _ = block.update(cx, |_block, cx| {
+                                                                cx.emit(
+                                                                    BlockEvent::RequestEndTableColumnResize,
+                                                                );
+                                                            });
+                                                        }
+                                                    });
+
+                                                    window.on_mouse_event({
+                                                        let block = resize_canvas_block.clone();
+                                                        move |event: &MouseMoveEvent, phase, _window, cx| {
+                                                            if !phase.bubble() || !event.dragging() {
+                                                                return;
+                                                            }
+                                                            let pointer_x = f32::from(event.position.x);
+                                                            let _ = block.update(cx, |_block, cx| {
+                                                                cx.emit(
+                                                                    BlockEvent::RequestUpdateTableColumnResize {
+                                                                        pointer_x,
+                                                                    },
+                                                                );
+                                                            });
+                                                        }
+                                                    });
+                                                },
+                                            )
+                                            .size_full(),
+                                        ),
+                                )
+                            })
                     }));
 
                 let body_rows =

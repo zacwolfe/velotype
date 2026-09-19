@@ -478,7 +478,25 @@ impl DocumentTree {
     ) {
         match block_ref.kind() {
             BlockKind::Table => {
-                if let Some(table) = block_ref.record.table.as_ref() {
+                // Mid-edit raw Markdown (see `table_markdown_editing`) has not
+                // reparsed into `record.table` yet; emit the live text so a
+                // save while the table is still focused reflects what is on
+                // screen rather than the pre-edit table.
+                if block_ref.record.table_markdown_editing {
+                    let indentation = "  ".repeat(list_depth);
+                    let raw_markdown = block_ref
+                        .record
+                        .raw_fallback
+                        .clone()
+                        .unwrap_or_else(|| block_ref.record.title_markdown());
+                    for line in raw_markdown.split('\n') {
+                        if indentation.is_empty() {
+                            lines.push(line.to_string());
+                        } else {
+                            lines.push(format!("{indentation}{line}"));
+                        }
+                    }
+                } else if let Some(table) = block_ref.record.table.as_ref() {
                     lines.extend(serialize_table_markdown_lines(table));
                 }
             }

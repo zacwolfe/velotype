@@ -1224,6 +1224,29 @@ async fn parsed_table_runtime_installs_column_alignment_on_cells(cx: &mut TestAp
 }
 
 #[gpui::test]
+async fn table_markdown_edit_mode_saves_live_text_before_reparsing(cx: &mut TestAppContext) {
+    let markdown = ["| A | B |", "| --- | ---: |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        table.update(cx, |block, _cx| {
+            assert!(block.sync_table_markdown_focus_state(true, true));
+            block.record.set_title(InlineTextTree::plain(
+                "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |".to_string(),
+            ));
+        });
+
+        // Still mid-edit (not blurred yet): a save must reflect the live
+        // text on screen rather than the pre-edit table `record.table`
+        // still holds.
+        let saved = editor.document.markdown_text(cx);
+        assert!(saved.contains("| A | B | C |"));
+        assert!(!saved.contains("| A | B |\n"));
+    });
+}
+
+#[gpui::test]
 async fn append_column_updates_table_and_focuses_new_header_cell(cx: &mut TestAppContext) {
     let markdown = ["| A | B |", "| --- | ---: |", "| 1 | 2 |"].join("\n");
     let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
@@ -1324,15 +1347,16 @@ async fn setting_column_width_persists_and_survives_rebuild(cx: &mut TestAppCont
 
     editor.update(cx, |editor, cx| {
         let table = editor.document.first_root().expect("table root").clone();
-        editor.set_table_column_width(&table, 0, 0.75, cx);
+        editor.set_table_column_widths(&table, vec![0.75, 0.25], 0, cx);
 
         let record = table.read(cx).record.table.as_ref().expect("table record");
         let widths = record.widths.clone().expect("widths should be Some");
         assert_eq!(widths.len(), record.alignments.len());
-        // Seeded from an equal 0.5/0.5 split, then column 0 set to 0.75 and
-        // renormalized: 0.75 / 1.25 = 0.6.
-        assert!((widths[0] - 0.6).abs() < 0.01);
-        assert!((widths[1] - 0.4).abs() < 0.01);
+        // The whole-vector setter writes exactly what a drag computed; it does
+        // not renormalize against an equal-share seed, which is why a drag can
+        // move one boundary without disturbing the other columns.
+        assert!((widths[0] - 0.75).abs() < 0.01);
+        assert!((widths[1] - 0.25).abs() < 0.01);
 
         // Rebuilding runtimes (e.g. a later structural edit) must not drop
         // the persisted width.
@@ -1344,7 +1368,7 @@ async fn setting_column_width_persists_and_survives_rebuild(cx: &mut TestAppCont
             .as_ref()
             .expect("table record after rebuild");
         let widths = record.widths.clone().expect("widths should survive rebuild");
-        assert!((widths[0] - 0.6).abs() < 0.01);
+        assert!((widths[0] - 0.75).abs() < 0.01);
     });
 }
 
@@ -1366,7 +1390,7 @@ async fn setting_column_width_is_a_single_undo_step(cx: &mut TestAppContext) {
                 .is_none()
         );
 
-        editor.set_table_column_width(&table, 0, 0.75, cx);
+        editor.set_table_column_widths(&table, vec![0.75, 0.25], 0, cx);
         assert_eq!(editor.undo_history.len(), 1);
         assert!(
             table
@@ -1392,6 +1416,67 @@ async fn setting_column_width_is_a_single_undo_step(cx: &mut TestAppContext) {
             .widths
             .clone();
         assert!(widths.is_none());
+    });
+}
+
+#[gpui::test]
+async fn dragging_table_column_boundary_commits_as_a_single_undo_step(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["| A | B | C |", "| --- | --- | --- |", "| 1 | 2 | 3 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        assert!(
+            table
+                .read(cx)
+                .record
+                .table
+                .as_ref()
+                .expect("table record")
+                .widths
+                .is_none()
+        );
+
+        // Simulates a full drag session: press on the boundary between
+        // columns 0 and 1 of a wide table (comfortably clear of the
+        // minimum-column-width floor) seeded from equal thirds, then move
+        // the pointer right by 10% of the table width, then release.
+        let start_fractions = vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
+        editor.start_table_column_resize(table.clone(), 0, 0.0, 3000.0, start_fractions, cx);
+        editor.update_table_column_resize(300.0, cx);
+        // A live drag must not touch undo history — only release does.
+        assert_eq!(editor.undo_history.len(), 0);
+        editor.end_table_column_resize(cx);
+
+        assert_eq!(editor.undo_history.len(), 1);
+        let widths = table
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .expect("table record")
+            .widths
+            .clone()
+            .expect("widths should be Some after the drag commits");
+        assert_eq!(widths.len(), 3);
+        assert!((widths[0] - (1.0 / 3.0 + 0.1)).abs() < 0.01);
+        assert!((widths[1] - (1.0 / 3.0 - 0.1)).abs() < 0.01);
+        assert!((widths[2] - 1.0 / 3.0).abs() < 0.01);
+
+        editor.undo_document(cx);
+        // Undo reparses markdown into fresh root blocks, so re-fetch the
+        // table entity rather than reusing the pre-undo handle.
+        let table_after_undo = editor.document.first_root().expect("table root after undo");
+        let widths_after_undo = table_after_undo
+            .read(cx)
+            .record
+            .table
+            .as_ref()
+            .expect("table record after undo")
+            .widths
+            .clone();
+        assert!(widths_after_undo.is_none());
     });
 }
 

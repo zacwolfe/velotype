@@ -143,6 +143,11 @@ pub(crate) struct AppPreferences {
     pub(crate) default_language_id: String,
     pub(crate) default_theme_id: String,
     pub(crate) show_table_headers: bool,
+    /// Opt-in: when true, focusing a table shows its raw Markdown for text
+    /// editing instead of the native per-cell grid; blurring reparses it back
+    /// into the grid. Defaults to `false` so today's native cell editing is
+    /// unchanged unless a user turns this on from the table context menu.
+    pub(crate) edit_tables_as_markdown: bool,
     pub(crate) image_paste_behavior: ImagePasteBehavior,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     pub(crate) status_bar: StatusBarPreferences,
@@ -158,6 +163,7 @@ impl Default for AppPreferences {
             default_language_id: DEFAULT_LANGUAGE_ID.into(),
             default_theme_id: DEFAULT_THEME_ID.into(),
             show_table_headers: true,
+            edit_tables_as_markdown: false,
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -180,6 +186,7 @@ struct StatusBarSettings {
 /// value back to the preferences file.
 pub struct EditorSettings {
     show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     status_bar_settings: StatusBarSettings,
     workspace: WorkspacePreferences,
 }
@@ -187,7 +194,7 @@ pub struct EditorSettings {
 impl Global for EditorSettings {}
 
 impl EditorSettings {
-    pub fn init(cx: &mut App, show_table_headers: bool) {
+    pub fn init(cx: &mut App, show_table_headers: bool, edit_tables_as_markdown: bool) {
         let preferences = read_app_preferences().ok();
         let status_bar = preferences
             .as_ref()
@@ -196,17 +203,25 @@ impl EditorSettings {
         let workspace = preferences
             .map(|p| p.workspace)
             .unwrap_or_default();
-        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            &status_bar,
+            &workspace,
+        );
     }
 
     fn set_global(
         cx: &mut App,
         show_table_headers: bool,
+        edit_tables_as_markdown: bool,
         status_bar: &StatusBarPreferences,
         workspace: &WorkspacePreferences,
     ) {
         cx.set_global(Self {
             show_table_headers,
+            edit_tables_as_markdown,
             status_bar_settings: StatusBarSettings {
                 status_bar_enabled: status_bar.enabled,
                 status_bar_show_word_count: status_bar.show_word_count,
@@ -227,9 +242,16 @@ impl EditorSettings {
     }
 
     pub fn set_show_table_headers(cx: &mut App, show_table_headers: bool) {
+        let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
-        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            &status_bar,
+            &workspace,
+        );
         match read_app_preferences() {
             Ok(mut preferences) => {
                 preferences.show_table_headers = show_table_headers;
@@ -238,6 +260,46 @@ impl EditorSettings {
                 }
             }
             Err(err) => eprintln!("failed to read table header preference: {err}"),
+        }
+    }
+
+    /// Whether a focused table shows its raw Markdown for text editing
+    /// instead of the native grid. Defaults to `false` when the global has
+    /// not been installed (e.g. in unit tests), matching the default-off
+    /// preference so tests never depend on the developer's own config.
+    pub fn edit_tables_as_markdown(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .map(|settings| settings.edit_tables_as_markdown)
+            .unwrap_or(false)
+    }
+
+    pub fn set_edit_tables_as_markdown(cx: &mut App, edit_tables_as_markdown: bool) {
+        let show_table_headers = Self::show_table_headers(cx);
+        let status_bar = Self::status_bar_preferences(cx);
+        let workspace = Self::workspace_preferences(cx);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            &status_bar,
+            &workspace,
+        );
+
+        // As with `set_workspace_preferences`, skip the disk write under test
+        // so the suite never rewrites the developer's real config.toml. The
+        // mirrored global above is what tests observe.
+        if cfg!(test) {
+            return;
+        }
+
+        match read_app_preferences() {
+            Ok(mut preferences) => {
+                preferences.edit_tables_as_markdown = edit_tables_as_markdown;
+                if let Err(err) = save_app_preferences(&preferences) {
+                    eprintln!("failed to save edit-tables-as-markdown preference: {err}");
+                }
+            }
+            Err(err) => eprintln!("failed to read edit-tables-as-markdown preference: {err}"),
         }
     }
 
@@ -252,8 +314,15 @@ impl EditorSettings {
 
     pub fn set_workspace_preferences(cx: &mut App, workspace: WorkspacePreferences) {
         let show_table_headers = Self::show_table_headers(cx);
+        let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let status_bar = Self::status_bar_preferences(cx);
-        Self::set_global(cx, show_table_headers, &status_bar, &workspace);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            &status_bar,
+            &workspace,
+        );
 
         // The write below resolves the real system config directory, and several
         // editor tests reach this setter through `toggle_workspace_drawer`. Left
@@ -312,6 +381,7 @@ struct StartupPreferencesFile {
 #[derive(Serialize)]
 struct EditorPreferencesFile {
     show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     image_paste_behavior: String,
 }
 
@@ -382,6 +452,7 @@ impl From<&AppPreferences> for PreferencesFile {
             },
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
+                edit_tables_as_markdown: value.edit_tables_as_markdown,
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
@@ -480,6 +551,11 @@ fn app_preferences_from_toml_value(
         .and_then(|editor| editor.get("show_table_headers"))
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
+    let edit_tables_as_markdown = value
+        .get("editor")
+        .and_then(|editor| editor.get("edit_tables_as_markdown"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let image_paste_behavior = value
         .get("editor")
         .and_then(|editor| editor.get("image_paste_behavior"))
@@ -569,6 +645,7 @@ fn app_preferences_from_toml_value(
         default_language_id,
         default_theme_id,
         show_table_headers,
+        edit_tables_as_markdown,
         image_paste_behavior,
         keybindings,
         status_bar,
@@ -2301,7 +2378,7 @@ mod tests {
             I18nManager::init_with_language_id(cx, "en-US");
             ThemeManager::init_with_theme_id(cx, "velotype");
             crate::components::init(cx);
-            EditorSettings::init(cx, true);
+            EditorSettings::init(cx, true, false);
         });
     }
 
@@ -2351,6 +2428,7 @@ mod tests {
         assert_eq!(preferences.default_language_id, "en-US");
         assert_eq!(preferences.default_theme_id, "velotype-light");
         assert_eq!(preferences.image_paste_behavior, ImagePasteBehavior::None);
+        assert!(!preferences.edit_tables_as_markdown);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2407,6 +2485,7 @@ mod tests {
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype-light".into(),
             show_table_headers: false,
+            edit_tables_as_markdown: true,
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -2424,6 +2503,7 @@ mod tests {
         assert!(text.contains("default_language_id = \"zh-CN\""));
         assert!(text.contains("default_theme_id = \"velotype-light\""));
         assert!(text.contains("show_table_headers = false"));
+        assert!(text.contains("edit_tables_as_markdown = true"));
         assert!(text.contains("single_instance = false"));
         assert!(text.contains("image_paste_behavior = \"copy_to_assets_folder\""));
         let _ = std::fs::remove_dir_all(root);
@@ -2495,6 +2575,7 @@ mod tests {
             default_language_id: "zh-CN".into(),
             default_theme_id: "velotype".into(),
             show_table_headers: true,
+            edit_tables_as_markdown: false,
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -2720,5 +2801,27 @@ mod tests {
         assert!(!preferences.workspace.files_open);
         assert!(preferences.workspace.outline_open);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn edit_tables_as_markdown_defaults_to_false_with_no_global(cx: &mut TestAppContext) {
+        // No `EditorSettings::init` call: the getter must not depend on the
+        // developer's own config.toml, so tests never observe their config.
+        let enabled = cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx));
+        assert!(!enabled);
+    }
+
+    #[gpui::test]
+    async fn edit_tables_as_markdown_setter_round_trips_through_the_global(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| EditorSettings::init(cx, true, false));
+        assert!(!cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
+
+        cx.update(|cx| EditorSettings::set_edit_tables_as_markdown(cx, true));
+        assert!(cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
+
+        cx.update(|cx| EditorSettings::set_edit_tables_as_markdown(cx, false));
+        assert!(!cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
     }
 }

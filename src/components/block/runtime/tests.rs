@@ -12,6 +12,7 @@ use crate::components::markdown::inline::{
 use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
     Block, BlockKind, BlockRecord, DeleteBack, IndentBlock, Newline, TableCellPosition,
+    TableColumnAlignment, TableData,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
@@ -2662,6 +2663,89 @@ async fn broken_rendered_image_syntax_blurs_back_to_plain_text(cx: &mut TestAppC
         assert!(!block.image_edit_expanded);
         assert!(!block.showing_rendered_image());
         assert_eq!(block.display_text(), "not an image anymore");
+    });
+}
+
+fn sample_table_with_widths() -> TableData {
+    TableData {
+        header: vec![
+            InlineTextTree::plain("A".to_string()),
+            InlineTextTree::plain("B".to_string()),
+        ],
+        rows: vec![vec![
+            InlineTextTree::plain("1".to_string()),
+            InlineTextTree::plain("2".to_string()),
+        ]],
+        alignments: vec![TableColumnAlignment::Left, TableColumnAlignment::Right],
+        // Non-uniform so the round trip exercises the explicit-width path
+        // rather than collapsing to auto-sized (`None`) dashes.
+        widths: Some(vec![0.25, 0.75]),
+    }
+}
+
+#[gpui::test]
+async fn table_markdown_editing_disabled_by_default_keeps_native_grid(cx: &mut TestAppContext) {
+    let block =
+        cx.new(|cx| Block::with_record(cx, BlockRecord::table(sample_table_with_widths())));
+
+    block.update(cx, |block, _cx| {
+        // `enabled: false` is the default-off preference: focusing must not
+        // enter raw-Markdown edit mode, so the native grid is unaffected.
+        assert!(!block.sync_table_markdown_focus_state(true, false));
+        assert!(!block.is_table_markdown_editing());
+        assert!(block.record.table.is_some());
+    });
+}
+
+#[gpui::test]
+async fn focusing_table_with_markdown_editing_enabled_shows_its_markdown(cx: &mut TestAppContext) {
+    let block =
+        cx.new(|cx| Block::with_record(cx, BlockRecord::table(sample_table_with_widths())));
+
+    block.update(cx, |block, _cx| {
+        assert!(block.sync_table_markdown_focus_state(true, true));
+        assert!(block.is_table_markdown_editing());
+        let markdown = block.record.title.visible_text().to_string();
+        assert!(markdown.contains("| A | B |"));
+        assert!(markdown.contains("| 1 | 2 |"));
+    });
+}
+
+#[gpui::test]
+async fn blurring_table_markdown_edit_reparses_into_equivalent_table_data(cx: &mut TestAppContext) {
+    let original = sample_table_with_widths();
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::table(original.clone())));
+
+    block.update(cx, |block, _cx| {
+        assert!(block.sync_table_markdown_focus_state(true, true));
+        // Blur without changing the text: it must reparse into an equivalent
+        // `TableData`, including the explicit widths.
+        assert!(block.sync_table_markdown_focus_state(false, true));
+        assert!(!block.is_table_markdown_editing());
+        let table = block.record.table.as_ref().expect("table should reparse");
+        assert_eq!(table.header, original.header);
+        assert_eq!(table.rows, original.rows);
+        assert_eq!(table.alignments, original.alignments);
+        assert_eq!(table.widths, original.widths);
+    });
+}
+
+#[gpui::test]
+async fn invalid_table_markdown_at_blur_keeps_editing_and_keeps_typed_text(cx: &mut TestAppContext) {
+    let block =
+        cx.new(|cx| Block::with_record(cx, BlockRecord::table(sample_table_with_widths())));
+
+    block.update(cx, |block, _cx| {
+        assert!(block.sync_table_markdown_focus_state(true, true));
+        block
+            .record
+            .set_title(InlineTextTree::plain("not a table at all".to_string()));
+
+        // Blurring with Markdown that no longer parses as a table must not
+        // drop the typed text or silently revert to the pre-edit table.
+        assert!(!block.sync_table_markdown_focus_state(false, true));
+        assert!(block.is_table_markdown_editing());
+        assert_eq!(block.record.title.visible_text(), "not a table at all");
     });
 }
 

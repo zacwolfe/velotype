@@ -2164,6 +2164,29 @@ impl Editor {
                     self.open_table_axis_menu(block.entity_id(), *kind, *index, *position, cx);
                 }
             }
+            BlockEvent::RequestStartTableColumnResize {
+                left_column,
+                pointer_x,
+                table_width,
+                start_fractions,
+            } => {
+                if block.read(cx).kind() == BlockKind::Table {
+                    self.start_table_column_resize(
+                        block.clone(),
+                        *left_column,
+                        *pointer_x,
+                        *table_width,
+                        start_fractions.clone(),
+                        cx,
+                    );
+                }
+            }
+            BlockEvent::RequestUpdateTableColumnResize { pointer_x } => {
+                self.update_table_column_resize(*pointer_x, cx);
+            }
+            BlockEvent::RequestEndTableColumnResize => {
+                self.end_table_column_resize(cx);
+            }
             BlockEvent::RequestTableCellMoveHorizontal { .. }
             | BlockEvent::RequestTableCellMoveVertical { .. } => {}
             BlockEvent::RequestFocusPrev { preferred_x } => {
