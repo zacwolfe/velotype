@@ -847,21 +847,6 @@ pub enum BlockEvent {
         index: usize,
         position: Point<Pixels>,
     },
-    /// A column-resize divider was pressed, starting a drag on the editor.
-    /// `start_fractions` is the whole table's fraction vector at drag start
-    /// (stored explicit widths if present and the right length, else the
-    /// currently measured fractions), so an auto-sized table's drag starts
-    /// from what is on screen rather than snapping to equal shares.
-    RequestStartTableColumnResize {
-        left_column: usize,
-        pointer_x: f32,
-        table_width: f32,
-        start_fractions: Vec<f32>,
-    },
-    /// Pointer moved while a table column-resize drag is active.
-    RequestUpdateTableColumnResize { pointer_x: f32 },
-    /// Pointer released, committing the active table column-resize drag.
-    RequestEndTableColumnResize,
     /// Cursor reached the top of this block; move focus to the previous
     /// visible block, preserving the preferred horizontal position.
     RequestFocusPrev { preferred_x: Option<f32> },

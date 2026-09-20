@@ -1,25 +1,6 @@
 //! Native table runtime installation and table-editing operations.
 
 use super::*;
-use crate::theme::ThemeManager;
-
-/// In-flight table column-resize drag. `table_width` and `start_fractions`
-/// are captured once at drag start, mirroring `WorkspaceResizeDrag`: a
-/// viewport resize or a stale baseline mid-drag would otherwise skew the
-/// boundary math on every subsequent move. `current_fractions` is the last
-/// value computed on mouse-move, so release can commit without needing the
-/// pointer position again.
-#[derive(Clone)]
-pub(super) struct TableColumnResizeDrag {
-    table_block: Entity<Block>,
-    /// Index of the left column of the dragged boundary; the right column
-    /// is always `left_column + 1`.
-    left_column: usize,
-    start_pointer_x: f32,
-    table_width: f32,
-    start_fractions: Vec<f32>,
-    current_fractions: Vec<f32>,
-}
 
 impl Editor {
     pub(crate) fn new_table_block(cx: &mut Context<Self>, table: TableData) -> Entity<Block> {
@@ -386,74 +367,6 @@ impl Editor {
             self.finalize_pending_undo_capture(cx);
         }
         cx.notify();
-    }
-
-    /// Starts a column-resize drag session. `start_fractions` was already
-    /// seeded by the renderer (stored widths if present, else the measured
-    /// `column_layout`), so this just records the session; no undo capture
-    /// starts here — nothing is written to `record.table` until release.
-    pub(super) fn start_table_column_resize(
-        &mut self,
-        table_block: Entity<Block>,
-        left_column: usize,
-        start_pointer_x: f32,
-        table_width: f32,
-        start_fractions: Vec<f32>,
-        cx: &mut Context<Self>,
-    ) {
-        self.table_column_resize_drag = Some(TableColumnResizeDrag {
-            table_block,
-            left_column,
-            start_pointer_x,
-            table_width,
-            current_fractions: start_fractions.clone(),
-            start_fractions,
-        });
-        cx.notify();
-    }
-
-    /// Applies the pure boundary math for the pointer's current position and
-    /// pushes the result to the dragged block as a render-only preview.
-    /// Never writes `record.table` and never touches undo history — that is
-    /// exactly the "don't flood undo with one entry per pixel" requirement.
-    pub(super) fn update_table_column_resize(&mut self, pointer_x: f32, cx: &mut Context<Self>) {
-        let Some(mut drag) = self.table_column_resize_drag.clone() else {
-            return;
-        };
-        let theme = cx.global::<ThemeManager>().current_arc();
-        let safe_table_width = drag.table_width.max(1.0);
-        let min_fraction = minimum_column_width(&theme) / safe_table_width;
-        let delta_fraction = (pointer_x - drag.start_pointer_x) / safe_table_width;
-        let fractions = resize_column_boundary(
-            &drag.start_fractions,
-            drag.left_column,
-            delta_fraction,
-            min_fraction,
-        );
-        drag.current_fractions = fractions.clone();
-        let table_block = drag.table_block.clone();
-        self.table_column_resize_drag = Some(drag);
-        table_block.update(cx, |block, cx| {
-            block.set_table_resize_preview_widths(Some(fractions));
-            cx.notify();
-        });
-    }
-
-    /// Ends the drag session and commits the final fractions in one step.
-    /// A release with no active session (e.g. a stray mouse-up) is a no-op.
-    pub(super) fn end_table_column_resize(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.table_column_resize_drag.take() else {
-            return;
-        };
-        drag.table_block.update(cx, |block, _cx| {
-            block.set_table_resize_preview_widths(None);
-        });
-        self.set_table_column_widths(
-            &drag.table_block,
-            drag.current_fractions,
-            drag.left_column,
-            cx,
-        );
     }
 
     pub(super) fn move_table_row(

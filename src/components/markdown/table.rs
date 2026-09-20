@@ -301,15 +301,6 @@ impl TableColumnLayout {
         &self.fractions
     }
 
-    /// Builds a layout directly from already-computed fractions, bypassing
-    /// measurement and the minimum-width floor. Used for the live preview
-    /// while dragging a column divider: the drag math (`resize_column_boundary`)
-    /// already floors and preserves the sum itself, so re-deriving through
-    /// `from_preferred_widths` would be redundant work on every mouse-move.
-    pub(crate) fn from_fractions(fractions: Vec<f32>) -> Self {
-        Self { fractions }
-    }
-
     pub fn fraction(&self, column: usize) -> f32 {
         self.fractions
             .get(column)
@@ -587,74 +578,6 @@ fn cell_chrome_width(theme: &Theme) -> Pixels {
 
 pub(crate) fn minimum_column_width(theme: &Theme) -> f32 {
     theme.dimensions.table_cell_padding_x * 2.0 + theme.typography.text_size * 4.0 + 2.0
-}
-
-/// Number of draggable dividers for a table with `column_count` columns.
-/// There is one boundary between every pair of adjacent columns, and none
-/// after the last column (nothing to take space from beyond it).
-pub(crate) fn column_boundary_count(column_count: usize) -> usize {
-    column_count.saturating_sub(1)
-}
-
-/// Baseline fraction vector for a column-resize drag session: the table's
-/// stored explicit widths when present and the right length, else the
-/// fractions currently on screen. Falling back to the *measured* fractions
-/// (rather than equal shares) means a drag on an auto-sized table starts
-/// from what the user sees instead of snapping the whole row to equal
-/// widths the instant the pointer moves.
-pub(crate) fn seed_resize_baseline(stored_widths: Option<&[f32]>, measured_fractions: &[f32]) -> Vec<f32> {
-    match stored_widths {
-        Some(widths) if widths.len() == measured_fractions.len() => widths.to_vec(),
-        _ => measured_fractions.to_vec(),
-    }
-}
-
-/// Adjusts the pair of fractions bordering a dragged column divider by
-/// `delta_fraction` (pointer movement since drag start, expressed as a
-/// fraction of table width), keeping `left + right` constant so widening one
-/// column narrows only its neighbor — every other column is untouched
-/// because it never appears in this calculation. Each side is floored at
-/// `min_fraction`; the delta itself is clamped rather than the outputs, so
-/// the sum is exact even when a floor is hit.
-pub(crate) fn adjust_boundary_fractions(
-    left: f32,
-    right: f32,
-    delta_fraction: f32,
-    min_fraction: f32,
-) -> (f32, f32) {
-    let sum = left + right;
-    // A floor larger than half the pair's combined space would make the
-    // clamp bounds below cross each other; half the sum is the most either
-    // side can be floored at while leaving the other a valid width.
-    let min_fraction = min_fraction.max(0.0).min(sum / 2.0);
-    let clamped_delta = delta_fraction.clamp(min_fraction - left, right - min_fraction);
-    (left + clamped_delta, right - clamped_delta)
-}
-
-/// Applies [`adjust_boundary_fractions`] to the two columns bordering
-/// `left_column` within a full-table fraction vector, leaving every other
-/// entry unchanged. Returns `start_fractions` as-is if `left_column` is the
-/// last column (no divider, and thus no right neighbor, past it).
-pub(crate) fn resize_column_boundary(
-    start_fractions: &[f32],
-    left_column: usize,
-    delta_fraction: f32,
-    min_fraction: f32,
-) -> Vec<f32> {
-    let mut fractions = start_fractions.to_vec();
-    let right_column = left_column + 1;
-    if right_column >= fractions.len() {
-        return fractions;
-    }
-    let (left, right) = adjust_boundary_fractions(
-        fractions[left_column],
-        fractions[right_column],
-        delta_fraction,
-        min_fraction,
-    );
-    fractions[left_column] = left;
-    fractions[right_column] = right;
-    fractions
 }
 
 fn strip_table_indent(line: &str) -> Option<&str> {
@@ -972,10 +895,9 @@ pub fn serialize_table_markdown_lines(table: &TableData) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TableColumnAlignment, TableColumnLayout, TableData, adjust_boundary_fractions,
-        collect_pipeless_table_region, collect_root_table_candidate_region,
-        column_boundary_count, is_root_table_candidate_line, parse_root_table_region,
-        resize_column_boundary, seed_resize_baseline, serialize_table_markdown_lines,
+        TableColumnAlignment, TableColumnLayout, TableData, collect_pipeless_table_region,
+        collect_root_table_candidate_region, is_root_table_candidate_line,
+        parse_root_table_region, serialize_table_markdown_lines,
     };
     use crate::components::InlineTextTree;
 
@@ -1576,82 +1498,4 @@ mod tests {
         assert_close(widths[1], 0.7);
     }
 
-    #[test]
-    fn dragging_right_widens_left_and_narrows_right_by_the_same_amount() {
-        let (left, right) = adjust_boundary_fractions(0.3, 0.3, 0.05, 0.05);
-        assert_close(left, 0.35);
-        assert_close(right, 0.25);
-        assert_close(left + right, 0.6);
-    }
-
-    #[test]
-    fn dragging_left_narrows_left_and_widens_right_by_the_same_amount() {
-        let (left, right) = adjust_boundary_fractions(0.3, 0.3, -0.05, 0.05);
-        assert_close(left, 0.25);
-        assert_close(right, 0.35);
-        assert_close(left + right, 0.6);
-    }
-
-    #[test]
-    fn neither_column_can_be_driven_below_the_minimum() {
-        // A huge rightward drag tries to zero out the left column; it should
-        // stop at the floor instead, with the sum still holding.
-        let (left, right) = adjust_boundary_fractions(0.3, 0.3, 10.0, 0.1);
-        assert!(left >= 0.1 - 0.0001);
-        assert_close(left + right, 0.6);
-
-        // Same in the other direction, against the right column's floor.
-        let (left, right) = adjust_boundary_fractions(0.3, 0.3, -10.0, 0.1);
-        assert!(right >= 0.1 - 0.0001);
-        assert_close(left + right, 0.6);
-    }
-
-    #[test]
-    fn resize_column_boundary_leaves_other_columns_untouched() {
-        let start = vec![0.2, 0.3, 0.3, 0.2];
-        let resized = resize_column_boundary(&start, 1, 0.1, 0.05);
-        assert_close(resized[0], start[0]);
-        assert_close(resized[3], start[3]);
-        assert_close(resized[1] + resized[2], start[1] + start[2]);
-        assert_close(resized.iter().sum::<f32>(), start.iter().sum::<f32>());
-    }
-
-    #[test]
-    fn resize_column_boundary_is_noop_past_the_last_column() {
-        let start = vec![0.5, 0.5];
-        let resized = resize_column_boundary(&start, 1, 0.2, 0.05);
-        assert_eq!(resized, start);
-    }
-
-    #[test]
-    fn seed_resize_baseline_prefers_stored_widths() {
-        let stored = vec![0.2, 0.8];
-        let measured = vec![0.5, 0.5];
-        assert_eq!(seed_resize_baseline(Some(&stored), &measured), stored);
-    }
-
-    #[test]
-    fn seed_resize_baseline_falls_back_to_measured_fractions_when_none() {
-        // Content-measured fractions are rarely an equal split; the seed
-        // must start the drag from that measured layout, not equal shares.
-        let measured = vec![0.65, 0.35];
-        let equal_shares = vec![0.5, 0.5];
-        let seeded = seed_resize_baseline(None, &measured);
-        assert_eq!(seeded, measured);
-        assert_ne!(seeded, equal_shares);
-    }
-
-    #[test]
-    fn seed_resize_baseline_falls_back_when_stored_length_is_stale() {
-        let stored = vec![0.2, 0.3, 0.5];
-        let measured = vec![0.5, 0.5];
-        assert_eq!(seed_resize_baseline(Some(&stored), &measured), measured);
-    }
-
-    #[test]
-    fn n_columns_produce_n_minus_one_dividers() {
-        assert_eq!(column_boundary_count(1), 0);
-        assert_eq!(column_boundary_count(2), 1);
-        assert_eq!(column_boundary_count(5), 4);
-    }
 }

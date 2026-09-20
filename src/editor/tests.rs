@@ -1420,67 +1420,6 @@ async fn setting_column_width_is_a_single_undo_step(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn dragging_table_column_boundary_commits_as_a_single_undo_step(cx: &mut TestAppContext) {
-    init_editor_test_app(cx);
-    let markdown = ["| A | B | C |", "| --- | --- | --- |", "| 1 | 2 | 3 |"].join("\n");
-    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
-
-    editor.update(cx, |editor, cx| {
-        let table = editor.document.first_root().expect("table root").clone();
-        assert!(
-            table
-                .read(cx)
-                .record
-                .table
-                .as_ref()
-                .expect("table record")
-                .widths
-                .is_none()
-        );
-
-        // Simulates a full drag session: press on the boundary between
-        // columns 0 and 1 of a wide table (comfortably clear of the
-        // minimum-column-width floor) seeded from equal thirds, then move
-        // the pointer right by 10% of the table width, then release.
-        let start_fractions = vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0];
-        editor.start_table_column_resize(table.clone(), 0, 0.0, 3000.0, start_fractions, cx);
-        editor.update_table_column_resize(300.0, cx);
-        // A live drag must not touch undo history — only release does.
-        assert_eq!(editor.undo_history.len(), 0);
-        editor.end_table_column_resize(cx);
-
-        assert_eq!(editor.undo_history.len(), 1);
-        let widths = table
-            .read(cx)
-            .record
-            .table
-            .as_ref()
-            .expect("table record")
-            .widths
-            .clone()
-            .expect("widths should be Some after the drag commits");
-        assert_eq!(widths.len(), 3);
-        assert!((widths[0] - (1.0 / 3.0 + 0.1)).abs() < 0.01);
-        assert!((widths[1] - (1.0 / 3.0 - 0.1)).abs() < 0.01);
-        assert!((widths[2] - 1.0 / 3.0).abs() < 0.01);
-
-        editor.undo_document(cx);
-        // Undo reparses markdown into fresh root blocks, so re-fetch the
-        // table entity rather than reusing the pre-undo handle.
-        let table_after_undo = editor.document.first_root().expect("table root after undo");
-        let widths_after_undo = table_after_undo
-            .read(cx)
-            .record
-            .table
-            .as_ref()
-            .expect("table record after undo")
-            .widths
-            .clone();
-        assert!(widths_after_undo.is_none());
-    });
-}
-
-#[gpui::test]
 async fn moving_table_row_updates_focus_and_selection(cx: &mut TestAppContext) {
     let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"].join("\n");
     let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
