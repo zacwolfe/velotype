@@ -1,6 +1,7 @@
 //! Rendered standalone image runtime state.
 
 use super::*;
+use crate::components::ResolvedImageTarget;
 
 impl Block {
     /// Returns the resolved standalone-image runtime, if one is available.
@@ -54,7 +55,18 @@ impl Block {
         })
     }
 
-    /// Resolves image syntax using this block's configured base directory.
+
+    /// Looks up one normalized image reference label in this block's scope.
+    ///
+    /// Used by inline reference-style images, which resolve at render time
+    /// because definitions may be declared after the image that uses them.
+    pub(crate) fn resolved_image_reference(&self, label: &str) -> Option<ResolvedImageTarget> {
+        let definition = self.image_reference_definitions.get(label)?;
+        Some(ResolvedImageTarget {
+            src: definition.src.clone(),
+            title: definition.title.clone(),
+        })
+    }
     pub(crate) fn image_runtime_for_syntax(&self, syntax: ImageSyntax) -> Option<ImageRuntime> {
         self.resolve_image_runtime(self.image_base_dir.as_deref(), syntax)
     }

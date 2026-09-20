@@ -3,6 +3,8 @@
 //! Block kinds produce distinct visual styles: H1 and H2 have bottom borders,
 //! list items render marker columns, and raw Markdown fallback uses text.
 
+use std::sync::Arc;
+
 use gpui::*;
 
 /// Key context used by a focused block's action handlers.
@@ -571,7 +573,11 @@ impl Block {
 
         let image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
+            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Inline(image) => img(image),
+            // Empty bytes never decode, which routes straight to the fallback
+            // element below — the placeholder this case should show anyway.
+            ImageResolvedSource::Unusable => img(Arc::new(Image::empty())),
         }
         .max_w(max_width)
         .max_h(max_height)
@@ -1126,11 +1132,22 @@ impl Block {
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // A reference-style inline image carries only its label; the definition
+        // is block-scoped and may be declared after the image, so it resolves
+        // here rather than at parse time. An unresolved label keeps an empty
+        // src, which renders the alt-text placeholder.
+        let (src, title) = match image.label.as_deref() {
+            Some(label) => self
+                .resolved_image_reference(label)
+                .map(|target| (target.src, target.title))
+                .unwrap_or_default(),
+            None => (image.src.clone(), None),
+        };
         let runtime = ImageRuntime {
             alt: image.alt.clone(),
-            src: image.src.clone(),
-            title: None,
-            resolved_source: resolve_image_source(&image.src, self.image_base_dir()),
+            src: src.clone(),
+            title,
+            resolved_source: resolve_image_source(&src, self.image_base_dir()),
         };
         let strings = cx.global::<I18nManager>().strings_arc();
         self.render_inline_sized_image(
@@ -1169,6 +1186,10 @@ impl Block {
         let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
             ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Inline(image) => img(image),
+            // Empty bytes never decode, which routes straight to the fallback
+            // element below — the placeholder this case should show anyway.
+            ImageResolvedSource::Unusable => img(Arc::new(Image::empty())),
         }
         .object_fit(ObjectFit::Contain)
         .with_fallback(move || {
@@ -1237,7 +1258,11 @@ impl Block {
 
         let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
+            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Inline(image) => img(image),
+            // Empty bytes never decode, which routes straight to the fallback
+            // element below — the placeholder this case should show anyway.
+            ImageResolvedSource::Unusable => img(Arc::new(Image::empty())),
         }
         .max_w(max_width)
         .max_h(max_height)
