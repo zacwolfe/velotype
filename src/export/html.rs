@@ -8,9 +8,9 @@ use gpui::{Hsla, Rgba};
 use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html};
 
 use crate::components::{
-    MermaidPalette, collect_pipeless_table_region, inline_math_font_size, is_img_tag_source,
-    is_mermaid_closing_fence, parse_display_math_source, parse_html_image_block,
-    parse_mermaid_fence_source, parse_mermaid_fence_start, parse_table_region,
+    MermaidPalette, inline_math_font_size, is_img_tag_source, is_mermaid_closing_fence,
+    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
+    parse_mermaid_fence_start,
     render_latex_to_svg, render_mermaid_to_svg, sanitize_html_for_export,
 };
 use crate::net;
@@ -87,104 +87,11 @@ fn render_browser_html_body(markdown: &str, theme: &Theme, base_dir: Option<&Pat
     let rewritten = rewrite_display_math_blocks(&rewritten, theme);
     let rewritten = rewrite_inline_math(&rewritten, theme);
     let rewritten = rewrite_mermaid_blocks(&rewritten, theme);
-    let table_widths = table_widths_in_source_order(&rewritten);
     let parser = Parser::new_ext(&rewritten, markdown_options())
         .map(|event| rewrite_local_image_event(event, base_dir));
     let mut body = String::new();
     html::push_html(&mut body, parser);
-    inject_table_colgroups(&body, &table_widths)
-}
-
-/// Scans the exact Markdown handed to pulldown-cmark for pipe tables, in
-/// document order, returning each table's explicit column widths (`None`
-/// for auto-sized tables). pulldown-cmark itself does not interpret
-/// delimiter-row dash counts as widths, so this recovers the information
-/// `inject_table_colgroups` needs to add it back.
-fn table_widths_in_source_order(markdown: &str) -> Vec<Option<Vec<f32>>> {
-    let borrowed_lines = markdown.split('\n').collect::<Vec<_>>();
-    let owned_lines = borrowed_lines
-        .iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>();
-    let mut widths = Vec::new();
-    let mut index = 0usize;
-    let mut active_fence: Option<(char, usize)> = None;
-
-    while index < owned_lines.len() {
-        let line = borrowed_lines[index];
-        if let Some((marker, run_len)) = active_fence {
-            if is_closing_fence(line, marker, run_len) {
-                active_fence = None;
-            }
-            index += 1;
-            continue;
-        }
-
-        if let Some(fence) = opening_fence(line) {
-            active_fence = Some(fence);
-            index += 1;
-            continue;
-        }
-
-        if let Some(end) = collect_pipeless_table_region(&owned_lines, index) {
-            // Push even when the region fails to parse: the count must stay
-            // aligned with the `<table>` tags in the generated HTML, and a
-            // missing entry would shift every later table's widths.
-            widths.push(
-                parse_table_region(&owned_lines[index..end]).and_then(|table| table.widths),
-            );
-            index = end;
-            continue;
-        }
-
-        // Raw HTML tables pass through pulldown-cmark verbatim, so each one
-        // becomes a `<table>` in the output too. They have no widths, but they
-        // must still occupy a slot or the index-based correlation below would
-        // hand a pipe table's widths to a raw table sitting in front of it.
-        for _ in line.matches("<table") {
-            widths.push(None);
-        }
-
-        index += 1;
-    }
-
-    widths
-}
-
-/// Inserts a `<colgroup>` right after each `<table>` pulldown-cmark emitted,
-/// matching tables to widths by position — reliable because pulldown-cmark
-/// emits tables in source order. Tables with `None` widths are left
-/// untouched, so a document with no explicit widths comes out byte-identical
-/// to the pre-`<colgroup>` output.
-fn inject_table_colgroups(html: &str, widths: &[Option<Vec<f32>>]) -> String {
-    const TABLE_OPEN: &str = "<table>";
-    if !html.contains(TABLE_OPEN) {
-        return html.to_string();
-    }
-
-    let mut output = String::with_capacity(html.len());
-    let mut rest = html;
-    let mut table_index = 0usize;
-
-    while let Some(offset) = rest.find(TABLE_OPEN) {
-        let (before, after) = rest.split_at(offset + TABLE_OPEN.len());
-        output.push_str(before);
-        if let Some(Some(fractions)) = widths.get(table_index) {
-            output.push_str(&colgroup_html(fractions));
-        }
-        table_index += 1;
-        rest = after;
-    }
-    output.push_str(rest);
-    output
-}
-
-fn colgroup_html(fractions: &[f32]) -> String {
-    let cols = fractions
-        .iter()
-        .map(|fraction| format!("<col style=\"width:{:.2}%\">", fraction * 100.0))
-        .collect::<String>();
-    format!("<colgroup>{cols}</colgroup>")
+    body
 }
 
 fn rewrite_visible_comment_blocks(markdown: &str) -> String {
@@ -1241,52 +1148,6 @@ mod tests {
     }
 
     #[test]
-    fn exports_colgroup_with_percentages_for_explicit_column_widths() {
-        let markdown = "| A | B |\n| --- | --------- |\n| 1 | 2 |";
-        let html = render_html(markdown, &Theme::default_theme(), "Doc");
-
-        assert!(html.contains(
-            "<table><colgroup><col style=\"width:25.00%\"><col style=\"width:75.00%\"></colgroup>"
-        ));
-    }
-
-    #[test]
-    fn uniform_dash_table_omits_colgroup_and_stays_byte_identical() {
-        let markdown = "| A | B |\n| --- | --- |\n| 1 | 2 |";
-        let html = render_html(markdown, &Theme::default_theme(), "Doc");
-
-        assert!(!html.contains("<colgroup"));
-        assert!(html.contains(
-            "<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody>\n<tr><td>1</td><td>2</td></tr>\n</tbody></table>"
-        ));
-    }
-
-    #[test]
-    fn correlates_multiple_tables_to_their_own_widths_in_order() {
-        let markdown = "| A | B |\n| --- | --------- |\n| 1 | 2 |\n\ntext between\n\n| C | D |\n| --------- | --- |\n| 3 | 4 |";
-        let html = render_html(markdown, &Theme::default_theme(), "Doc");
-
-        let first = html.find("<table>").expect("first table");
-        let second = html[first + 1..].find("<table>").expect("second table") + first + 1;
-
-        assert!(html[first..second].contains(
-            "<colgroup><col style=\"width:25.00%\"><col style=\"width:75.00%\"></colgroup>"
-        ));
-        assert!(html[second..].contains(
-            "<colgroup><col style=\"width:75.00%\"><col style=\"width:25.00%\"></colgroup>"
-        ));
-    }
-
-    #[test]
-    fn keeps_alignment_style_alongside_explicit_widths() {
-        let markdown = "| A | B |\n| --- | --------: |\n| 1 | 2 |";
-        let html = render_html(markdown, &Theme::default_theme(), "Doc");
-
-        assert!(html.contains("<colgroup>"));
-        assert!(html.contains("text-align: right"));
-    }
-
-    #[test]
     fn renders_velotype_comment_blocks_as_visible_escaped_text() {
         let markdown = "<!--\n<strong>not html</strong>\n-->";
         let html = render_html(markdown, &Theme::default_theme(), "Doc");
@@ -1573,38 +1434,5 @@ mod tests {
         assert!(html.contains("class=\"vlt-mermaid-error\""));
         assert!(html.contains("not a real mermaid diagram ::::"));
         assert!(!html.contains("data:image/svg+xml;base64,"));
-    }
-}
-
-#[cfg(test)]
-mod colgroup_correlation_probe {
-    use super::render_html;
-    use crate::theme::Theme;
-
-    #[test]
-    fn raw_html_table_does_not_steal_a_pipe_tables_colgroup() {
-        // The source scan finds only PIPE tables, but the generated HTML can
-        // also contain a <table> that came through as raw HTML. Index-based
-        // correlation would then attach the pipe table's widths to the raw one.
-        let markdown = "<table><tr><td>raw</td></tr></table>\n\n\
-                        | A | B |\n| :--- | :--------- |\n| 1 | 2 |";
-        let html = render_html(markdown, &Theme::default_theme(), "Doc");
-        // The generated table opens `<table><thead>`; the raw one opens
-        // `<table><tr>`. Checking which tag the colgroup attaches to is exact,
-        // unlike comparing byte offsets against body text that sits inside the
-        // raw table and therefore trails the insertion point either way.
-        assert!(
-            html.contains("</colgroup><thead>"),
-            "colgroup should attach to the generated pipe table; html was:\n{html}"
-        );
-        assert!(
-            !html.contains("</colgroup><tr>"),
-            "colgroup attached to the RAW html table instead; html was:\n{html}"
-        );
-        assert_eq!(
-            html.matches("<colgroup").count(),
-            1,
-            "expected exactly one colgroup"
-        );
     }
 }

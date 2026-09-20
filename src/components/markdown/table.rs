@@ -59,14 +59,6 @@ pub struct TableData {
     pub header: Vec<InlineTextTree>,
     pub rows: Vec<Vec<InlineTextTree>>,
     pub alignments: Vec<TableColumnAlignment>,
-    /// Explicit column widths as fractions summing to ~1.0, or `None` to size
-    /// columns from their content. All-or-nothing rather than per-column
-    /// `Option`: mixing measured and explicit columns makes the distribution
-    /// ambiguous, and the first drag can capture the current measured
-    /// fractions for every column before adjusting one pair.
-    ///
-    /// Invariant: when `Some`, `widths.len() == alignments.len()`.
-    pub widths: Option<Vec<f32>>,
 }
 
 impl PartialEq for TableData {
@@ -74,7 +66,6 @@ impl PartialEq for TableData {
         self.header == other.header
             && self.rows == other.rows
             && self.alignments == other.alignments
-            && self.widths == other.widths
     }
 }
 
@@ -100,7 +91,6 @@ impl TableData {
             header,
             rows,
             alignments,
-            widths: None,
         }
     }
 
@@ -146,15 +136,6 @@ impl TableData {
         for row in &mut self.rows {
             row.push(InlineTextTree::plain(String::new()));
         }
-        // A new column gets the mean of the existing fractions rather than
-        // resetting to auto-sizing, so a resized table keeps its proportions
-        // when a column is added. Renormalizing after keeps the invariant
-        // (widths.len() == alignments.len(), sum ~1.0) intact.
-        if let Some(widths) = &mut self.widths {
-            let mean = widths.iter().sum::<f32>() / widths.len().max(1) as f32;
-            widths.push(mean);
-            normalize_widths(widths);
-        }
     }
 
     /// Sets the alignment of one column if it exists.
@@ -163,23 +144,6 @@ impl TableData {
         if let Some(slot) = self.alignments.get_mut(column) {
             *slot = alignment;
         }
-    }
-
-    /// Replaces every column's width fraction at once, and is the only place
-    /// that produces `Some` widths, so it is what keeps
-    /// `widths.len() == alignments.len()`. It deliberately does not blend
-    /// against an equal-share fallback: drag-to-resize computes the whole
-    /// vector itself (seeded from measured fractions, not equal shares, per
-    /// `seed_resize_baseline`) with only the two dragged columns changed, and
-    /// renormalizing per column would discard that seed for every untouched
-    /// column on a table that had no explicit widths yet.
-    pub fn set_column_widths(&mut self, widths: Vec<f32>) {
-        self.normalize_shape();
-        let columns = self.column_count();
-        let mut widths = widths;
-        widths.resize(columns, 1.0 / columns as f32);
-        normalize_widths(&mut widths);
-        self.widths = Some(widths);
     }
 
     /// Swaps two rows addressed by their visual index, where row `0` is the
@@ -212,14 +176,6 @@ impl TableData {
         self.alignments.swap(col_a, col_b);
         for row in &mut self.rows {
             row.swap(col_a, col_b);
-        }
-        // Widths must move with the columns they belong to, or a move would
-        // silently reattach a fraction to the wrong column. The sum is
-        // unchanged by a swap, so no renormalization is needed.
-        if let Some(widths) = &mut self.widths {
-            if col_a < widths.len() && col_b < widths.len() {
-                widths.swap(col_a, col_b);
-            }
         }
     }
 
@@ -259,26 +215,6 @@ impl TableData {
         for row in &mut self.rows {
             row.remove(col_index);
         }
-        // Drop the removed column's fraction and renormalize the remainder,
-        // so removing a column keeps the user's relative sizing instead of
-        // resetting to auto-sizing.
-        if let Some(widths) = &mut self.widths {
-            if col_index < widths.len() {
-                widths.remove(col_index);
-            }
-            normalize_widths(widths);
-        }
-    }
-}
-
-/// Renormalizes width fractions in place so they sum to ~1.0, guarding
-/// against a degenerate all-zero vector that would otherwise divide by ~0.
-fn normalize_widths(widths: &mut [f32]) {
-    let sum = widths.iter().sum::<f32>();
-    if sum > f32::EPSILON {
-        for width in widths.iter_mut() {
-            *width /= sum;
-        }
     }
 }
 
@@ -297,6 +233,10 @@ impl TableColumnLayout {
         }
     }
 
+    /// Test-only: asserting on the whole measured vector at once. Production
+    /// code reads one column at a time through [`Self::fraction`]; the
+    /// drag-to-resize path that needed the full vector is gone.
+    #[cfg(test)]
     pub(crate) fn fractions(&self) -> &[f32] {
         &self.fractions
     }
@@ -314,16 +254,10 @@ impl TableColumnLayout {
         window: &mut Window,
         theme: &Theme,
     ) -> Self {
-        // Explicit widths skip content measurement entirely: cheaper than the
-        // per-frame text shaping below, and `from_preferred_widths` already
-        // supplies the minimum-width floor and renormalization this needs.
-        let preferred_widths = match &table.widths {
-            Some(widths) => preferred_widths_from_fractions(widths, table_width),
-            None => measure_preferred_column_widths(table, window, theme)
-                .into_iter()
-                .map(f32::from)
-                .collect::<Vec<_>>(),
-        };
+        let preferred_widths = measure_preferred_column_widths(table, window, theme)
+            .into_iter()
+            .map(f32::from)
+            .collect::<Vec<_>>();
         Self::from_preferred_widths(&preferred_widths, table_width, minimum_column_width(theme))
     }
 
@@ -452,10 +386,6 @@ impl TableRuntime {
                 .cloned()
         }
     }
-}
-
-fn preferred_widths_from_fractions(widths: &[f32], table_width: f32) -> Vec<f32> {
-    widths.iter().map(|fraction| fraction * table_width).collect()
 }
 
 fn measure_preferred_column_widths(
@@ -628,10 +558,7 @@ fn split_table_cells(line: &str) -> Option<Vec<String>> {
     Some(cells)
 }
 
-/// Parses one delimiter cell, returning its alignment and dash count. The
-/// count lets callers recover Pandoc-style relative column widths; see
-/// [`widths_from_dash_counts`].
-fn parse_alignment_cell(cell: &str) -> Option<(TableColumnAlignment, usize)> {
+fn parse_alignment_cell(cell: &str) -> Option<TableColumnAlignment> {
     let trimmed = cell.trim();
     if trimmed.len() < 3 {
         return None;
@@ -644,21 +571,13 @@ fn parse_alignment_cell(cell: &str) -> Option<(TableColumnAlignment, usize)> {
         return None;
     }
 
-    let alignment = match (left, right) {
+    Some(match (left, right) {
         (true, true) => TableColumnAlignment::Center,
         (false, true) => TableColumnAlignment::Right,
         (true, false) => TableColumnAlignment::Left,
         (false, false) => TableColumnAlignment::Default,
-    };
-    Some((alignment, core.len()))
+    })
 }
-
-/// Minimum dash count a delimiter cell serializes with, matching the
-/// pre-width-feature fixed literals (and keeping `:---:` valid).
-const MIN_DASHES: usize = 3;
-/// Dash budget a full-width column is scaled against; ~1.7% resolution per
-/// dash at this value.
-const DASH_BUDGET: usize = 60;
 
 fn serialize_alignment(alignment: TableColumnAlignment) -> &'static str {
     match alignment {
@@ -667,43 +586,6 @@ fn serialize_alignment(alignment: TableColumnAlignment) -> &'static str {
         TableColumnAlignment::Center => ":---:",
         TableColumnAlignment::Right => "---:",
     }
-}
-
-/// Serializes one delimiter cell with a dash count proportional to `fraction`
-/// of the width budget, floored at [`MIN_DASHES`]. Colons still bracket the
-/// dashes, so alignment stays independent of width.
-fn serialize_alignment_with_width(alignment: TableColumnAlignment, fraction: f32) -> String {
-    let dashes = MIN_DASHES.max((fraction * DASH_BUDGET as f32).round() as usize);
-    let dashes = "-".repeat(dashes);
-    match alignment {
-        TableColumnAlignment::Default => dashes,
-        TableColumnAlignment::Left => format!(":{dashes}"),
-        TableColumnAlignment::Center => format!(":{dashes}:"),
-        TableColumnAlignment::Right => format!("{dashes}:"),
-    }
-}
-
-/// Builds explicit column-width fractions from a delimiter row's dash
-/// counts, or `None` when the counts are uniform. A conventional
-/// `| --- | --- |` row must stay auto-sized — otherwise every document
-/// written before this feature (or by another editor) would become
-/// width-pinned the moment it loads.
-fn widths_from_dash_counts(dash_counts: &[usize]) -> Option<Vec<f32>> {
-    let first = *dash_counts.first()?;
-    if dash_counts.iter().all(|count| *count == first) {
-        return None;
-    }
-
-    let total = dash_counts.iter().sum::<usize>() as f32;
-    if total <= 0.0 {
-        return None;
-    }
-    Some(
-        dash_counts
-            .iter()
-            .map(|count| *count as f32 / total)
-            .collect(),
-    )
 }
 
 pub(crate) fn serialize_table_cell_markdown(tree: &InlineTextTree) -> String {
@@ -766,19 +648,10 @@ pub fn parse_table_region(lines: &[String]) -> Option<TableData> {
         return None;
     }
 
-    let parsed_alignments = alignment_cells
+    let alignments = alignment_cells
         .iter()
         .map(|cell| parse_alignment_cell(cell))
         .collect::<Option<Vec<_>>>()?;
-    let alignments = parsed_alignments
-        .iter()
-        .map(|(alignment, _)| *alignment)
-        .collect::<Vec<_>>();
-    let dash_counts = parsed_alignments
-        .iter()
-        .map(|(_, dashes)| *dashes)
-        .collect::<Vec<_>>();
-    let widths = widths_from_dash_counts(&dash_counts);
 
     let mut rows = Vec::new();
     for line in &lines[2..] {
@@ -802,7 +675,6 @@ pub fn parse_table_region(lines: &[String]) -> Option<TableData> {
             .collect(),
         rows,
         alignments,
-        widths,
     })
 }
 
@@ -872,22 +744,15 @@ pub fn parse_table_body_row(line: &str, columns: usize) -> Option<Vec<InlineText
 pub fn serialize_table_markdown_lines(table: &TableData) -> Vec<String> {
     let mut lines = Vec::with_capacity(2 + table.rows.len());
     lines.push(serialize_row(table.header.iter()));
-    let delimiter_cells = match &table.widths {
-        // Byte-identical to the pre-width fixed literals: every document
-        // nobody has resized keeps serializing exactly as it did before.
-        None => table
+    lines.push(format!(
+        "| {} |",
+        table
             .alignments
             .iter()
-            .map(|alignment| serialize_alignment(*alignment).to_string())
-            .collect::<Vec<_>>(),
-        Some(widths) => table
-            .alignments
-            .iter()
-            .zip(widths.iter())
-            .map(|(alignment, fraction)| serialize_alignment_with_width(*alignment, *fraction))
-            .collect::<Vec<_>>(),
-    };
-    lines.push(format!("| {} |", delimiter_cells.join(" | ")));
+            .map(|alignment| serialize_alignment(*alignment))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    ));
     lines.extend(table.rows.iter().map(|row| serialize_row(row.iter())));
     lines
 }
@@ -1031,7 +896,6 @@ mod tests {
                 InlineTextTree::plain("value".to_string()),
             ]],
             alignments: vec![TableColumnAlignment::Default, TableColumnAlignment::Right],
-            widths: None,
         };
         assert_eq!(
             serialize_table_markdown_lines(&table),
@@ -1129,7 +993,6 @@ mod tests {
                 ],
             ],
             alignments: vec![TableColumnAlignment::Left, TableColumnAlignment::Right],
-            widths: None,
         };
 
         table.append_column(TableColumnAlignment::Right);
@@ -1156,7 +1019,6 @@ mod tests {
             header: vec![InlineTextTree::plain("A".to_string())],
             rows: vec![vec![InlineTextTree::plain("1".to_string())]],
             alignments: Vec::new(),
-            widths: None,
         };
 
         table.append_column(TableColumnAlignment::Left);
@@ -1167,31 +1029,6 @@ mod tests {
         );
         assert_eq!(table.header.len(), 2);
         assert_eq!(table.rows[0].len(), 2);
-    }
-
-    #[test]
-    fn append_column_with_widths_gives_new_column_mean_share() {
-        let mut table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Default, TableColumnAlignment::Default],
-            widths: Some(vec![0.6, 0.4]),
-        };
-
-        table.append_column(TableColumnAlignment::Default);
-
-        let widths = table.widths.as_ref().expect("widths should stay Some");
-        assert_eq!(widths.len(), table.alignments.len());
-        assert_close(widths.iter().sum::<f32>(), 1.0);
-        // The two pre-existing columns' relative proportions are unchanged:
-        // a uniform mean share was added and the whole row renormalized.
-        assert_close(widths[0] / widths[1], 0.6 / 0.4);
     }
 
     #[test]
@@ -1217,7 +1054,6 @@ mod tests {
                 vec![InlineTextTree::plain("2".to_string())],
             ],
             alignments: vec![TableColumnAlignment::Left],
-            widths: None,
         };
         // Visual row 0 is the header; swapping it with visual row 1 exchanges
         // header and first-body content.
@@ -1244,7 +1080,6 @@ mod tests {
                 InlineTextTree::plain("2".to_string()),
             ]],
             alignments: vec![TableColumnAlignment::Left, TableColumnAlignment::Right],
-            widths: None,
         };
         table.swap_columns(0, 1);
         assert_eq!(table.header[0].serialize_markdown(), "B");
@@ -1253,52 +1088,6 @@ mod tests {
             table.alignments,
             vec![TableColumnAlignment::Right, TableColumnAlignment::Left]
         );
-    }
-
-    #[test]
-    fn swap_columns_with_widths_moves_fractions_with_the_columns() {
-        // Clearly distinct widths so a wrong post-swap order is unmistakable.
-        let mut table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-                InlineTextTree::plain("C".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-                InlineTextTree::plain("3".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Default; 3],
-            widths: Some(vec![0.6, 0.2, 0.2]),
-        };
-
-        table.swap_columns(0, 2);
-
-        assert_eq!(table.header[0].serialize_markdown(), "C");
-        assert_eq!(table.header[2].serialize_markdown(), "A");
-        let widths = table.widths.as_ref().expect("widths should stay Some");
-        // Column "A" (originally 0.6) moved to index 2; column "C"
-        // (originally 0.2) moved to index 0 — the fraction followed the
-        // content instead of staying pinned to the index.
-        assert_close(widths[0], 0.2);
-        assert_close(widths[2], 0.6);
-        assert_close(widths.iter().sum::<f32>(), 1.0);
-    }
-
-    #[test]
-    fn width_mutations_are_noop_when_widths_none() {
-        let mut table = TableData::new_empty(1, 3);
-        assert!(table.widths.is_none());
-
-        table.append_column(TableColumnAlignment::Default);
-        assert!(table.widths.is_none());
-
-        table.swap_columns(0, 1);
-        assert!(table.widths.is_none());
-
-        table.remove_column(0);
-        assert!(table.widths.is_none());
     }
 
     #[test]
@@ -1345,157 +1134,4 @@ mod tests {
         table.remove_column(0);
         assert_eq!(table.column_count(), 1);
     }
-
-    #[test]
-    fn remove_column_with_widths_drops_its_share_and_renormalizes() {
-        let mut table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-                InlineTextTree::plain("C".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-                InlineTextTree::plain("3".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Default; 3],
-            widths: Some(vec![0.5, 0.3, 0.2]),
-        };
-
-        // Remove column "B" (0.3); "A" and "C" should keep their 0.5:0.2
-        // relative proportion after renormalizing.
-        table.remove_column(1);
-
-        assert_eq!(table.header[0].serialize_markdown(), "A");
-        assert_eq!(table.header[1].serialize_markdown(), "C");
-        let widths = table.widths.as_ref().expect("widths should stay Some");
-        assert_eq!(widths.len(), table.alignments.len());
-        assert_close(widths.iter().sum::<f32>(), 1.0);
-        assert_close(widths[0] / widths[1], 0.5 / 0.2);
-    }
-
-    #[test]
-    fn widths_none_serializes_byte_identically_to_fixed_literals() {
-        // Guards the property everything else depends on: a document nobody
-        // has resized must keep serializing exactly as it did before widths
-        // existed.
-        let table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-                InlineTextTree::plain("C".to_string()),
-                InlineTextTree::plain("D".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-                InlineTextTree::plain("3".to_string()),
-                InlineTextTree::plain("4".to_string()),
-            ]],
-            alignments: vec![
-                TableColumnAlignment::Default,
-                TableColumnAlignment::Left,
-                TableColumnAlignment::Center,
-                TableColumnAlignment::Right,
-            ],
-            widths: None,
-        };
-        assert_eq!(
-            serialize_table_markdown_lines(&table)[1],
-            "| --- | :--- | :---: | ---: |"
-        );
-    }
-
-    #[test]
-    fn explicit_widths_round_trip_through_serialize_and_parse() {
-        let table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Default, TableColumnAlignment::Default],
-            widths: Some(vec![0.25, 0.75]),
-        };
-        let lines = serialize_table_markdown_lines(&table);
-        let parsed = parse_root_table_region(&lines).expect("table should parse");
-        let widths = parsed.widths.expect("non-uniform dashes should parse to Some");
-        assert_close(widths[0], 0.25);
-        assert_close(widths[1], 0.75);
-    }
-
-    #[test]
-    fn uniform_dashes_parse_to_none_widths() {
-        // The compatibility rule: dragging to exactly equal widths serializes
-        // uniform dashes, which must read back as auto-sized rather than
-        // pinned, since auto-sizing already approximates equal widths.
-        let table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Default, TableColumnAlignment::Default],
-            widths: Some(vec![0.5, 0.5]),
-        };
-        let lines = serialize_table_markdown_lines(&table);
-        let parsed = parse_root_table_region(&lines).expect("table should parse");
-        assert!(parsed.widths.is_none());
-
-        // A conventional delimiter row someone wrote by hand must land the
-        // same way.
-        let conventional = parse_root_table_region(&[
-            "| A | B |".to_string(),
-            "| --- | --- |".to_string(),
-            "| 1 | 2 |".to_string(),
-        ])
-        .expect("table should parse");
-        assert!(conventional.widths.is_none());
-    }
-
-    #[test]
-    fn explicit_width_below_minimum_is_floored_and_row_renormalized() {
-        let table_width = 300.0;
-        let preferred = super::preferred_widths_from_fractions(&[0.05, 0.9, 0.05], table_width);
-        let layout = TableColumnLayout::from_preferred_widths(&preferred, table_width, 70.0);
-        let fractions = layout.fractions();
-        let widths = fractions
-            .iter()
-            .map(|fraction| fraction * table_width)
-            .collect::<Vec<_>>();
-        assert!(widths[0] >= 70.0 - 0.001);
-        assert!(widths[2] >= 70.0 - 0.001);
-        assert_close(fractions.iter().sum::<f32>(), 1.0);
-    }
-
-    #[test]
-    fn alignment_survives_width_round_trip() {
-        let table = TableData {
-            header: vec![
-                InlineTextTree::plain("A".to_string()),
-                InlineTextTree::plain("B".to_string()),
-            ],
-            rows: vec![vec![
-                InlineTextTree::plain("1".to_string()),
-                InlineTextTree::plain("2".to_string()),
-            ]],
-            alignments: vec![TableColumnAlignment::Center, TableColumnAlignment::Default],
-            widths: Some(vec![0.3, 0.7]),
-        };
-        let lines = serialize_table_markdown_lines(&table);
-        let parsed = parse_root_table_region(&lines).expect("table should parse");
-        assert_eq!(parsed.alignments[0], TableColumnAlignment::Center);
-        assert_eq!(parsed.alignments[1], TableColumnAlignment::Default);
-        let widths = parsed.widths.expect("non-uniform dashes should parse to Some");
-        assert_close(widths[0], 0.3);
-        assert_close(widths[1], 0.7);
-    }
-
 }

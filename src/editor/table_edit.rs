@@ -113,14 +113,6 @@ impl Editor {
             .as_ref()
             .map(|table| table.alignments.clone())
             .unwrap_or_default();
-        // Rebuilding TableData from cell text alone must not clobber any
-        // explicit widths already stored on the record.
-        let widths = table_block
-            .read(cx)
-            .record
-            .table
-            .as_ref()
-            .and_then(|table| table.widths.clone());
         let header = runtime
             .header
             .iter()
@@ -140,7 +132,6 @@ impl Editor {
                 header,
                 rows,
                 alignments,
-                widths,
             });
         });
     }
@@ -306,61 +297,6 @@ impl Editor {
         };
         self.set_table_axis_selection(Some(selection), cx);
         self.focus_table_cell_position(table_block, TableCellPosition { row: 0, column }, cx);
-        self.mark_dirty(cx);
-        self.request_active_block_scroll_into_view(cx);
-        if started_local_capture {
-            self.finalize_pending_undo_capture(cx);
-        }
-        cx.notify();
-    }
-
-    /// Sets one column's explicit width fraction. Round 3 (drag-to-resize)
-    /// calls this once on drag release so a whole drag is a single undo step.
-    /// Writes the whole fraction vector in one shot rather than per column (even called
-    /// twice under one shared undo capture): that setter falls back to
-    /// equal shares when `widths` is `None`, so looping it per column would
-    /// discard the drag's *measured* baseline for every column the drag
-    /// never touched, and its "set one column, renormalize the whole row"
-    /// shape would perturb untouched columns a second time on the second
-    /// call. The caller has already computed the full vector — only
-    /// `focus_column` and its neighbor actually changed — so one direct
-    /// write is both simpler and correct.
-    pub(super) fn set_table_column_widths(
-        &mut self,
-        table_block: &Entity<Block>,
-        widths: Vec<f32>,
-        focus_column: usize,
-        cx: &mut Context<Self>,
-    ) {
-        self.sync_table_record_from_runtime(table_block, cx);
-        let Some(mut table) = table_block.read(cx).record.table.clone() else {
-            return;
-        };
-        let started_local_capture = if self.pending_undo_capture.is_none() {
-            self.prepare_undo_capture(UndoCaptureKind::NonCoalescible, cx);
-            true
-        } else {
-            false
-        };
-        table.set_column_widths(widths);
-        table_block.update(cx, move |block, _cx| {
-            block.record.table = Some(table.clone());
-        });
-        self.rebuild_table_runtimes(cx);
-        let selection = TableAxisSelection {
-            table_block_id: table_block.entity_id(),
-            kind: TableAxisKind::Column,
-            index: focus_column,
-        };
-        self.set_table_axis_selection(Some(selection), cx);
-        self.focus_table_cell_position(
-            table_block,
-            TableCellPosition {
-                row: 0,
-                column: focus_column,
-            },
-            cx,
-        );
         self.mark_dirty(cx);
         self.request_active_block_scroll_into_view(cx);
         if started_local_capture {
