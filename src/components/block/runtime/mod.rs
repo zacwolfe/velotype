@@ -200,11 +200,6 @@ pub struct Block {
     pub(crate) table_axis_preview: Option<TableAxisMarker>,
     /// Selected table axis marker.
     pub(crate) table_axis_selection: Option<TableAxisMarker>,
-    /// Live column fractions from an in-progress divider drag, overriding
-    /// `TableColumnLayout::measure` for this render only. Set on every
-    /// mouse-move and cleared on release; never written to `record.table`
-    /// until the drag commits, so dragging never touches undo history.
-    pub(crate) table_resize_preview_widths: Option<Vec<f32>>,
     /// Highlight state for table row or column controls.
     pub(crate) table_axis_highlight: TableAxisHighlight,
     /// Whether the pointer is over the append-column edge.
@@ -328,7 +323,6 @@ impl Block {
             table_cell_alignment: None,
             table_axis_preview: None,
             table_axis_selection: None,
-            table_resize_preview_widths: None,
             table_axis_highlight: TableAxisHighlight::None,
             table_append_column_edge_hovered: false,
             table_append_column_hovered: false,

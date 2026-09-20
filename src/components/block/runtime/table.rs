@@ -54,7 +54,6 @@ impl Block {
         self.table_runtime = None;
         self.table_axis_preview = None;
         self.table_axis_selection = None;
-        self.table_resize_preview_widths = None;
         self.table_axis_highlight = TableAxisHighlight::None;
         self.table_append_column_edge_hovered = false;
         self.table_append_column_hovered = false;
@@ -81,12 +80,6 @@ impl Block {
     /// Sets the row or column highlight shown over the native table.
     pub(crate) fn set_table_axis_highlight(&mut self, highlight: TableAxisHighlight) {
         self.table_axis_highlight = highlight;
-    }
-
-    /// Sets or clears the live column-resize preview. Rendering-only: does
-    /// not touch `record.table`, so it never needs undo tracking.
-    pub(crate) fn set_table_resize_preview_widths(&mut self, widths: Option<Vec<f32>>) {
-        self.table_resize_preview_widths = widths;
     }
 
     /// Whether this table block is currently showing its raw Markdown for
