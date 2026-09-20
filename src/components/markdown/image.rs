@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::sync::Arc;
 
-use gpui::{SharedUri, http_client::Uri};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD;
+use gpui::{Image, ImageFormat, SharedUri};
+use url::Url;
 
 use crate::net;
 
@@ -76,7 +79,23 @@ pub(crate) enum ImageResolvedSource {
     Local(PathBuf),
     /// HTTP(S) image URL handled by GPUI's HTTP client.
     Remote(SharedUri),
+    /// Bytes carried inline by a `data:` URI. Needs no IO at all, so it renders
+    /// straight from memory.
+    Inline(Arc<Image>),
+    /// A source recognized as a `data:` URI but unusable — malformed payload,
+    /// non-image media type, or past [`MAX_INLINE_IMAGE_BYTES`]. Distinct from
+    /// `Local` so the placeholder never claims a filesystem path built out of a
+    /// multi-kilobyte base64 blob.
+    Unusable,
 }
+
+/// Ceiling on decoded `data:` URI payloads.
+///
+/// A `data:` image is re-decoded on each render rather than memoized, which is
+/// fine for the icons and badges people actually inline (GPUI already pays an
+/// O(n) content hash per frame to key its own cache). This cap keeps a
+/// pathologically large inline blob from turning that into per-frame work.
+const MAX_INLINE_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 impl ImageSyntax {
     pub(crate) fn resolve_target(
@@ -100,11 +119,31 @@ impl ImageSyntax {
 }
 
 pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> ImageResolvedSource {
+    let source = source.trim();
+
+    if let Some(payload) = source.strip_prefix("data:") {
+        return decode_data_uri(payload);
+    }
+
     if net::is_remote_image_source(source) {
         return ImageResolvedSource::Remote(SharedUri::from(source.to_string()));
     }
 
-    let path = Path::new(source);
+    // Protocol-relative URLs inherit the page scheme on the web; there is no
+    // page here, so assume the secure one rather than reading `//host/x.png` as
+    // a filesystem path.
+    if let Some(authority) = source.strip_prefix("//")
+        && !authority.is_empty()
+    {
+        return ImageResolvedSource::Remote(SharedUri::from(format!("https://{authority}")));
+    }
+
+    if let Some(path) = file_url_to_path(source) {
+        return ImageResolvedSource::Local(path);
+    }
+
+    let decoded = percent_decode_path(source);
+    let path = Path::new(&decoded);
     if path.is_absolute() {
         return ImageResolvedSource::Local(path.to_path_buf());
     }
@@ -113,6 +152,107 @@ pub(crate) fn resolve_image_source(source: &str, base_dir: Option<&Path>) -> Ima
         .map(|dir| dir.join(path))
         .unwrap_or_else(|| path.to_path_buf());
     ImageResolvedSource::Local(resolved)
+}
+
+/// Turns a `file://` URL into a local path, including percent-decoding.
+///
+/// Anything that is not a `file:` URL returns `None` so the caller falls
+/// through to ordinary relative-path handling.
+fn file_url_to_path(source: &str) -> Option<PathBuf> {
+    if !source.starts_with("file:") {
+        return None;
+    }
+    Url::parse(source).ok()?.to_file_path().ok()
+}
+
+/// Decodes the payload of a `data:` URI into renderable image bytes.
+///
+/// Handles both the base64 form (`data:image/png;base64,…`) and the plain form
+/// (`data:image/svg+xml,<svg …>`), the latter being how inline SVG is usually
+/// written. Returns [`ImageResolvedSource::Unusable`] rather than a bogus path
+/// when the payload cannot be used.
+fn decode_data_uri(payload: &str) -> ImageResolvedSource {
+    let Some((metadata, data)) = payload.split_once(',') else {
+        return ImageResolvedSource::Unusable;
+    };
+
+    let mut parameters = metadata.split(';').map(str::trim);
+    let media_type = parameters.next().unwrap_or_default().to_ascii_lowercase();
+    let is_base64 = parameters.any(|parameter| parameter.eq_ignore_ascii_case("base64"));
+
+    let Some(format) = data_uri_image_format(&media_type) else {
+        return ImageResolvedSource::Unusable;
+    };
+
+    let bytes = if is_base64 {
+        // Whitespace is legal in a base64 data URI after line wrapping, and the
+        // standard alphabet's padding is often omitted, so tolerate both.
+        let compact = data
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect::<String>();
+        match BASE64_STANDARD_NO_PAD.decode(compact.trim_end_matches('=')) {
+            Ok(bytes) => bytes,
+            Err(_) => return ImageResolvedSource::Unusable,
+        }
+    } else {
+        percent_decode_bytes(data)
+    };
+
+    if bytes.is_empty() || bytes.len() > MAX_INLINE_IMAGE_BYTES {
+        return ImageResolvedSource::Unusable;
+    }
+
+    ImageResolvedSource::Inline(Arc::new(Image::from_bytes(format, bytes)))
+}
+
+/// Maps a `data:` URI media type onto the GPUI image format that decodes it.
+///
+/// Limited to what `gpui::ImageFormat` can express, so e.g. an `image/x-icon`
+/// payload is reported unusable and renders as a placeholder rather than being
+/// mislabeled as some other format.
+fn data_uri_image_format(media_type: &str) -> Option<ImageFormat> {
+    match media_type {
+        "image/png" => Some(ImageFormat::Png),
+        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+        "image/gif" => Some(ImageFormat::Gif),
+        "image/webp" => Some(ImageFormat::Webp),
+        "image/bmp" => Some(ImageFormat::Bmp),
+        "image/tiff" => Some(ImageFormat::Tiff),
+        "image/svg+xml" => Some(ImageFormat::Svg),
+        _ => None,
+    }
+}
+
+/// Percent-decodes a destination for filesystem use.
+///
+/// Markdown destinations are URL-ish, so `my%20image.png` means `my image.png`.
+/// This is deliberately pure — no existence probing — because it runs on the
+/// render path. The trade-off is a real file whose name literally contains a
+/// valid escape (`report%20v2.png` on disk) would be looked up decoded; that is
+/// rare, and CommonMark says the encoded reading is the correct one.
+fn percent_decode_path(source: &str) -> String {
+    String::from_utf8(percent_decode_bytes(source)).unwrap_or_else(|_| source.to_string())
+}
+
+fn percent_decode_bytes(source: &str) -> Vec<u8> {
+    let bytes = source.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let Some(high) = (bytes[index + 1] as char).to_digit(16)
+            && let Some(low) = (bytes[index + 2] as char).to_digit(16)
+        {
+            output.push((high * 16 + low) as u8);
+            index += 3;
+            continue;
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    output
 }
 
 pub(crate) fn parse_standalone_image(markdown: &str) -> Option<ImageSyntax> {
@@ -620,16 +760,17 @@ fn parse_image_target(inner: &str) -> Option<(String, Option<String>)> {
         return None;
     }
 
-    if inner.ends_with('"') {
-        let close_quote = inner.len() - 1;
-        if !is_escaped(inner, close_quote)
-            && let Some(open_quote) = find_open_title_quote(inner, close_quote)
-        {
-            let src = inner[..open_quote.saturating_sub(1)].trim_end();
-            let title = inner[open_quote + 1..close_quote].to_string();
-            if src.is_empty() {
-                return None;
-            }
+    // All three CommonMark title forms: `"…"`, `'…'`, and `(…)`. Reference
+    // definitions already accepted all three, so recognizing only `"…"` here
+    // made the two parsers disagree about what counts as a title.
+    let close = inner.len() - 1;
+    if let Some(open_delimiter) = title_delimiter_pair(inner.as_bytes()[close])
+        && !is_escaped(inner, close)
+        && let Some(open) = find_open_title_delimiter(inner, close, open_delimiter)
+    {
+        let src = inner[..open].trim_end();
+        let title = inner[open + 1..close].to_string();
+        if !src.is_empty() {
             return Some((normalize_image_source(src), Some(title)));
         }
     }
@@ -653,26 +794,42 @@ fn is_reference_definition_title_continuation(line: &str) -> bool {
         || (trimmed.starts_with('(') && trimmed.ends_with(')'))
 }
 
-fn find_open_title_quote(input: &str, close_quote: usize) -> Option<usize> {
+/// Finds the opening delimiter of a trailing title, scanning back from its
+/// closing delimiter at `close`.
+///
+/// CommonMark allows three title forms — `"…"`, `'…'`, and `(…)` — and requires
+/// whitespace between the destination and the title, which is what keeps a
+/// bare `'` or `(` inside a filename from being read as a title opener.
+fn find_open_title_delimiter(input: &str, close: usize, open: u8) -> Option<usize> {
     let bytes = input.as_bytes();
-    (0..close_quote).rev().find(|&index| {
-        bytes[index] == b'"'
+    (0..close).rev().find(|&index| {
+        bytes[index] == open
             && !is_escaped(input, index)
             && index > 0
             && bytes[index - 1].is_ascii_whitespace()
     })
 }
 
+/// Closing title delimiter mapped to the opener it pairs with.
+fn title_delimiter_pair(close: u8) -> Option<u8> {
+    match close {
+        b'"' => Some(b'"'),
+        b'\'' => Some(b'\''),
+        b')' => Some(b'('),
+        _ => None,
+    }
+}
+
 fn normalize_image_source(source: &str) -> String {
     let source = unescape_ascii_punctuation(source);
-    if source.starts_with('<')
-        && source.ends_with('>')
-        && Uri::from_str(&source[1..source.len() - 1]).is_ok()
-    {
-        source[1..source.len() - 1].to_string()
-    } else {
-        source
+    // `<…>` is CommonMark's way to wrap a destination that contains spaces, so
+    // the brackets come off unconditionally. Requiring the contents to parse as
+    // a URI defeated the one case the syntax exists for: `<my image.png>` is
+    // not a valid URI, which is exactly why the author bracketed it.
+    if source.len() >= 2 && source.starts_with('<') && source.ends_with('>') {
+        return source[1..source.len() - 1].to_string();
     }
+    source
 }
 
 fn unescape_ascii_punctuation(input: &str) -> String {
@@ -703,7 +860,15 @@ fn find_matching_target_close_paren(input: &str, open_paren: usize) -> Option<us
     let mut index = open_paren + 1;
     while index < bytes.len() {
         match bytes[index] {
-            quote @ (b'"' | b'\'') if !is_escaped(input, index) => {
+            // Only a quote that opens a *title* may hide a `)` from the depth
+            // count, and CommonMark requires whitespace before a title. Without
+            // that guard an apostrophe in a filename — `![a](it's.png)` — looks
+            // like an unterminated title and the whole image fails to parse.
+            quote @ (b'"' | b'\'')
+                if !is_escaped(input, index)
+                    && index > open_paren + 1
+                    && bytes[index - 1].is_ascii_whitespace() =>
+            {
                 index = find_unescaped_char(input, index + 1, quote)?;
             }
             b'(' if !is_escaped(input, index) => depth += 1,
@@ -1150,6 +1315,115 @@ mod tests {
                 src: "./real.png".to_string(),
                 title: None,
             })
+        );
+    }
+
+    #[test]
+    fn parses_all_three_commonmark_title_forms() {
+        for (markdown, expected_title) in [
+            ("![a](pic.png \"double\")", "double"),
+            ("![a](pic.png 'single')", "single"),
+            ("![a](pic.png (paren))", "paren"),
+        ] {
+            let syntax = parse_standalone_image(markdown).expect(markdown);
+            let ImageTarget::Direct { src, title } = syntax.target else {
+                panic!("{markdown} should be a direct target");
+            };
+            assert_eq!(src, "pic.png", "{markdown}");
+            assert_eq!(title.as_deref(), Some(expected_title), "{markdown}");
+        }
+    }
+
+    #[test]
+    fn a_quote_inside_a_destination_is_not_a_title() {
+        // no whitespace before the delimiter, so it belongs to the filename
+        let syntax = parse_standalone_image("![a](it's.png)").expect("image");
+        let ImageTarget::Direct { src, title } = syntax.target else {
+            panic!("direct target");
+        };
+        assert_eq!(src, "it's.png");
+        assert_eq!(title, None);
+    }
+
+    #[test]
+    fn angle_bracketed_destination_with_spaces_is_unwrapped() {
+        let syntax = parse_standalone_image("![a](<my image.png>)").expect("image");
+        let ImageTarget::Direct { src, .. } = syntax.target else {
+            panic!("direct target");
+        };
+        assert_eq!(src, "my image.png");
+    }
+
+    #[test]
+    fn resolves_base64_data_uri_to_inline_bytes() {
+        // 1x1 transparent png
+        let src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
+        let ImageResolvedSource::Inline(image) = resolve_image_source(src, None) else {
+            panic!("expected inline bytes");
+        };
+        assert_eq!(image.format, gpui::ImageFormat::Png);
+        assert_eq!(&image.bytes[1..4], b"PNG");
+    }
+
+    #[test]
+    fn resolves_plain_svg_data_uri_without_base64() {
+        let src = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E";
+        let ImageResolvedSource::Inline(image) = resolve_image_source(src, None) else {
+            panic!("expected inline bytes");
+        };
+        assert_eq!(image.format, gpui::ImageFormat::Svg);
+        assert_eq!(
+            String::from_utf8(image.bytes.clone()).expect("utf8"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>"
+        );
+    }
+
+    #[test]
+    fn unusable_data_uris_do_not_become_filesystem_paths() {
+        for src in [
+            "data:image/png;base64,!!!not base64!!!",
+            "data:text/plain;base64,aGVsbG8=",
+            "data:image/x-icon;base64,AAABAA==",
+            "data:image/png;base64,",
+            "data:nocomma",
+        ] {
+            assert_eq!(
+                resolve_image_source(src, Some(Path::new("/docs"))),
+                ImageResolvedSource::Unusable,
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolves_percent_encoded_and_file_url_and_protocol_relative_sources() {
+        assert_eq!(
+            resolve_image_source("my%20image.png", Some(Path::new("/docs"))),
+            ImageResolvedSource::Local(Path::new("/docs/my image.png").to_path_buf())
+        );
+        assert_eq!(
+            resolve_image_source("file:///abs/my%20pic.png", None),
+            ImageResolvedSource::Local(Path::new("/abs/my pic.png").to_path_buf())
+        );
+        assert_eq!(
+            resolve_image_source("//example.com/img.png", None),
+            ImageResolvedSource::Remote(gpui::SharedUri::from(
+                "https://example.com/img.png".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn plain_relative_and_remote_sources_are_unchanged() {
+        assert_eq!(
+            resolve_image_source("./pic.png", Some(Path::new("/docs"))),
+            ImageResolvedSource::Local(Path::new("/docs/./pic.png").to_path_buf())
+        );
+        assert_eq!(
+            resolve_image_source("https://example.com/x.png", None),
+            ImageResolvedSource::Remote(gpui::SharedUri::from(
+                "https://example.com/x.png".to_string()
+            ))
         );
     }
 }

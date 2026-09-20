@@ -123,8 +123,14 @@ pub struct InlineFragment {
 pub struct InlineImage {
     /// Full tag source, e.g. `<img src="a.png" width="32">`.
     pub source: String,
-    /// `src` attribute, unresolved (may be relative or remote).
+    /// `src` attribute, unresolved (may be relative or remote). Empty for a
+    /// reference-style image, whose destination lives in [`Self::label`].
     pub src: String,
+    /// Normalized reference label for `![alt][label]`, resolved at render time
+    /// against the block's definitions rather than here: definitions are
+    /// document- and container-scoped and may appear after the image, so the
+    /// inline tree cannot know the destination while parsing.
+    pub label: Option<String>,
     /// `alt` attribute, empty when absent.
     pub alt: String,
     /// `width` presentation attribute, when usable.
@@ -2189,12 +2195,11 @@ fn parse_inline_markdown_image(
 
     let source = tokens_to_string(&tokens[index..]);
     let (raw_source, syntax, end) = parse_inline_image_at(&source, 0)?;
-    let ImageTarget::Direct { src, .. } = syntax.target else {
-        return None;
+    let (src, label) = match syntax.target {
+        ImageTarget::Direct { src, .. } if !src.trim().is_empty() => (src, None),
+        ImageTarget::Direct { .. } => return None,
+        ImageTarget::Reference { label } => (String::new(), Some(label)),
     };
-    if src.trim().is_empty() {
-        return None;
-    }
 
     // `end` is a byte offset into the string rebuilt from `tokens[index..]`, so
     // walk the same tokens back to a token count.
@@ -2211,6 +2216,7 @@ fn parse_inline_markdown_image(
     let image = InlineImage {
         source: raw_source,
         src: src.trim().to_string(),
+        label,
         alt: syntax.alt,
         width: None,
         height: None,
@@ -2243,6 +2249,7 @@ fn parse_inline_html_image(
         source: tokens_to_string(consumed),
         zoom: parsed.zoom_factor(),
         src: parsed.src,
+        label: None,
         alt: parsed.alt,
         width: parsed.width,
         height: parsed.height,
@@ -4645,19 +4652,29 @@ mod tests {
     }
 
     #[test]
-    fn reference_and_escaped_inline_markdown_images_stay_literal_text() {
-        for markdown in [
-            "![cover][ref]",
-            "![cover][]",
-            "\\![not an image](x.png)",
-            "![missing target]",
+    fn inline_reference_images_keep_their_label_for_render_time_lookup() {
+        for (markdown, expected_label) in [
+            ("![cover][ref]", "ref"),
+            // collapsed and shortcut forms fall back to the alt text as label
+            ("![cover][]", "cover"),
+            ("![cover]", "cover"),
         ] {
             let tree = InlineTextTree::from_markdown(markdown);
-            assert!(
-                tree.render_cache().inline_image_at(0).is_none(),
-                "{markdown} should not become an inline image"
-            );
+            let image = tree
+                .render_cache()
+                .inline_image_at(0)
+                .unwrap_or_else(|| panic!("{markdown} should be an inline image"))
+                .clone();
+            assert_eq!(image.label.as_deref(), Some(expected_label), "{markdown}");
+            assert!(image.src.is_empty(), "{markdown}");
+            assert_eq!(tree.serialize_markdown(), markdown, "{markdown}");
         }
+    }
+
+    #[test]
+    fn escaped_image_markers_stay_literal_text() {
+        let tree = InlineTextTree::from_markdown("\\![not an image](x.png)");
+        assert!(tree.render_cache().inline_image_at(0).is_none());
     }
 
     #[test]
