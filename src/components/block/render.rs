@@ -2105,6 +2105,10 @@ impl Render for Block {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus_handle.is_focused(window);
         let code_language_focused = self.code_language_focus_handle.is_focused(window);
+        // The caret blink repaints the whole window ~30x/second, so it must not
+        // run for a window the user is not looking at: an inactive window would
+        // otherwise keep re-laying-out its document forever in the background.
+        let blink_active = (focused || code_language_focused) && window.is_window_active();
         let input_active = focused || code_language_focused;
         if self.sync_image_focus_state(focused) {
             cx.notify();
@@ -2126,9 +2130,9 @@ impl Render for Block {
             (focused || reveal_for_selection) && !showing_rendered_image,
         );
 
-        if input_active && self.cursor_blink_task.is_none() {
+        if blink_active && self.cursor_blink_task.is_none() {
             self.start_cursor_blink(cx);
-        } else if !input_active && self.cursor_blink_task.is_some() {
+        } else if !blink_active && self.cursor_blink_task.is_some() {
             self.cursor_blink_task = None;
         }
         if !input_active {
@@ -2263,9 +2267,9 @@ impl Render for Block {
                     BlockKind::HtmlBlock | BlockKind::MathBlock | BlockKind::MermaidBlock
                 ))
         {
-            if focused && self.cursor_blink_task.is_none() {
+            if blink_active && self.cursor_blink_task.is_none() {
                 self.start_cursor_blink(cx);
-            } else if !focused && self.cursor_blink_task.is_some() {
+            } else if !blink_active && self.cursor_blink_task.is_some() {
                 self.cursor_blink_task = None;
             }
             let source_base = self
