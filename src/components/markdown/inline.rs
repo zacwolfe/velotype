@@ -5,6 +5,7 @@
 //! which keeps editing operations focused on text ranges instead of raw
 //! delimiter strings.
 
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use super::footnote::{
@@ -19,7 +20,7 @@ use super::image::{ImageTarget, parse_inline_image_at};
 use super::link::{LinkReferenceDefinition, LinkReferenceDefinitions, parse_link_target};
 
 /// Bitfield of active inline formatting flags for a span of text.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub struct InlineStyle {
     pub bold: bool,
     pub italic: bool,
@@ -30,7 +31,7 @@ pub struct InlineStyle {
 }
 
 /// Vertical script style for simple Markdown extension syntax.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum InlineScript {
     #[default]
     Normal,
@@ -177,7 +178,7 @@ pub enum InlineMathDelimiter {
 }
 
 /// Link metadata attached to a formatted inline text fragment.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum InlineLink {
     /// Inline destination and optional title from `[label](destination "title")`.
     Inline {
@@ -644,6 +645,21 @@ impl InlineTextTree {
         self.fragments.iter().any(|fragment| {
             fragment.math.is_some() || fragment.image.is_some() || fragment.style.has_script()
         })
+    }
+
+    /// Feeds this tree's content to a hasher without allocating.
+    ///
+    /// Only fragment text and the attributes that change rendered output are
+    /// hashed; callers use it to detect "did anything change" far more cheaply
+    /// than serializing to Markdown.
+    pub(crate) fn hash_content(&self, state: &mut impl Hasher) {
+        for fragment in &self.fragments {
+            fragment.text.hash(state);
+            fragment.style.hash(state);
+            fragment.link.hash(state);
+            fragment.image.as_ref().map(|image| &image.source).hash(state);
+            fragment.math.as_ref().map(|math| &math.source).hash(state);
+        }
     }
 
     pub(crate) fn has_inline_images(&self) -> bool {

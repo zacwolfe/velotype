@@ -16,7 +16,7 @@ use crate::components::markdown::inline::InlineTextTree;
 use crate::components::{TableAxisKind, TableData};
 
 /// Supported callout variants parsed from `[!TYPE]` quote headers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum CalloutVariant {
     /// Informational note callout.
     Note,
@@ -104,7 +104,7 @@ impl CalloutVariant {
 
 /// The semantic type of a block, determining both its Markdown syntax and
 /// visual rendering.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum BlockKind {
     /// Plain paragraph with inline formatting.
     Paragraph,

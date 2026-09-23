@@ -6,6 +6,7 @@
 //! focus, scroll, or mutation event.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 use gpui::*;
 
@@ -137,6 +138,34 @@ impl DocumentTree {
         let mut lines = Vec::new();
         Self::collect_root_markdown_lines(&self.roots, cx, &mut lines);
         lines.join("\n")
+    }
+
+    /// Cheap hash over everything the outline derives from, for skipping work
+    /// when the document has not changed.
+    ///
+    /// Exists because [`Self::markdown_text`] is far too expensive to call every
+    /// frame: it builds a string for every block and a pair of document-sized
+    /// offset-map vectors per inline tree. This walks the same structure but only
+    /// feeds existing bytes to a hasher, allocating nothing.
+    pub(super) fn content_fingerprint(&self, cx: &App) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        Self::hash_blocks(&self.roots, cx, &mut hasher);
+        hasher.finish()
+    }
+
+    fn hash_blocks(blocks: &[Entity<Block>], cx: &App, hasher: &mut DefaultHasher) {
+        for block in blocks {
+            let block_ref = block.read(cx);
+            // Kind matters as much as text: `# Foo` and `Foo` share their title
+            // but only one is a heading.
+            block_ref.kind().hash(hasher);
+            block_ref.record.title.hash_content(hasher);
+            block_ref.record.raw_fallback.hash(hasher);
+            // Nesting changes indentation, and indentation decides whether a
+            // heading line is still a heading.
+            block_ref.children.len().hash(hasher);
+            Self::hash_blocks(&block_ref.children, cx, hasher);
+        }
     }
 
     pub(super) fn raw_source_text(&self, cx: &App) -> String {

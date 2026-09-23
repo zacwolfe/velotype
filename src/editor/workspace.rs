@@ -67,6 +67,8 @@ pub(super) struct WorkspaceState {
     file_error: Option<String>,
     outline_tree: Vec<WorkspaceTreeNode>,
     outline_source: Option<String>,
+    /// Fingerprint of the document the cached outline was built from.
+    outline_fingerprint: Option<u64>,
     expanded: HashSet<String>,
     selected_file: Option<PathBuf>,
     selected_outline: Option<String>,
@@ -87,6 +89,7 @@ impl Default for WorkspaceState {
             file_error: None,
             outline_tree: Vec::new(),
             outline_source: None,
+            outline_fingerprint: None,
             expanded: HashSet::new(),
             selected_file: None,
             selected_outline: None,
@@ -179,6 +182,7 @@ impl Editor {
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
         self.workspace.outline_source = None;
+        self.workspace.outline_fingerprint = None;
         // Keep an explicit root while the document being opened lives inside
         // it, so browsing to a parent survives opening files from the tree;
         // an unrelated document elsewhere reclaims the root.
@@ -211,6 +215,7 @@ impl Editor {
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
         self.workspace.outline_source = None;
+        self.workspace.outline_fingerprint = None;
         if self.workspace.is_open {
             self.sync_workspace_models(cx);
         }
@@ -285,6 +290,19 @@ impl Editor {
     }
 
     fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
+        // The caret blink re-runs render ~30x/second, and serializing the whole
+        // document allocates a string per block plus document-sized offset-map
+        // vectors per inline tree. Check a cheap allocation-free fingerprint
+        // first so the steady state costs a hash walk instead of a full
+        // serialize whose result is then usually discarded.
+        let fingerprint = self.document.content_fingerprint(cx);
+        if self.workspace.outline_fingerprint == Some(fingerprint)
+            && self.workspace.outline_source.is_some()
+        {
+            return;
+        }
+        self.workspace.outline_fingerprint = Some(fingerprint);
+
         let source = self.serialized_document_text(cx);
         if self.workspace.outline_source.as_deref() == Some(source.as_str()) {
             return;
@@ -1260,9 +1278,39 @@ mod tests {
         workspace_entry_context_menu_target, workspace_panel_drag_max_width,
         workspace_panel_width_for_viewport,
     };
+    use gpui::{AppContext, TestAppContext};
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
+
+    #[gpui::test]
+    async fn outline_cache_refreshes_when_a_heading_changes(cx: &mut TestAppContext) {
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "# First\n\nbody".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            editor.sync_workspace_models(cx);
+            assert_eq!(
+                editor.workspace.outline_tree[0].label, "First",
+                "outline should build on first sync"
+            );
+
+            // A second sync with nothing changed must reuse the cache, which is
+            // the whole point of the fingerprint guard.
+            let fingerprint = editor.workspace.outline_fingerprint;
+            editor.sync_workspace_models(cx);
+            assert_eq!(editor.workspace.outline_fingerprint, fingerprint);
+
+            // Editing the heading must invalidate it: a stale outline is the
+            // failure mode a content fingerprint can introduce.
+            let heading = editor.document.root_blocks()[0].clone();
+            heading.update(cx, |block, _| {
+                block.record.set_title(crate::components::InlineTextTree::plain("Renamed"));
+            });
+            editor.sync_workspace_models(cx);
+            assert_eq!(editor.workspace.outline_tree[0].label, "Renamed");
+            assert_ne!(editor.workspace.outline_fingerprint, fingerprint);
+        });
+    }
 
     /// Mirrors `editor::tests::init_editor_test_app`, which lives in a file
     /// this task may not edit: installs the globals `Editor::from_markdown`
