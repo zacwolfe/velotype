@@ -229,6 +229,9 @@ pub struct Editor {
     pending_undo_capture: Option<PendingUndoCapture>,
     /// Last stable selection expressed in canonical source byte offsets.
     last_selection_snapshot: UndoSelectionSnapshot,
+    /// Inputs the cached `last_selection_snapshot` was computed from, so the
+    /// per-frame refresh in `render` can skip rebuilding it while idle.
+    last_selection_snapshot_key: Option<SelectionSnapshotKey>,
     /// Source text paired with the stable selection for the next undo capture.
     last_stable_source_text: String,
     /// Suppresses recursive history capture while restoring an entry.
@@ -350,6 +353,20 @@ struct UndoSelectionSnapshot {
     range: std::ops::Range<usize>,
     /// Whether the caret is at the range start rather than its end.
     reversed: bool,
+}
+
+/// Everything `capture_source_selection_snapshot` reads, reduced to a cheap
+/// comparable key: the document's content hash plus the caret state of the
+/// block being edited.
+#[derive(Clone, PartialEq, Eq)]
+struct SelectionSnapshotKey {
+    content_fingerprint: u64,
+    target: Option<(EntityId, std::ops::Range<usize>, bool)>,
+    view_mode: ViewMode,
+    /// A cross-block selection takes priority inside
+    /// `capture_source_selection_snapshot`, so it has to participate in the key
+    /// or dragging across blocks would keep serving a stale snapshot.
+    cross_block_selection: Option<CrossBlockSelection>,
 }
 
 /// One undo history entry containing source text and selection state.
@@ -539,6 +556,7 @@ impl Editor {
             redo_history: Vec::new(),
             pending_undo_capture: None,
             last_selection_snapshot: Self::empty_selection_snapshot(),
+            last_selection_snapshot_key: None,
             last_stable_source_text: normalized,
             history_restore_in_progress: false,
             image_reference_definitions: Arc::default(),
