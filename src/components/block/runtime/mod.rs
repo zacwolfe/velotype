@@ -5,6 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Caret stays solid this long after each edit or caret move, so typing never
+/// fights a blink.
+const CURSOR_SOLID_AFTER_EDIT: Duration = Duration::from_millis(500);
+/// How long the caret stays in each on/off state once blinking.
+const CURSOR_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
+/// Blink poll interval. A fraction of the half-period so a state flip is never
+/// more than this late, while still costing ~4 repaints/second instead of ~30.
+const CURSOR_BLINK_POLL: Duration = Duration::from_millis(125);
+
 use gpui::*;
 use unicode_segmentation::*;
 
@@ -2030,45 +2039,66 @@ impl Block {
         cx.notify();
     }
 
-    /// Starts the cursor blink loop: a repeating background timer every 33ms
-    /// that calls `cx.notify()` to repaint the cursor — but only while the
-    /// cursor opacity is actually animating. During the first 0.5 s after
+    /// Starts the cursor blink loop: a repeating background timer that calls
+    /// `cx.notify()` to repaint the cursor — but only while the cursor opacity is
+    /// actually animating. During the first [`CURSOR_SOLID_AFTER_EDIT`] after
     /// each `cursor_blink_epoch` reset (which arrow keys / typing trigger),
     /// opacity is pinned to 1.0, so a repaint would just re-do the full
     /// projection rebuild for no visible change.
+    ///
+    /// The poll interval is a fraction of the blink half-period rather than a
+    /// frame interval: each notify repaints the entire window, so polling at
+    /// frame rate to animate a fade cost more than everything else the idle
+    /// editor does put together.
     ///
     /// The blink task is automatically cancelled when the block loses focus
     /// (the task handle is dropped in [`Block::render`]).
     pub(super) fn start_cursor_blink(&mut self, cx: &mut Context<Self>) {
         self.cursor_blink_epoch = Instant::now();
         self.cursor_blink_task = Some(cx.spawn(
-            async |this: WeakEntity<Block>, cx: &mut AsyncApp| loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(33))
-                    .await;
-                if this
-                    .update(cx, |this: &mut Block, cx: &mut Context<Block>| {
-                        if this.cursor_blink_epoch.elapsed().as_secs_f32() >= 0.5 {
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
+            async |this: WeakEntity<Block>, cx: &mut AsyncApp| {
+                // Repainting on every poll would be 8 full-window repaints a
+                // second to animate a two-state caret. Only the flips need one.
+                let mut last_visible: Option<bool> = None;
+                loop {
+                    cx.background_executor().timer(CURSOR_BLINK_POLL).await;
+                    if this
+                        .update(cx, |this: &mut Block, cx: &mut Context<Block>| {
+                            if this.cursor_blink_epoch.elapsed() < CURSOR_SOLID_AFTER_EDIT {
+                                last_visible = None;
+                                return;
+                            }
+                            let visible = this.cursor_opacity() > 0.5;
+                            if last_visible != Some(visible) {
+                                last_visible = Some(visible);
+                                cx.notify();
+                            }
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
             },
         ));
     }
 
-    /// Cosine-based smooth blink: fully opaque for 0.5s, then oscillates
-    /// with a period of ~1s (33ms x 30 ticks ~= 1s).
+    /// Caret alpha: solid for [`CURSOR_SOLID_AFTER_EDIT`] after each epoch reset,
+    /// then a hard on/off step every [`CURSOR_BLINK_HALF_PERIOD`].
+    ///
+    /// Deliberately a step rather than a cosine fade. GPUI has no partial
+    /// invalidation, so every caret frame repaints the whole window -- full taffy
+    /// layout and paint of the document. A smooth fade needs ~30 of those per
+    /// second forever while the caret merely sits there, which measured as the
+    /// dominant idle cost. A step needs a repaint only when the state flips.
     pub fn cursor_opacity(&self) -> f32 {
-        let elapsed = self.cursor_blink_epoch.elapsed().as_secs_f32();
-        if elapsed < 0.5 {
+        let elapsed = self.cursor_blink_epoch.elapsed();
+        if elapsed < CURSOR_SOLID_AFTER_EDIT {
             return 1.0;
         }
-        let t = elapsed - 0.5;
-        (f32::cos(t * std::f32::consts::TAU) + 1.0) / 2.0
+        let phases = (elapsed - CURSOR_SOLID_AFTER_EDIT).as_millis()
+            / CURSOR_BLINK_HALF_PERIOD.as_millis();
+        if phases % 2 == 0 { 1.0 } else { 0.0 }
     }
 
     pub fn cursor_offset(&self) -> usize {
