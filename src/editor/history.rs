@@ -10,6 +10,39 @@ impl Editor {
         }
     }
 
+    /// Refreshes the cached selection snapshot only when its inputs changed.
+    ///
+    /// `render` used to recompute this every frame, and in rendered mode the
+    /// computation serializes the whole document (via
+    /// `build_source_target_mappings`) just to find the one mapping belonging to
+    /// the focused block. With the caret blink repainting ~30x/second that was a
+    /// full document serialize per frame while sitting idle.
+    pub(super) fn refresh_selection_snapshot_if_stale(&mut self, cx: &App) {
+        let key = self.selection_snapshot_key(cx);
+        if self.last_selection_snapshot_key.as_ref() == Some(&key) {
+            return;
+        }
+        self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
+        self.last_selection_snapshot_key = Some(key);
+    }
+
+    fn selection_snapshot_key(&self, cx: &App) -> SelectionSnapshotKey {
+        let target = self.current_edit_target_from_state(cx).map(|entity| {
+            let block = entity.read(cx);
+            (
+                entity.entity_id(),
+                block.selected_range.clone(),
+                block.selection_reversed,
+            )
+        });
+        SelectionSnapshotKey {
+            content_fingerprint: self.document.content_fingerprint(cx),
+            target,
+            view_mode: self.view_mode,
+            cross_block_selection: self.cross_block_selection,
+        }
+    }
+
     pub(super) fn capture_source_selection_snapshot(&self, cx: &App) -> UndoSelectionSnapshot {
         if let Some(snapshot) = self.cross_block_source_selection_snapshot(cx) {
             return snapshot;
@@ -94,6 +127,7 @@ impl Editor {
 
     pub(super) fn refresh_stable_document_snapshot(&mut self, cx: &App) {
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
+        self.last_selection_snapshot_key = None;
         self.last_stable_source_text = self.current_document_source(cx);
     }
 
