@@ -480,7 +480,18 @@ impl Editor {
         let Some(active_bounds) =
             focused_block.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds())
         else {
-            return false;
+            // A block showing a rendered image (a standalone image, or a
+            // mixed-visual title with an inline image) never runs through
+            // `BlockTextElement`, so it never populates `last_bounds`/
+            // `last_layout` — there is no caret position to converge on, ever.
+            // Reporting unsettled here spun forever: `apply_pending_scroll_into_view`
+            // reschedules a 16ms recheck each time, so a focused image block
+            // burned a full relayout+repaint every 16ms for as long as it held
+            // focus, with no way to ever satisfy the check. Nothing was ever
+            // actually scrolled by that spin either (the offset adjustment
+            // below never ran), so reporting settled here is a pure fix: it
+            // stops the busy-loop and changes no visible behavior.
+            return true;
         };
 
         let viewport = self.scroll_handle.bounds();
