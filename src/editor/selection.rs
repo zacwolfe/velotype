@@ -1106,10 +1106,15 @@ mod tests {
 
     #[test]
     fn cross_block_cut_writes_markdown_deletes_range_and_undo_restores() {
-        let mut cx = TestAppContext::single();
-        init_editor_test_app(&mut cx);
+        // Keep the root context under its own name. `add_window_view` hands back
+        // a `&'static mut VisualTestContext` that gpui boxes and frees from an
+        // `on_quit` callback, so calling `quit()` on *that* context drops the box
+        // `self` lives in and then reads `self.app` from freed memory (SIGSEGV).
+        // `#[gpui::test]` quits the root context, and so must this test.
+        let mut app_cx = TestAppContext::single();
+        init_editor_test_app(&mut app_cx);
         let original = "alpha\n\nbeta\n\ngamma";
-        let (editor, cx) = cx.add_window_view({
+        let (editor, cx) = app_cx.add_window_view({
             let original = original.to_string();
             move |_window, cx| Editor::from_markdown(cx, original.clone(), None)
         });
@@ -1151,7 +1156,7 @@ mod tests {
                 Some("pha\n\nbeta\n\nga")
             );
         });
-        cx.quit();
+        app_cx.quit();
     }
 
     const TABLE_DOC: &str = "alpha\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\ngamma";
