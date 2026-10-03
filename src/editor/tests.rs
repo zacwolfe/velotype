@@ -2802,6 +2802,23 @@ async fn fresh_edit_clears_pending_redo_history(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn source_mode_round_trip_does_not_escape_intraword_underscores(cx: &mut TestAppContext) {
+    let markdown =
+        "# my_module\n\nCall `do_it` via my_fn_v2 in snake_case_file.rs\n\n- list_item".to_string();
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown.clone(), None));
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.document.markdown_text(cx), markdown);
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+        assert_eq!(editor.document.raw_source_text(cx), markdown);
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Rendered));
+        assert_eq!(editor.document.markdown_text(cx), markdown);
+    });
+}
+
+#[gpui::test]
 async fn toggle_view_mode_preserves_paragraph_caret_position(cx: &mut TestAppContext) {
     let editor = cx.new(|cx| Editor::from_markdown(cx, "alpha\n\nbeta".to_string(), None));
 

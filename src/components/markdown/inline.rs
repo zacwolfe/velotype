@@ -1684,6 +1684,8 @@ fn parse_until(
                 _ => {
                     matches_sequence(tokens, index, &end_delim.close())
                         && can_close_emphasis(tokens, index)
+                        && (!is_underscore_delimiter(*end_delim)
+                            || can_close_underscore(tokens, index))
                 }
             };
 
@@ -2738,11 +2740,17 @@ fn match_open_delimiter(tokens: &[CharToken], index: usize) -> Option<Delimiter>
         Some(Delimiter::SubscriptMarkdown)
     } else if matches_sequence(tokens, index, "**") && can_open_emphasis(tokens, index, 2) {
         Some(Delimiter::BoldMarkdown { marker: '*' })
-    } else if matches_sequence(tokens, index, "__") && can_open_emphasis(tokens, index, 2) {
+    } else if matches_sequence(tokens, index, "__")
+        && can_open_emphasis(tokens, index, 2)
+        && can_open_underscore(tokens, index)
+    {
         Some(Delimiter::BoldMarkdown { marker: '_' })
     } else if matches_sequence(tokens, index, "*") && can_open_emphasis(tokens, index, 1) {
         Some(Delimiter::ItalicMarkdown { marker: '*' })
-    } else if matches_sequence(tokens, index, "_") && can_open_emphasis(tokens, index, 1) {
+    } else if matches_sequence(tokens, index, "_")
+        && can_open_emphasis(tokens, index, 1)
+        && can_open_underscore(tokens, index)
+    {
         Some(Delimiter::ItalicMarkdown { marker: '_' })
     } else if tokens[index].ch == '`' {
         // Count the run of consecutive backticks.
@@ -2821,7 +2829,9 @@ fn has_closing_delimiter(tokens: &[CharToken], index: usize, delimiter: Delimite
             continue;
         }
 
-        if matches_sequence(tokens, cursor, &close_str) {
+        if matches_sequence(tokens, cursor, &close_str)
+            && (!is_underscore_delimiter(delimiter) || can_close_underscore(tokens, cursor))
+        {
             // Emphasis spans must enclose at least one character; a close
             // sitting immediately after the open (e.g. `**` or `*` `*`) is an
             // empty span and is treated as literal text instead.
@@ -3037,13 +3047,35 @@ fn escape_literal_text_with_offset_map(text: &str) -> InlineMarkdownOffsetMap {
         }
 
         if text[index..].starts_with('_') {
+            let run_end = index + text[index..].bytes().take_while(|&b| b == b'_').count();
+            // An intraword `_` run (`snake_case`) can neither open nor close
+            // emphasis, so it is written verbatim. Runs touching the fragment
+            // edge stay escaped: a style marker may land beside them.
+            let intraword = text[..index]
+                .chars()
+                .next_back()
+                .is_some_and(is_intraword_char)
+                && text[run_end..]
+                    .chars()
+                    .next()
+                    .is_some_and(is_intraword_char);
             let start = escaped.len();
-            escaped.push_str("\\_");
-            markdown_to_visible.resize(escaped.len() + 1, index);
-            for local in 0..=escaped.len() - start {
-                markdown_to_visible[start + local] = index;
+            for _ in index..run_end {
+                if !intraword {
+                    escaped.push('\\');
+                }
+                escaped.push('_');
             }
-            index += 1;
+            markdown_to_visible.resize(escaped.len() + 1, index);
+            let per_char = if intraword { 1 } else { 2 };
+            for (offset, visible) in (index..run_end).enumerate() {
+                visible_to_markdown[visible] = start + offset * per_char;
+                for local in 0..per_char {
+                    markdown_to_visible[start + offset * per_char + local] = visible;
+                }
+            }
+            markdown_to_visible[escaped.len()] = run_end;
+            index = run_end;
             continue;
         }
 
@@ -3507,6 +3539,43 @@ fn can_close_emphasis(tokens: &[CharToken], index: usize) -> bool {
     index > 0 && !tokens[index - 1].ch.is_whitespace()
 }
 
+/// Character class that makes an adjacent `_` run intraword. Shared by the
+/// parser and the serializer so an unescaped intraword `_` written by
+/// [`escape_literal_text_with_offset_map`] always reparses as literal text.
+fn is_intraword_char(ch: char) -> bool {
+    ch.is_alphanumeric()
+}
+
+/// CommonMark forbids `_` emphasis from opening or closing inside a word, so
+/// `snake_case_name` is literal text. The whole delimiter run is considered:
+/// a run can open only when the character before it is not part of a word.
+fn can_open_underscore(tokens: &[CharToken], index: usize) -> bool {
+    let mut start = index;
+    while start > 0 && tokens[start - 1].ch == '_' {
+        start -= 1;
+    }
+    start == 0 || !is_intraword_char(tokens[start - 1].ch)
+}
+
+/// Mirror of [`can_open_underscore`]: a `_` run can close only when the
+/// character after it is not part of a word.
+fn can_close_underscore(tokens: &[CharToken], index: usize) -> bool {
+    let mut end = index;
+    while end < tokens.len() && tokens[end].ch == '_' {
+        end += 1;
+    }
+    tokens
+        .get(end)
+        .is_none_or(|token| !is_intraword_char(token.ch))
+}
+
+fn is_underscore_delimiter(delimiter: Delimiter) -> bool {
+    matches!(
+        delimiter,
+        Delimiter::BoldMarkdown { marker: '_' } | Delimiter::ItalicMarkdown { marker: '_' }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -3533,6 +3602,87 @@ mod tests {
 
         assert_eq!(tree.visible_text(), "a b");
         assert_eq!(tree.serialize_markdown(), "*a* **b**");
+    }
+
+    #[test]
+    fn intraword_underscores_are_literal_and_serialize_unescaped() {
+        for source in [
+            "snake_case_name",
+            "a__b__c",
+            "call my_fn_v2 now",
+            "path/typera_picgo/img.png",
+            "中文_中文_中文",
+        ] {
+            let tree = InlineTextTree::from_markdown(source);
+            assert_eq!(tree.visible_text(), source, "visible text for {source:?}");
+            assert!(
+                tree.fragments
+                    .iter()
+                    .all(|f| !f.style.italic && !f.style.bold),
+                "no emphasis for {source:?}"
+            );
+            assert_eq!(
+                tree.serialize_markdown(),
+                source,
+                "round trip for {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn previously_escaped_intraword_underscores_normalize_to_plain() {
+        let tree = InlineTextTree::from_markdown("snake\\_case");
+        assert_eq!(tree.visible_text(), "snake_case");
+        assert_eq!(tree.serialize_markdown(), "snake_case");
+    }
+
+    #[test]
+    fn underscore_emphasis_still_parses_at_word_boundaries() {
+        let tree = InlineTextTree::from_markdown("a _b_ c __d__ e");
+        assert_eq!(tree.visible_text(), "a b c d e");
+        assert_eq!(tree.serialize_markdown(), "a *b* c **d** e");
+
+        // A closer followed by a letter is intraword and cannot close.
+        let tree = InlineTextTree::from_markdown("_foo_bar_");
+        assert_eq!(tree.visible_text(), "foo_bar");
+        assert!(tree.fragments.iter().all(|f| f.style.italic));
+        assert_eq!(tree.serialize_markdown(), "*foo_bar*");
+    }
+
+    #[test]
+    fn boundary_underscores_stay_escaped() {
+        for source in ["_lead", "trail_", "x _y", "_", "__init__"] {
+            let tree = InlineTextTree::from_markdown(&source.replace('_', "\\_"));
+            assert_eq!(tree.visible_text(), source);
+            let serialized = tree.serialize_markdown();
+            let reparsed = InlineTextTree::from_markdown(&serialized);
+            assert_eq!(reparsed.visible_text(), source, "round trip for {source:?}");
+            assert!(
+                reparsed
+                    .fragments
+                    .iter()
+                    .all(|f| !f.style.italic && !f.style.bold)
+            );
+        }
+    }
+
+    #[test]
+    fn intraword_underscore_offset_maps_are_identity() {
+        let tree = InlineTextTree::from_markdown("a_b");
+        let map = tree.markdown_offset_map();
+        assert_eq!(map.markdown(), "a_b");
+        for offset in 0..=3 {
+            assert_eq!(map.visible_to_markdown_offset(offset), offset);
+            assert_eq!(map.markdown_to_visible_offset(offset), offset);
+        }
+
+        let tree = InlineTextTree::from_markdown("\\_b");
+        let map = tree.markdown_offset_map();
+        assert_eq!(map.markdown(), "\\_b");
+        assert_eq!(map.visible_to_markdown_offset(0), 0);
+        assert_eq!(map.visible_to_markdown_offset(1), 2);
+        assert_eq!(map.visible_to_markdown_offset(2), 3);
+        assert_eq!(map.markdown_to_visible_offset(2), 1);
     }
 
     #[test]
