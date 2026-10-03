@@ -1279,7 +1279,8 @@ mod tests {
     use crate::components::{
         AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
         NewWindow, NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile, QuitApplication,
-        SaveDocument, SelectLanguage, SelectTheme, ShowAbout,
+        SaveDocument, SelectLanguage, SelectNextWindow, SelectPreviousWindow, SelectTheme,
+        ShowAbout,
     };
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
@@ -1314,8 +1315,11 @@ mod tests {
         );
     }
 
-    // On macOS the menu bar is: [Velotype app menu, File, Export, Language, Theme, Workspace, Help]
-    // On other platforms:       [File, Export, Language, Theme, Workspace, Help]
+    // On macOS the menu bar is:
+    //   [Velotype app menu, File, Export, Language, Theme, Workspace, Window, Help]
+    // On other platforms:
+    //   [File, Export, Language, Theme, Workspace, Help]
+    // The macOS-only "Window" menu is inserted just before Help.
     #[cfg(target_os = "macos")]
     const EXPORT_IDX: usize = 2;
     #[cfg(not(target_os = "macos"))]
@@ -1337,7 +1341,10 @@ mod tests {
     const WORKSPACE_IDX: usize = 4;
 
     #[cfg(target_os = "macos")]
-    const HELP_IDX: usize = 6;
+    const WINDOW_IDX: usize = 6;
+
+    #[cfg(target_os = "macos")]
+    const HELP_IDX: usize = 7;
     #[cfg(not(target_os = "macos"))]
     const HELP_IDX: usize = 5;
 
@@ -1362,6 +1369,7 @@ mod tests {
                 "Language",
                 "Theme",
                 "Workspace",
+                "Window",
                 "Help"
             ]
         );
@@ -1381,12 +1389,12 @@ mod tests {
         // Open Recent File submenu location differs by platform.
         #[cfg(target_os = "macos")]
         assert_eq!(
-            submenu(&menus[1].items[3]).name.to_string(),
+            submenu(&menus[1].items[4]).name.to_string(),
             "Open Recent File"
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
-            submenu(&menus[0].items[3]).name.to_string(),
+            submenu(&menus[0].items[4]).name.to_string(),
             "Open Recent File"
         );
 
@@ -1400,7 +1408,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(action_name(&menus[0].items[0]), "Preferences");
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(action_name(&menus[0].items[4]), "Preferences");
+        assert_eq!(action_name(&menus[0].items[5]), "Preferences");
 
         assert_eq!(action_name(&menus[EXPORT_IDX].items[0]), "HTML");
         assert_eq!(action_name(&menus[EXPORT_IDX].items[1]), "PDF");
@@ -1423,12 +1431,12 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         assert_eq!(
-            submenu(&menus[1].items[3]).name.to_string(),
+            submenu(&menus[1].items[4]).name.to_string(),
             i18n_manager.strings().menu_open_recent_file.as_str()
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
-            submenu(&menus[0].items[3]).name.to_string(),
+            submenu(&menus[0].items[4]).name.to_string(),
             i18n_manager.strings().menu_open_recent_file.as_str()
         );
 
@@ -1440,7 +1448,11 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert_eq!(
             menu_names,
-            vec!["Velotype", "文件", "导出", "语言", "主题", "工作区", "帮助"]
+            // "Window" is intentionally not localized: AppKit detects the
+            // system window menu by its literal name.
+            vec![
+                "Velotype", "文件", "导出", "语言", "主题", "工作区", "Window", "帮助"
+            ]
         );
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
@@ -1507,12 +1519,12 @@ mod tests {
         let i18n_manager = I18nManager::default();
         let menus = build_menus(&theme_manager, &i18n_manager, &[]);
 
-        // On macOS: File menu is index 1, Open Recent is item 3 within it.
-        // On other platforms: File menu is index 0, Open Recent is item 3.
+        // On macOS: File menu is index 1, Open Recent is item 4 within it.
+        // On other platforms: File menu is index 0, Open Recent is item 4.
         #[cfg(target_os = "macos")]
-        let recent_menu = submenu(&menus[1].items[3]);
+        let recent_menu = submenu(&menus[1].items[4]);
         #[cfg(not(target_os = "macos"))]
-        let recent_menu = submenu(&menus[0].items[3]);
+        let recent_menu = submenu(&menus[0].items[4]);
 
         assert_eq!(recent_menu.name.to_string(), "Open Recent File");
         assert_eq!(recent_menu.items.len(), 1);
@@ -1536,9 +1548,9 @@ mod tests {
         let menus = build_menus(&theme_manager, &i18n_manager, &recent_files);
 
         #[cfg(target_os = "macos")]
-        let recent_menu = submenu(&menus[1].items[3]);
+        let recent_menu = submenu(&menus[1].items[4]);
         #[cfg(not(target_os = "macos"))]
-        let recent_menu = submenu(&menus[0].items[3]);
+        let recent_menu = submenu(&menus[0].items[4]);
 
         assert_eq!(recent_menu.items.len(), 2);
         assert_eq!(action_name(&recent_menu.items[0]), r"C:\docs\one.md");
@@ -1659,6 +1671,33 @@ mod tests {
             _ => panic!("expected check updates action item"),
         }
         assert!(matches!(help_items[1], MenuItem::Separator));
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn window_menu_sits_before_help_and_cycles_windows_on_macos() {
+        let theme_manager = ThemeManager::default();
+        let i18n_manager = I18nManager::default();
+        let menus = build_menus(&theme_manager, &i18n_manager, &[]);
+
+        // The name must stay the literal "Window" so AppKit registers it as the
+        // system window menu, and it must sit directly before Help.
+        assert_eq!(menus[WINDOW_IDX].name.to_string(), "Window");
+        assert_eq!(WINDOW_IDX + 1, HELP_IDX);
+
+        let window_items = &menus[WINDOW_IDX].items;
+        match &window_items[0] {
+            MenuItem::Action { action, .. } => {
+                assert!(action.as_any().is::<SelectNextWindow>());
+            }
+            _ => panic!("expected select next window action item"),
+        }
+        match &window_items[1] {
+            MenuItem::Action { action, .. } => {
+                assert!(action.as_any().is::<SelectPreviousWindow>());
+            }
+            _ => panic!("expected select previous window action item"),
+        }
     }
 
     #[test]
