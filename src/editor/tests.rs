@@ -2801,6 +2801,78 @@ async fn fresh_edit_clears_pending_redo_history(cx: &mut TestAppContext) {
     });
 }
 
+/// End-to-end acceptance path for the reported bug: open a real file from
+/// disk, press ctrl-tab into source mode, press ctrl-s, and compare the bytes
+/// written back. Uses the repository's own Markdown files as fixtures.
+#[gpui::test]
+async fn source_mode_save_adds_no_underscore_escapes_to_repo_markdown(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = [
+        "README.md",
+        "docs/README.zh-CN.md",
+        "test.md",
+        "CLAUDE.md",
+        "assets/showcase/showcase.md",
+    ];
+    let mut report = Vec::new();
+    // The repo docs keep identifiers inside code spans, which never hit the
+    // escaping path, so include prose mirroring the reported file shape too.
+    let prose = "# Notes on my_module\n\nThe snake_case_name config lives in user_settings.toml.\n\n- set max_retries to 3\n- see typera_picgo/img_01.png\n\n> quote with some_value\n\n1. step_one\n2. step_two\n\n| col_a | col_b |\n| --- | --- |\n| val_1 | val_2 |\n";
+    let mut inputs = fixtures
+        .iter()
+        .map(|fixture| {
+            (
+                fixture.to_string(),
+                fs::read_to_string(repo.join(fixture)).expect("read fixture"),
+            )
+        })
+        .collect::<Vec<_>>();
+    inputs.push(("<prose>".to_string(), prose.to_string()));
+    for (fixture, original) in inputs {
+        let path = temp_markdown_path("acceptance-source-save");
+        fs::write(&path, &original).expect("write fixture copy");
+
+        let (editor, vcx) = cx.add_window_view({
+            let path = path.clone();
+            let original = original.clone();
+            move |_window, cx| Editor::from_markdown(cx, original, Some(path))
+        });
+        redraw(vcx);
+        vcx.simulate_keystrokes("ctrl-tab");
+        redraw(vcx);
+        editor.read_with(vcx, |editor, _cx| {
+            assert!(matches!(editor.view_mode, ViewMode::Source));
+        });
+        vcx.simulate_keystrokes("ctrl-s");
+        redraw(vcx);
+        editor.read_with(vcx, |editor, _cx| {
+            assert!(!editor.document_dirty, "{fixture}: save did not complete");
+        });
+
+        let saved = fs::read_to_string(&path).expect("read saved file");
+        let _ = fs::remove_file(&path);
+        let before = original.matches("\\_").count();
+        let after = saved.matches("\\_").count();
+        report.push(format!("{fixture}: \\_ {before} -> {after}"));
+        assert!(
+            after <= before,
+            "{fixture}: source-mode save added {} underscore escapes",
+            after.saturating_sub(before)
+        );
+        if fixture == "<prose>" {
+            // Known, separate normalization: the serializer drops the final
+            // newline. Everything else, including every underscore, must match.
+            assert_eq!(
+                saved,
+                original.trim_end_matches('\n'),
+                "prose fixture must save unchanged apart from the final newline"
+            );
+        }
+    }
+    println!("acceptance report:\n{}", report.join("\n"));
+}
+
 #[gpui::test]
 async fn typing_identifiers_with_underscores_stays_literal(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
