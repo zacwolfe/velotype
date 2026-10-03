@@ -2808,13 +2808,16 @@ async fn fresh_edit_clears_pending_redo_history(cx: &mut TestAppContext) {
 async fn source_mode_save_adds_no_underscore_escapes_to_repo_markdown(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Tracked repository files: always present, so a missing one is a real error.
     let fixtures = [
         "README.md",
         "docs/README.zh-CN.md",
         "test.md",
-        "CLAUDE.md",
         "assets/showcase/showcase.md",
     ];
+    // Gitignored local files: exercised when present, skipped on a fresh clone
+    // or in CI where they do not exist.
+    let local_only_fixtures = ["CLAUDE.md"];
     let mut report = Vec::new();
     // The repo docs keep identifiers inside code spans, which never hit the
     // escaping path, so include prose mirroring the reported file shape too.
@@ -2828,6 +2831,11 @@ async fn source_mode_save_adds_no_underscore_escapes_to_repo_markdown(cx: &mut T
             )
         })
         .collect::<Vec<_>>();
+    inputs.extend(local_only_fixtures.iter().filter_map(|fixture| {
+        fs::read_to_string(repo.join(fixture))
+            .ok()
+            .map(|content| (fixture.to_string(), content))
+    }));
     inputs.push(("<prose>".to_string(), prose.to_string()));
     for (fixture, original) in inputs {
         let path = temp_markdown_path("acceptance-source-save");
