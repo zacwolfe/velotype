@@ -1,5 +1,7 @@
 //! Editable block runtime and block-local state transitions.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -186,6 +188,9 @@ pub struct Block {
     image_expand_requested: bool,
     pub(crate) html_details_open: bool,
     image_base_dir: Option<PathBuf>,
+    /// Memoized [`resolve_image_source`] results, see
+    /// [`Self::resolve_image_source_cached`].
+    resolved_image_cache: RefCell<HashMap<String, ImageResolvedSource>>,
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
     footnote_registry: Arc<FootnoteRegistry>,
@@ -282,6 +287,7 @@ impl Block {
             image_expand_requested: false,
             html_details_open: false,
             image_base_dir: None,
+            resolved_image_cache: RefCell::new(HashMap::new()),
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
             footnote_registry: Arc::default(),
@@ -327,6 +333,10 @@ impl Block {
     ) {
         if self.image_base_dir != base_dir {
             self.image_base_dir = base_dir;
+            // `resolve_image_source` resolves relative paths against
+            // `image_base_dir`, so a cache keyed only by `src` would keep
+            // serving the old `Local` path after a save-as or move.
+            self.resolved_image_cache.get_mut().clear();
         }
         if self.image_reference_definitions != image_reference_definitions {
             self.image_reference_definitions = image_reference_definitions;

@@ -18,7 +18,7 @@ use crate::components::{
     TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
     parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
     parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
-    render_mermaid_svg_for_display, resolve_image_source, style_for_node,
+    render_mermaid_svg_for_display, style_for_node,
 };
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
@@ -1057,7 +1057,7 @@ impl Block {
             alt: image.alt.clone(),
             src: src.clone(),
             title,
-            resolved_source: resolve_image_source(&src, self.image_base_dir()),
+            resolved_source: self.resolve_image_source_cached(&src, self.image_base_dir()),
         };
         let strings = cx.global::<I18nManager>().strings_arc();
         self.render_inline_sized_image(
@@ -1591,7 +1591,7 @@ impl Block {
             alt,
             src: src.to_string(),
             title: None,
-            resolved_source: resolve_image_source(src, self.image_base_dir()),
+            resolved_source: self.resolve_image_source_cached(src, self.image_base_dir()),
         };
         let strings = cx.global::<I18nManager>().strings_arc();
         let content = self.render_image_content(

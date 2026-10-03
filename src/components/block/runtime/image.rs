@@ -37,8 +37,37 @@ impl Block {
             alt: syntax.alt.clone(),
             src: resolved_target.src.clone(),
             title: resolved_target.title.clone(),
-            resolved_source: resolve_image_source(&resolved_target.src, base_dir),
+            resolved_source: self.resolve_image_source_cached(&resolved_target.src, base_dir),
         })
+    }
+
+    /// Resolves a `data:`/path/URL image source, memoized by the raw source
+    /// string.
+    ///
+    /// Reference-style and inline `<img>` sources resolve here at render
+    /// time rather than at parse time, because their definitions may be
+    /// declared after the image that uses them — so this runs on every
+    /// render. A `data:` URI can carry a multi-hundred-KB base64 payload;
+    /// re-decoding that on every caret-blink repaint was the dominant idle
+    /// CPU cost on image-heavy documents. Keyed by the exact source string,
+    /// so an edit that changes it simply misses and recomputes; capped so a
+    /// block that cycles through many distinct sources in one session can't
+    /// grow this without bound.
+    pub(crate) fn resolve_image_source_cached(
+        &self,
+        src: &str,
+        base_dir: Option<&Path>,
+    ) -> ImageResolvedSource {
+        if let Some(cached) = self.resolved_image_cache.borrow().get(src) {
+            return cached.clone();
+        }
+        let resolved = resolve_image_source(src, base_dir);
+        let mut cache = self.resolved_image_cache.borrow_mut();
+        if cache.len() >= 32 {
+            cache.clear();
+        }
+        cache.insert(src.to_string(), resolved.clone());
+        resolved
     }
 
     /// Looks up one normalized image reference label in this block's scope.

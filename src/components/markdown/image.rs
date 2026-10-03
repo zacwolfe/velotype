@@ -91,10 +91,12 @@ pub(crate) enum ImageResolvedSource {
 
 /// Ceiling on decoded `data:` URI payloads.
 ///
-/// A `data:` image is re-decoded on each render rather than memoized, which is
-/// fine for the icons and badges people actually inline (GPUI already pays an
-/// O(n) content hash per frame to key its own cache). This cap keeps a
-/// pathologically large inline blob from turning that into per-frame work.
+/// Blocks memoize each resolved source in `Block::resolve_image_source_cached`
+/// (keyed by the raw `src` string, cleared when `image_base_dir` changes), so
+/// a `data:` image is only decoded once per distinct source rather than on
+/// every render. This cap still bounds the one-time decode cost and the
+/// memory a pathologically large inline blob would otherwise hold in that
+/// cache.
 const MAX_INLINE_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 
 impl ImageSyntax {

@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::projection::{
@@ -11,8 +12,8 @@ use crate::components::markdown::inline::{
 };
 use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
-    Block, BlockKind, BlockRecord, DeleteBack, IndentBlock, Newline, TableCellPosition,
-    TableColumnAlignment, TableData,
+    Block, BlockKind, BlockRecord, DeleteBack, ImageResolvedSource, IndentBlock, Newline,
+    TableCellPosition, TableColumnAlignment, TableData,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
@@ -2588,6 +2589,62 @@ async fn focusing_rendered_image_does_not_auto_expand(cx: &mut TestAppContext) {
         assert!(!block.sync_image_focus_state(true));
         assert!(block.showing_rendered_image());
         assert!(!block.image_edit_expanded);
+    });
+}
+
+#[gpui::test]
+async fn changing_runtime_context_base_dir_invalidates_resolved_image_cache(
+    cx: &mut TestAppContext,
+) {
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("![diagram](assets/diagram.png)"),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        block.sync_render_cache();
+
+        block.set_runtime_context(
+            Some(PathBuf::from("/tmp/velotype-test-a")),
+            Arc::default(),
+            Arc::default(),
+            Arc::default(),
+        );
+        let first = block
+            .image_runtime()
+            .expect("standalone image runtime")
+            .resolved_source
+            .clone();
+        assert_eq!(
+            first,
+            ImageResolvedSource::Local(PathBuf::from("/tmp/velotype-test-a/assets/diagram.png"))
+        );
+
+        // A save-as or move to another directory must not keep serving the
+        // path resolved against the old `image_base_dir`: the cache is
+        // keyed only by `src`, so it has to be invalidated whenever
+        // `base_dir` changes.
+        block.set_runtime_context(
+            Some(PathBuf::from("/tmp/velotype-test-b")),
+            Arc::default(),
+            Arc::default(),
+            Arc::default(),
+        );
+        let second = block
+            .image_runtime()
+            .expect("standalone image runtime")
+            .resolved_source
+            .clone();
+        assert_eq!(
+            second,
+            ImageResolvedSource::Local(PathBuf::from("/tmp/velotype-test-b/assets/diagram.png"))
+        );
+        assert_ne!(first, second);
     });
 }
 
