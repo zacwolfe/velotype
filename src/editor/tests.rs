@@ -2802,6 +2802,28 @@ async fn fresh_edit_clears_pending_redo_history(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn typing_identifiers_with_underscores_stays_literal(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, String::new(), None));
+    redraw(cx);
+
+    // Typed one keystroke at a time, so every intermediate state (`my_`,
+    // `my_var_`, ...) is reparsed: none may turn `_var_` into italics.
+    for ch in "my_var_name and _private_ x".chars() {
+        cx.simulate_input(&ch.to_string());
+        redraw(cx);
+    }
+
+    editor.read_with(cx, |editor, cx| {
+        let markdown = editor.document.markdown_text(cx);
+        assert_eq!(markdown, "my_var_name and *private* x");
+        let block = editor.document.visible_blocks()[0].entity.read(cx);
+        assert_eq!(block.display_text(), "my_var_name and private x");
+    });
+}
+
+#[gpui::test]
 async fn source_mode_round_trip_does_not_escape_intraword_underscores(cx: &mut TestAppContext) {
     let markdown =
         "# my_module\n\nCall `do_it` via my_fn_v2 in snake_case_file.rs\n\n- list_item".to_string();

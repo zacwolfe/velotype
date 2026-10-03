@@ -3685,6 +3685,113 @@ mod tests {
         assert_eq!(map.markdown_to_visible_offset(2), 1);
     }
 
+    /// Exhaustive check over short strings from an alphabet chosen to stress
+    /// underscore flanking: plain text written into the tree must serialize to
+    /// markdown that (a) reparses to the same unstyled text and (b) renders as
+    /// the same literal text under pulldown-cmark, which drives HTML export.
+    #[test]
+    fn literal_text_with_underscores_round_trips_exhaustively() {
+        use pulldown_cmark::{Event, Parser};
+
+        let alphabet = ['a', '_', ' ', '*', '中', '.', '1'];
+        let mut checked = 0usize;
+        for len in 1..=5u32 {
+            let total = alphabet.len().pow(len);
+            for mut n in 0..total {
+                let mut text = String::new();
+                for _ in 0..len {
+                    text.push(alphabet[n % alphabet.len()]);
+                    n /= alphabet.len();
+                }
+                // Leading/trailing spaces and list/rule markers are block-level
+                // concerns outside the inline serializer.
+                if text.starts_with([' ', '*', '_', '1']) || text.ends_with(' ') {
+                    continue;
+                }
+
+                let tree = InlineTextTree::plain(text.clone());
+                let markdown = tree.serialize_markdown();
+                let reparsed = InlineTextTree::from_markdown(&markdown);
+                assert_eq!(
+                    reparsed.visible_text(),
+                    text,
+                    "reparse of {text:?} via {markdown:?}"
+                );
+                assert!(
+                    reparsed
+                        .fragments
+                        .iter()
+                        .all(|f| !f.style.italic && !f.style.bold),
+                    "styled reparse of {text:?} via {markdown:?}"
+                );
+
+                let mut rendered = String::new();
+                for event in Parser::new(&markdown) {
+                    match event {
+                        Event::Text(t) => rendered.push_str(&t),
+                        Event::SoftBreak | Event::HardBreak => rendered.push('\n'),
+                        Event::Start(_) | Event::End(_) => {}
+                        other => panic!("unexpected {other:?} for {text:?} via {markdown:?}"),
+                    }
+                }
+                assert!(
+                    !Parser::new(&markdown).any(|e| matches!(
+                        e,
+                        Event::Start(pulldown_cmark::Tag::Emphasis | pulldown_cmark::Tag::Strong)
+                    )),
+                    "pulldown-cmark sees emphasis in {markdown:?} for {text:?}"
+                );
+                assert_eq!(rendered, text, "pulldown-cmark text of {markdown:?}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 5000, "checked only {checked}");
+    }
+
+    /// Underscores beside style markers are the risky case: `a_` followed by
+    /// italic `b` must not become `a_*b*` and reparse differently. Checks every
+    /// pair of short fragments under every pairing of plain/italic/bold.
+    #[test]
+    fn underscores_next_to_styled_fragments_round_trip() {
+        let pieces = ["a", "_", "a_", "_a", "a_a", "中_", "__"];
+        let styles = [
+            InlineStyle::default(),
+            InlineStyle::default().with_italic(),
+            InlineStyle::default().with_bold(),
+        ];
+        for left in pieces {
+            for right in pieces {
+                for left_style in styles {
+                    for right_style in styles {
+                        let fragment = |text: &str, style| InlineFragment {
+                            text: text.to_string(),
+                            style,
+                            html_style: None,
+                            link: None,
+                            footnote: None,
+                            math: None,
+                            image: None,
+                        };
+                        let tree = InlineTextTree::from_fragments(vec![
+                            fragment("x", InlineStyle::default()),
+                            fragment(left, left_style),
+                            fragment(right, right_style),
+                            fragment("x", InlineStyle::default()),
+                        ]);
+                        let markdown = tree.serialize_markdown();
+                        let reparsed = InlineTextTree::from_markdown(&markdown);
+                        assert_eq!(
+                            reparsed.render_cache().spans(),
+                            tree.render_cache().spans(),
+                            "{left:?}/{left_style:?} + {right:?}/{right_style:?} via {markdown:?}"
+                        );
+                        assert_eq!(reparsed.visible_text(), tree.visible_text());
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn emphasis_delimiters_surrounded_by_spaces_stay_literal() {
         let tree = InlineTextTree::from_markdown("* a * _ b _");
