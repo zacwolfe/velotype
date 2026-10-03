@@ -1279,9 +1279,11 @@ mod tests {
     use crate::components::{
         AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
         NewWindow, NoRecentFiles, OpenFile, OpenPreferences, OpenRecentFile, QuitApplication,
-        SaveDocument, SelectLanguage, SelectNextWindow, SelectPreviousWindow, SelectTheme,
-        ShowAbout,
+        SaveDocument, SelectLanguage, SelectTheme, ShowAbout,
     };
+    // Only used by the macOS-only Window menu test.
+    #[cfg(target_os = "macos")]
+    use crate::components::{SelectNextWindow, SelectPreviousWindow};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
     use gpui::MenuItem;
