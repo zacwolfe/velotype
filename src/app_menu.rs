@@ -1451,7 +1451,14 @@ mod tests {
             // "Window" is intentionally not localized: AppKit detects the
             // system window menu by its literal name.
             vec![
-                "Velotype", "文件", "导出", "语言", "主题", "工作区", "Window", "帮助"
+                "Velotype",
+                "文件",
+                "导出",
+                "语言",
+                "主题",
+                "工作区",
+                "Window",
+                "帮助"
             ]
         );
         #[cfg(not(target_os = "macos"))]
