@@ -1312,6 +1312,7 @@ impl Editor {
             .id("workspace-parent-row")
             .h(px(WORKSPACE_NODE_HEIGHT))
             .w_full()
+            .flex_shrink_0()
             .overflow_hidden()
             .flex()
             .items_center()
@@ -1548,6 +1549,7 @@ impl Editor {
             .id(("workspace-node", stable_node_hash(&node.id)))
             .h(px(WORKSPACE_NODE_HEIGHT))
             .w_full()
+            .flex_shrink_0()
             .overflow_hidden()
             .flex()
             .items_center()
@@ -2015,7 +2017,7 @@ fn line_start_offset(source: &str, line: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Editor, WORKSPACE_PARENT_NODE_ID, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection,
+        Editor, WORKSPACE_NODE_HEIGHT, WORKSPACE_PARENT_NODE_ID, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection,
         WorkspaceState, WorkspaceTreeKind, build_outline_tree, find_and_load_dir,
         line_start_offset, prune_outline_state, read_dir_one_level,
         resolve_workspace_panel_width, restore_expanded_descendants, scan_workspace_dir,
@@ -2776,6 +2778,11 @@ mod tests {
             let bounds = handle
                 .bounds_for_item(index)
                 .expect("row bounds available after layout");
+            assert_eq!(
+                bounds.bottom() - bounds.top(),
+                gpui::px(WORKSPACE_NODE_HEIGHT),
+                "rows must keep their fixed height (flex shrink would collapse them)"
+            );
             let viewport = handle.bounds();
             let offset = handle.offset();
             let top = bounds.top() + offset.y;
