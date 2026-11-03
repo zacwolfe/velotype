@@ -212,6 +212,7 @@ impl Editor {
         self.pending_focus = Some(entity_id);
         self.active_entity_id = Some(entity_id);
         self.pending_scroll_active_block_into_view = true;
+        self.pending_scroll_target = None;
         // Default alignment; callers wanting another one set it after this.
         self.pending_scroll_align = super::ScrollAlign::Nearest;
     }
@@ -1293,6 +1294,7 @@ impl Editor {
         // A direct viewport scroll should stick, so cancel any queued pass that
         // would otherwise re-center the active block on the next frame.
         self.pending_scroll_active_block_into_view = false;
+        self.pending_scroll_target = None;
         self.pending_scroll_recheck_after_layout = false;
         self.bump_scrollbar_visibility(cx);
         cx.notify();
