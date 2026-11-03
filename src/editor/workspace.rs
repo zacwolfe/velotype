@@ -60,6 +60,17 @@ pub(super) struct WorkspaceTreeNode {
     children_loaded: bool,
 }
 
+/// One row the sidebar is currently painting, in DFS order. Used by keyboard
+/// navigation so up/down walk exactly the rows the user can see.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceVisibleRow {
+    id: String,
+    parent_id: Option<String>,
+    kind: WorkspaceTreeKind,
+    expanded: bool,
+    expandable: bool,
+}
+
 pub(super) struct WorkspaceState {
     pub(super) is_open: bool,
     files_section_open: bool,
@@ -74,6 +85,12 @@ pub(super) struct WorkspaceState {
     expanded: HashSet<String>,
     selected_file: Option<PathBuf>,
     selected_outline: Option<String>,
+    /// Sidebar section that owns the keyboard cursor. Kept separate from the
+    /// open-file/heading selections so arrow-key navigation can highlight a
+    /// row without opening it or moving the document caret.
+    keyboard_section: Option<WorkspaceSection>,
+    keyboard_file_node: Option<String>,
+    keyboard_outline_node: Option<String>,
     /// `None` means the user has never dragged the resize handle; the width
     /// then tracks the viewport automatically. Deliberately in-memory only.
     width: Option<f32>,
@@ -108,6 +125,9 @@ impl Default for WorkspaceState {
             expanded: HashSet::new(),
             selected_file: None,
             selected_outline: None,
+            keyboard_section: None,
+            keyboard_file_node: None,
+            keyboard_outline_node: None,
             width: None,
         }
     }
@@ -550,6 +570,261 @@ impl Editor {
         cx.notify();
     }
 
+    fn workspace_section_is_usable(&self, section: WorkspaceSection) -> bool {
+        match section {
+            WorkspaceSection::Files => {
+                self.workspace.files_section_open && self.workspace.file_tree.is_some()
+            }
+            WorkspaceSection::Outline => {
+                self.workspace.outline_section_open && !self.workspace.outline_tree.is_empty()
+            }
+        }
+    }
+
+    fn workspace_active_section(&self) -> Option<WorkspaceSection> {
+        self.workspace
+            .keyboard_section
+            .filter(|section| self.workspace_section_is_usable(*section))
+            .or_else(|| {
+                [WorkspaceSection::Files, WorkspaceSection::Outline]
+                    .into_iter()
+                    .find(|section| self.workspace_section_is_usable(*section))
+            })
+    }
+
+    fn workspace_visible_rows(&self, section: WorkspaceSection) -> Vec<WorkspaceVisibleRow> {
+        let mut rows = Vec::new();
+        match section {
+            WorkspaceSection::Files => {
+                if let Some(root) = self.workspace.file_tree.as_ref() {
+                    collect_workspace_visible_rows(
+                        std::slice::from_ref(root),
+                        &self.workspace.expanded,
+                        None,
+                        &mut rows,
+                    );
+                }
+            }
+            WorkspaceSection::Outline => {
+                collect_workspace_visible_rows(
+                    &self.workspace.outline_tree,
+                    &self.workspace.expanded,
+                    None,
+                    &mut rows,
+                );
+            }
+        }
+        rows
+    }
+
+    fn workspace_keyboard_node(&self, section: WorkspaceSection) -> Option<String> {
+        match section {
+            WorkspaceSection::Files => self.workspace.keyboard_file_node.clone(),
+            WorkspaceSection::Outline => self.workspace.keyboard_outline_node.clone(),
+        }
+    }
+
+    fn set_workspace_keyboard_node(&mut self, section: WorkspaceSection, id: String) {
+        match section {
+            WorkspaceSection::Files => self.workspace.keyboard_file_node = Some(id),
+            WorkspaceSection::Outline => self.workspace.keyboard_outline_node = Some(id),
+        }
+    }
+
+    /// Initial cursor for a section: the open file / selected heading when it is
+    /// visible, otherwise the first row.
+    fn workspace_default_cursor(
+        &self,
+        section: WorkspaceSection,
+        rows: &[WorkspaceVisibleRow],
+    ) -> Option<String> {
+        let selected = match section {
+            WorkspaceSection::Files => self.workspace.selected_file.as_ref().and_then(|path| {
+                rows.iter()
+                    .find(|row| {
+                        matches!(&row.kind, WorkspaceTreeKind::MarkdownFile(row_path) if row_path == path)
+                    })
+                    .map(|row| row.id.clone())
+            }),
+            WorkspaceSection::Outline => self.workspace.selected_outline.clone(),
+        };
+        selected
+            .filter(|id| rows.iter().any(|row| row.id == *id))
+            .or_else(|| rows.first().map(|row| row.id.clone()))
+    }
+
+    fn focus_workspace_node(
+        &mut self,
+        section: WorkspaceSection,
+        node_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.keyboard_section = Some(section);
+        self.set_workspace_keyboard_node(section, node_id);
+        window.focus(&self.workspace_focus_handle);
+        cx.notify();
+    }
+
+    fn focus_workspace_section(
+        &mut self,
+        section: WorkspaceSection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace.keyboard_section = Some(section);
+        if self.workspace_keyboard_node(section).is_none()
+            || !self
+                .workspace_visible_rows(section)
+                .iter()
+                .any(|row| Some(&row.id) == self.workspace_keyboard_node(section).as_ref())
+        {
+            let rows = self.workspace_visible_rows(section);
+            if let Some(cursor) = self.workspace_default_cursor(section, &rows) {
+                self.set_workspace_keyboard_node(section, cursor);
+            }
+        }
+        window.focus(&self.workspace_focus_handle);
+        cx.notify();
+    }
+
+    pub(super) fn on_workspace_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        if modifiers.shift
+            || modifiers.control
+            || modifiers.platform
+            || modifiers.alt
+            || modifiers.function
+        {
+            return;
+        }
+
+        let key = event.keystroke.key.as_str();
+        if !matches!(key, "up" | "down" | "left" | "right") {
+            return;
+        }
+        if self.workspace_handle_navigation_key(key, cx) {
+            cx.stop_propagation();
+        }
+    }
+
+    /// Applies one unmodified arrow key to the active sidebar tree. Split from
+    /// the GPUI event handler so it can be tested without a window.
+    pub(super) fn workspace_handle_navigation_key(
+        &mut self,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(section) = self.workspace_active_section() else {
+            return false;
+        };
+        let rows = self.workspace_visible_rows(section);
+        if rows.is_empty() {
+            return false;
+        }
+        self.workspace.keyboard_section = Some(section);
+
+        let current = self
+            .workspace_keyboard_node(section)
+            .and_then(|id| rows.iter().position(|row| row.id == id));
+
+        match key {
+            "up" => {
+                match current {
+                    Some(0) => {}
+                    Some(index) => {
+                        self.set_workspace_keyboard_node(section, rows[index - 1].id.clone());
+                        cx.notify();
+                    }
+                    None => {
+                        self.set_workspace_keyboard_node(
+                            section,
+                            rows.last().expect("rows is non-empty").id.clone(),
+                        );
+                        cx.notify();
+                    }
+                }
+                true
+            }
+            "down" => {
+                match current {
+                    Some(index) if index + 1 < rows.len() => {
+                        self.set_workspace_keyboard_node(section, rows[index + 1].id.clone());
+                        cx.notify();
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.set_workspace_keyboard_node(
+                            section,
+                            rows.first().expect("rows is non-empty").id.clone(),
+                        );
+                        cx.notify();
+                    }
+                }
+                true
+            }
+            "right" => {
+                let Some(index) = current else {
+                    self.set_workspace_keyboard_node(
+                        section,
+                        rows.first().expect("rows is non-empty").id.clone(),
+                    );
+                    cx.notify();
+                    return true;
+                };
+                let row = rows[index].clone();
+                if row.expandable && !row.expanded {
+                    let dir = match &row.kind {
+                        WorkspaceTreeKind::Directory(path) => Some(path.as_path()),
+                        _ => None,
+                    };
+                    self.toggle_workspace_node(&row.id, dir, cx);
+                }
+                // After expanding, or when already expanded, step into the
+                // first visible child. This makes Right literally descend one
+                // level rather than only toggling the disclosure arrow.
+                let expanded_rows = self.workspace_visible_rows(section);
+                let first_child = expanded_rows
+                    .get(index + 1)
+                    .filter(|child| child.parent_id.as_deref() == Some(row.id.as_str()))
+                    .map(|child| child.id.clone());
+                if let Some(child) = first_child {
+                    self.set_workspace_keyboard_node(section, child);
+                    cx.notify();
+                }
+                true
+            }
+            "left" => {
+                let Some(index) = current else {
+                    self.set_workspace_keyboard_node(
+                        section,
+                        rows.first().expect("rows is non-empty").id.clone(),
+                    );
+                    cx.notify();
+                    return true;
+                };
+                let row = rows[index].clone();
+                if row.expanded && row.expandable {
+                    let dir = match &row.kind {
+                        WorkspaceTreeKind::Directory(path) => Some(path.as_path()),
+                        _ => None,
+                    };
+                    self.toggle_workspace_node(&row.id, dir, cx);
+                } else if let Some(parent) = row.parent_id {
+                    self.set_workspace_keyboard_node(section, parent);
+                    cx.notify();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Moves the caret to the document position of an outline heading, which
     /// also scrolls it into view via the existing pending-scroll path.
     pub(super) fn jump_to_outline_heading(&mut self, line: usize, cx: &mut Context<Self>) -> bool {
@@ -625,6 +900,7 @@ impl Editor {
 
         let resize_max_width = workspace_panel_drag_max_width(viewport_width);
         let resize_editor = editor.clone();
+        let workspace_focus_handle = self.workspace_focus_handle.clone();
 
         Some(
             div()
@@ -638,6 +914,9 @@ impl Editor {
                 .bg(c.dialog_surface)
                 .border_r(px(d.dialog_border_width))
                 .border_color(c.dialog_border)
+                .track_focus(&workspace_focus_handle)
+                .key_context("Workspace")
+                .on_key_down(cx.listener(Self::on_workspace_key_down))
                 .children(section_children)
                 .child(
                     div()
@@ -746,8 +1025,9 @@ impl Editor {
                     .child(arrow),
             )
             .child(label)
-            .on_click(move |_event, _window, cx| {
+            .on_click(move |_event, window, cx| {
                 let _ = header_editor.update(cx, |editor, cx| {
+                    editor.focus_workspace_section(section, window, cx);
                     editor.toggle_workspace_section(section, cx);
                 });
             })
@@ -810,7 +1090,13 @@ impl Editor {
             .flex()
             .flex_col()
             .children(parent_row)
-            .children(self.render_workspace_nodes(std::slice::from_ref(root), 0, theme, editor))
+            .children(self.render_workspace_nodes(
+                std::slice::from_ref(root),
+                0,
+                WorkspaceSection::Files,
+                theme,
+                editor,
+            ))
             .into_any_element()
     }
 
@@ -882,7 +1168,13 @@ impl Editor {
             .w_full()
             .flex()
             .flex_col()
-            .children(self.render_workspace_nodes(&self.workspace.outline_tree, 0, theme, editor))
+            .children(self.render_workspace_nodes(
+                &self.workspace.outline_tree,
+                0,
+                WorkspaceSection::Outline,
+                theme,
+                editor,
+            ))
             .into_any_element()
     }
 
@@ -927,16 +1219,18 @@ impl Editor {
         &self,
         nodes: &[WorkspaceTreeNode],
         depth: usize,
+        section: WorkspaceSection,
         theme: &Theme,
         editor: &WeakEntity<Editor>,
     ) -> Vec<AnyElement> {
         let mut elements = Vec::new();
         for node in nodes {
-            elements.push(self.render_workspace_node(node, depth, theme, editor));
+            elements.push(self.render_workspace_node(node, depth, section, theme, editor));
             if !node.children.is_empty() && self.workspace.expanded.contains(&node.id) {
                 elements.extend(self.render_workspace_nodes(
                     &node.children,
                     depth + 1,
+                    section,
                     theme,
                     editor,
                 ));
@@ -949,6 +1243,7 @@ impl Editor {
         &self,
         node: &WorkspaceTreeNode,
         depth: usize,
+        section: WorkspaceSection,
         theme: &Theme,
         editor: &WeakEntity<Editor>,
     ) -> AnyElement {
@@ -962,7 +1257,17 @@ impl Editor {
             WorkspaceTreeKind::Directory(_) => !node.children_loaded || !node.children.is_empty(),
             _ => !node.children.is_empty(),
         };
-        let selected = match &node.kind {
+        let keyboard_selected = self.workspace.keyboard_section == Some(section)
+            && match section {
+                WorkspaceSection::Files => {
+                    self.workspace.keyboard_file_node.as_deref() == Some(node.id.as_str())
+                }
+                WorkspaceSection::Outline => {
+                    self.workspace.keyboard_outline_node.as_deref() == Some(node.id.as_str())
+                }
+            };
+        let selected = keyboard_selected
+            || match &node.kind {
             WorkspaceTreeKind::MarkdownFile(path) => {
                 self.workspace.selected_file.as_deref() == Some(path.as_path())
             }
@@ -1021,8 +1326,9 @@ impl Editor {
         if expandable {
             arrow_el = arrow_el.cursor_pointer().on_mouse_down(
                 MouseButton::Left,
-                move |_event, _window, cx| {
+                move |_event, window, cx| {
                     let _ = arrow_editor.update(cx, |editor, cx| {
+                        editor.focus_workspace_node(section, arrow_node_id.clone(), window, cx);
                         editor.toggle_workspace_node(&arrow_node_id, arrow_dir.as_deref(), cx);
                     });
                     cx.stop_propagation();
@@ -1094,18 +1400,21 @@ impl Editor {
             .on_click(move |_event, window, cx| {
                 let node_id = node_id.clone();
                 let click_kind = click_kind.clone();
-                let _ = click_editor.update(cx, |editor, cx| match click_kind {
-                    WorkspaceTreeKind::Directory(path) => {
-                        if expandable {
-                            editor.toggle_workspace_node(&node_id, Some(&path), cx);
+                let _ = click_editor.update(cx, |editor, cx| {
+                    editor.focus_workspace_node(section, node_id.clone(), window, cx);
+                    match click_kind {
+                        WorkspaceTreeKind::Directory(path) => {
+                            if expandable {
+                                editor.toggle_workspace_node(&node_id, Some(&path), cx);
+                            }
                         }
-                    }
-                    WorkspaceTreeKind::MarkdownFile(path) => {
-                        editor.open_workspace_file(path, window, cx);
-                    }
-                    WorkspaceTreeKind::Heading { line, .. } => {
-                        editor.select_outline_node(node_id, cx);
-                        editor.jump_to_outline_heading(line, cx);
+                        WorkspaceTreeKind::MarkdownFile(path) => {
+                            editor.open_workspace_file(path, window, cx);
+                        }
+                        WorkspaceTreeKind::Heading { line, .. } => {
+                            editor.select_outline_node(node_id, cx);
+                            editor.jump_to_outline_heading(line, cx);
+                        }
                     }
                 });
             })
@@ -1353,6 +1662,36 @@ fn collect_watch_targets(
             files.insert(path.clone());
         }
         WorkspaceTreeKind::Heading { .. } => {}
+    }
+}
+
+fn collect_workspace_visible_rows(
+    nodes: &[WorkspaceTreeNode],
+    expanded: &HashSet<String>,
+    parent_id: Option<&str>,
+    rows: &mut Vec<WorkspaceVisibleRow>,
+) {
+    for node in nodes {
+        let is_expanded = expanded.contains(&node.id);
+        let expandable = match &node.kind {
+            WorkspaceTreeKind::Directory(_) => !node.children_loaded || !node.children.is_empty(),
+            _ => !node.children.is_empty(),
+        };
+        rows.push(WorkspaceVisibleRow {
+            id: node.id.clone(),
+            parent_id: parent_id.map(str::to_string),
+            kind: node.kind.clone(),
+            expanded: is_expanded,
+            expandable,
+        });
+        if is_expanded && !node.children.is_empty() {
+            collect_workspace_visible_rows(
+                &node.children,
+                expanded,
+                Some(node.id.as_str()),
+                rows,
+            );
+        }
     }
 }
 
@@ -2103,6 +2442,143 @@ mod tests {
         });
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn files_keyboard_navigation_walks_rows_and_descends_levels(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-keyboard-files-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join("nested")).expect("create dirs");
+        fs::write(root.join("a.md"), "a").expect("write md");
+        fs::write(root.join("nested").join("b.md"), "b").expect("write nested md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+        });
+
+        let root_id = format!("file:{}", root.to_string_lossy());
+        let nested_id = format!("file:{}", root.join("nested").to_string_lossy());
+        let nested_file_id = format!("file:{}", root.join("nested").join("b.md").to_string_lossy());
+
+        editor.update(cx, |editor, cx| {
+            editor.workspace.keyboard_section = Some(WorkspaceSection::Files);
+            editor.workspace.keyboard_file_node = Some(root_id.clone());
+
+            assert!(editor.workspace_handle_navigation_key("down", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(nested_id.as_str())
+            );
+
+            // Right expands the collapsed directory and lands on its first
+            // child, so one press descends a level.
+            assert!(editor.workspace_handle_navigation_key("right", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(nested_file_id.as_str())
+            );
+
+            // Left on a leaf ascends to its parent.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(nested_id.as_str())
+            );
+
+            // Left on the expanded directory collapses it without moving.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(nested_id.as_str())
+            );
+
+            // Collapsed now, so Left ascends to the root.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(root_id.as_str())
+            );
+
+            // Up at the first row is a handled no-op, not a wrap.
+            assert!(editor.workspace_handle_navigation_key("up", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(root_id.as_str())
+            );
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn outline_keyboard_navigation_walks_rows_and_descends_levels(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "# A\n## B\n### C\n# D".to_string(), None)
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.sync_workspace_models(cx);
+            editor.workspace.expanded.insert("outline:0".to_string());
+            // Document serialization inserts blank lines between blocks, so
+            // the headings land on lines 0, 2, 4, and 6.
+            editor.workspace.expanded.insert("outline:2".to_string());
+            editor.workspace.keyboard_section = Some(WorkspaceSection::Outline);
+            editor.workspace.keyboard_outline_node = Some("outline:0".to_string());
+
+            assert!(editor.workspace_handle_navigation_key("down", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:2")
+            );
+            assert!(editor.workspace_handle_navigation_key("down", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:4")
+            );
+            assert!(editor.workspace_handle_navigation_key("down", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:6")
+            );
+
+            assert!(editor.workspace_handle_navigation_key("up", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:4")
+            );
+
+            // Left from C ascends to B.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:2")
+            );
+
+            // B is expanded, so Left collapses it and stays put.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:2")
+            );
+
+            // Collapsed B now ascends to A.
+            assert!(editor.workspace_handle_navigation_key("left", cx));
+            assert_eq!(
+                editor.workspace.keyboard_outline_node.as_deref(),
+                Some("outline:0")
+            );
+        });
     }
 
     #[gpui::test]
