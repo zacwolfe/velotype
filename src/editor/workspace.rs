@@ -26,6 +26,9 @@ const WORKSPACE_PANEL_DRAG_MIN_WIDTH: f32 = 180.0;
 const WORKSPACE_PANEL_DRAG_MAX_WIDTH: f32 = 720.0;
 const WORKSPACE_NODE_HEIGHT: f32 = 28.0;
 const WORKSPACE_NODE_INDENT: f32 = 18.0;
+// Vertical padding of each section's scrollable body; scroll-into-view math
+// below assumes rows sit directly under this top padding.
+const WORKSPACE_SECTION_PADDING_Y: f32 = 10.0;
 const WORKSPACE_PARENT_NODE_ID: &str = "workspace-parent-row";
 // Loading is lazy (one directory level at a time), which removes the need
 // for a depth or whole-tree cap. A single directory holding tens of
@@ -979,9 +982,10 @@ impl Editor {
         true
     }
 
-    /// Flat index of the keyboard cursor within a section's visible rows,
-    /// which is exactly the order the section's rows are rendered (and thus
-    /// the order its scroll container lays children out).
+    /// Flat index of the keyboard cursor within a section's visible rows.
+    /// Rows are rendered in this same order (parent row first, then a depth-
+    /// first flattening), and every row is a fixed `WORKSPACE_NODE_HEIGHT` tall,
+    /// so the index maps directly to a content-space Y position.
     fn workspace_cursor_row_index(&self, section: WorkspaceSection) -> Option<usize> {
         let rows = self.workspace_visible_rows(section);
         let node_id = self.workspace_keyboard_node(section)?;
@@ -989,14 +993,39 @@ impl Editor {
     }
 
     /// Scrolls a section's viewport so the highlighted row is visible.
+    ///
+    /// Uses pixel math on the scroll handle rather than `scroll_to_item`: the
+    /// rows are fixed-height and stacked with no gap, so a row's content-space
+    /// Y is deterministic from its index. This avoids flattening the rows into
+    /// direct flex children of the scroll container, which visibly regressed
+    /// row spacing and could collapse content.
     fn scroll_workspace_cursor_into_view(&self, section: WorkspaceSection) {
         let Some(index) = self.workspace_cursor_row_index(section) else {
             return;
         };
-        match section {
-            WorkspaceSection::Files => self.workspace_files_scroll_handle.scroll_to_item(index),
-            WorkspaceSection::Outline => self.workspace_outline_scroll_handle.scroll_to_item(index),
+        let handle = match section {
+            WorkspaceSection::Files => &self.workspace_files_scroll_handle,
+            WorkspaceSection::Outline => &self.workspace_outline_scroll_handle,
+        };
+
+        let viewport = handle.bounds();
+        let max_offset = handle.max_offset().height.max(px(0.0));
+        let mut offset = handle.offset();
+
+        // The rows sit directly under the body's top padding, so the cursor
+        // row's content-space edges are a fixed multiple of the row height.
+        let row_top = WORKSPACE_SECTION_PADDING_Y + WORKSPACE_NODE_HEIGHT * index as f32;
+        let row_bottom = row_top + WORKSPACE_NODE_HEIGHT;
+        let top_screen = viewport.top() + px(row_top) + offset.y;
+        let bottom_screen = viewport.top() + px(row_bottom) + offset.y;
+
+        if top_screen < viewport.top() {
+            offset.y = -px(row_top);
+        } else if bottom_screen > viewport.bottom() {
+            offset.y = viewport.bottom() - viewport.top() - px(row_bottom);
         }
+        offset.y = offset.y.min(px(0.0)).max(-max_offset);
+        handle.set_offset(offset);
     }
 
     /// Moves the caret to the document position of an outline heading, which
@@ -1165,7 +1194,7 @@ impl Editor {
         label: String,
         is_open: bool,
         scroll_id: &'static str,
-        body: Option<Vec<AnyElement>>,
+        body: Option<AnyElement>,
         theme: &Theme,
         editor: &WeakEntity<Editor>,
     ) -> Vec<AnyElement> {
@@ -1222,15 +1251,13 @@ impl Editor {
             elements.push(
                 div()
                     .id(scroll_id)
-                    .flex()
-                    .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .track_scroll(scroll_handle)
                     .px(px(8.0))
-                    .py(px(10.0))
-                    .children(body)
+                    .py(px(WORKSPACE_SECTION_PADDING_Y))
+                    .child(body)
                     .into_any_element(),
             );
         }
@@ -1242,49 +1269,47 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         editor: &WeakEntity<Editor>,
-    ) -> Vec<AnyElement> {
+    ) -> AnyElement {
         if self.workspace.root.is_none() {
-            return vec![self.render_workspace_empty_state(
+            return self.render_workspace_empty_state(
                 &strings.workspace_no_file_title,
                 &strings.workspace_no_file_message,
                 theme,
-            )];
+            );
         }
 
         if let Some(error) = self.workspace.file_error.as_ref() {
-            return vec![self.render_workspace_empty_state(
+            return self.render_workspace_empty_state(
                 &strings.workspace_scan_failed_title,
                 error,
                 theme,
-            )];
+            );
         }
 
         let Some(root) = self.workspace.file_tree.as_ref() else {
-            return vec![self.render_workspace_empty_state(
-                "",
-                &strings.workspace_empty_files,
-                theme,
-            )];
+            return self.render_workspace_empty_state("", &strings.workspace_empty_files, theme);
         };
 
-        let mut rows = Vec::new();
-        if self
+        let parent_row = self
             .workspace
             .root
             .as_deref()
             .and_then(Path::parent)
-            .is_some()
-        {
-            rows.push(self.render_workspace_parent_row(theme, editor));
-        }
-        rows.extend(self.render_workspace_nodes(
-            std::slice::from_ref(root),
-            0,
-            WorkspaceSection::Files,
-            theme,
-            editor,
-        ));
-        rows
+            .map(|_| self.render_workspace_parent_row(theme, editor));
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(parent_row)
+            .children(self.render_workspace_nodes(
+                std::slice::from_ref(root),
+                0,
+                WorkspaceSection::Files,
+                theme,
+                editor,
+            ))
+            .into_any_element()
     }
 
     /// The synthetic "navigate to parent directory" row prepended above the
@@ -1311,7 +1336,6 @@ impl Editor {
             .id("workspace-parent-row")
             .h(px(WORKSPACE_NODE_HEIGHT))
             .w_full()
-            .flex_shrink_0()
             .overflow_hidden()
             .flex()
             .items_center()
@@ -1368,22 +1392,27 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         editor: &WeakEntity<Editor>,
-    ) -> Vec<AnyElement> {
+    ) -> AnyElement {
         if self.workspace.outline_tree.is_empty() {
-            return vec![self.render_workspace_empty_state(
+            return self.render_workspace_empty_state(
                 "",
                 &strings.workspace_empty_outline,
                 theme,
-            )];
+            );
         }
 
-        self.render_workspace_nodes(
-            &self.workspace.outline_tree,
-            0,
-            WorkspaceSection::Outline,
-            theme,
-            editor,
-        )
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .children(self.render_workspace_nodes(
+                &self.workspace.outline_tree,
+                0,
+                WorkspaceSection::Outline,
+                theme,
+                editor,
+            ))
+            .into_any_element()
     }
 
     fn render_workspace_empty_state(
@@ -1548,7 +1577,6 @@ impl Editor {
             .id(("workspace-node", stable_node_hash(&node.id)))
             .h(px(WORKSPACE_NODE_HEIGHT))
             .w_full()
-            .flex_shrink_0()
             .overflow_hidden()
             .flex()
             .items_center()
@@ -2016,7 +2044,8 @@ fn line_start_offset(source: &str, line: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Editor, WORKSPACE_NODE_HEIGHT, WORKSPACE_PARENT_NODE_ID, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection,
+        Editor, WORKSPACE_NODE_HEIGHT, WORKSPACE_PARENT_NODE_ID, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR,
+        WORKSPACE_SECTION_PADDING_Y, WorkspaceSection,
         WorkspaceState, WorkspaceTreeKind, build_outline_tree, find_and_load_dir,
         line_start_offset, prune_outline_state, read_dir_one_level,
         resolve_workspace_panel_width, restore_expanded_descendants, scan_workspace_dir,
@@ -2774,22 +2803,16 @@ mod tests {
             assert_eq!(index, rows.len() - 1, "cursor should sit on the last row");
 
             let handle = &editor.workspace_files_scroll_handle;
-            let bounds = handle
-                .bounds_for_item(index)
-                .expect("row bounds available after layout");
-            assert_eq!(
-                bounds.bottom() - bounds.top(),
-                gpui::px(WORKSPACE_NODE_HEIGHT),
-                "rows must keep their fixed height (flex shrink would collapse them)"
-            );
             let viewport = handle.bounds();
             let offset = handle.offset();
-            let top = bounds.top() + offset.y;
-            let bottom = bounds.bottom() + offset.y;
+            let row_top = WORKSPACE_SECTION_PADDING_Y + WORKSPACE_NODE_HEIGHT * index as f32;
+            let row_bottom = row_top + WORKSPACE_NODE_HEIGHT;
+            let top = viewport.top() + gpui::px(row_top) + offset.y;
+            let bottom = viewport.top() + gpui::px(row_bottom) + offset.y;
             assert!(
                 top >= viewport.top() - gpui::px(1.0)
                     && bottom <= viewport.bottom() + gpui::px(1.0),
-                "selected row {bounds:?} (offset {offset:?}) is not inside viewport {viewport:?}"
+                "selected row {index} (offset {offset:?}) is not inside viewport {viewport:?}"
             );
         });
 
