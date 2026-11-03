@@ -2363,6 +2363,9 @@ impl PreferencesWindow {
             ShortcutCommand::ToggleWorkspace => {
                 strings.preferences_shortcut_toggle_workspace.clone()
             }
+            ShortcutCommand::CycleWorkspaceFocus => {
+                strings.preferences_shortcut_cycle_workspace_focus.clone()
+            }
             ShortcutCommand::SelectNextWindow => strings.menu_next_window.clone(),
             ShortcutCommand::SelectPreviousWindow => strings.menu_previous_window.clone(),
             ShortcutCommand::Find => strings.preferences_shortcut_find.clone(),
