@@ -145,6 +145,8 @@ pub struct Editor {
     update_check_in_progress: bool,
     workspace: WorkspaceState,
     workspace_watch: WorkspaceWatchState,
+    /// Focus target for keyboard navigation of the Files/Outline sidebar.
+    workspace_focus_handle: FocusHandle,
     workspace_resize_drag: Option<WorkspaceResizeDrag>,
     /// Sidebar root requested explicitly (e.g. launching with a directory
     /// argument), used when no open document implies one. Takes precedence so
@@ -431,6 +433,7 @@ impl Editor {
             update_check_in_progress: false,
             workspace: WorkspaceState::from_settings(cx),
             workspace_watch: WorkspaceWatchState::default(),
+            workspace_focus_handle: cx.focus_handle(),
             workspace_resize_drag: None,
             workspace_root_override: None,
             status_bar: StatusBarState::default(),
