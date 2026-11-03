@@ -43,6 +43,14 @@ pub struct I18nStrings {
     pub drop_replace_cancel: String,
     /// Prompt detail shown when no supported Markdown file was dropped.
     pub drop_no_markdown_file_message: String,
+    /// Title of the external-change conflict dialog.
+    pub external_change_title: String,
+    /// Body message of the external-change conflict dialog.
+    pub external_change_message: String,
+    /// Label for reloading the version that changed on disk.
+    pub external_change_reload: String,
+    /// Label for keeping the buffer's unsaved edits.
+    pub external_change_keep: String,
     /// Label for dismissing simple informational dialogs.
     pub info_dialog_ok: String,
     /// Title of the placeholder update-check dialog.
@@ -376,6 +384,10 @@ struct I18nStringsDe {
     drop_replace_discard_and_replace: Option<String>,
     drop_replace_cancel: Option<String>,
     drop_no_markdown_file_message: Option<String>,
+    external_change_title: Option<String>,
+    external_change_message: Option<String>,
+    external_change_reload: Option<String>,
+    external_change_keep: Option<String>,
     info_dialog_ok: Option<String>,
     help_check_updates_title: Option<String>,
     help_check_updates_message: Option<String>,
@@ -580,6 +592,10 @@ const I18N_STRING_KEYS: &[&str] = &[
     "drop_replace_discard_and_replace",
     "drop_replace_cancel",
     "drop_no_markdown_file_message",
+    "external_change_title",
+    "external_change_message",
+    "external_change_reload",
+    "external_change_keep",
     "info_dialog_ok",
     "help_check_updates_title",
     "help_check_updates_message",
@@ -810,6 +826,18 @@ impl I18nStringsDe {
             drop_no_markdown_file_message: self
                 .drop_no_markdown_file_message
                 .unwrap_or(defaults.drop_no_markdown_file_message),
+            external_change_title: self
+                .external_change_title
+                .unwrap_or(defaults.external_change_title),
+            external_change_message: self
+                .external_change_message
+                .unwrap_or(defaults.external_change_message),
+            external_change_reload: self
+                .external_change_reload
+                .unwrap_or(defaults.external_change_reload),
+            external_change_keep: self
+                .external_change_keep
+                .unwrap_or(defaults.external_change_keep),
             info_dialog_ok: self.info_dialog_ok.unwrap_or(defaults.info_dialog_ok),
             help_check_updates_title: self
                 .help_check_updates_title
@@ -1346,6 +1374,12 @@ impl I18nStrings {
             drop_replace_cancel: "取消".into(),
             drop_no_markdown_file_message:
                 "请拖入 Markdown 文件（.md 或 .markdown）以在当前窗口打开。".into(),
+            external_change_title: "文件已在磁盘上更改".into(),
+            external_change_message:
+                "此文件在 Velotype 之外被修改，而当前文档有未保存的更改。是否重新加载磁盘上的版本？"
+                    .into(),
+            external_change_reload: "从磁盘重新加载".into(),
+            external_change_keep: "保留我的更改".into(),
             info_dialog_ok: "确定".into(),
             help_check_updates_title: "检查更新".into(),
             help_check_updates_message: "正在检查 Velotype 的最新版本...".into(),
@@ -1565,6 +1599,11 @@ impl I18nStrings {
             drop_replace_cancel: "Cancel".into(),
             drop_no_markdown_file_message:
                 "Drop a Markdown file (.md or .markdown) to open it in this window.".into(),
+            external_change_title: "File changed on disk".into(),
+            external_change_message:
+                "This file was changed outside Velotype while the document has unsaved edits. Reload the version from disk?".into(),
+            external_change_reload: "Reload from Disk".into(),
+            external_change_keep: "Keep My Changes".into(),
             info_dialog_ok: "OK".into(),
             help_check_updates_title: "Check for Updates".into(),
             help_check_updates_message: "Checking the latest Velotype version...".into(),

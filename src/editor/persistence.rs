@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use gpui::*;
 
 use super::Editor;
+use super::file_watch::normalized_markdown;
 use crate::i18n::I18nManager;
 
 fn longest_marker_run(text: &str, marker: char) -> usize {
@@ -73,10 +74,20 @@ impl Editor {
         }
     }
 
-    pub(super) fn apply_successful_save(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(super) fn apply_successful_save(
+        &mut self,
+        path: PathBuf,
+        written_text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.document_disk_text = Some(normalized_markdown(written_text));
+        self.watched_document_signature = None;
+        self.pending_external_reload = None;
+        self.workspace_watch.changed_files.remove(&path);
         self.file_path = Some(path);
         self.document_dirty = false;
         self.pending_window_edited = false;
+        self.pending_window_edited_clear = false;
         self.pending_window_title_refresh = true;
         self.pending_close_after_save = false;
         self.close_dialog_restore_focus = None;
@@ -91,9 +102,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> bool {
         let markdown = self.serialized_document_text(cx);
-        match std::fs::write(path, markdown) {
+        match std::fs::write(path, &markdown) {
             Ok(_) => {
-                self.apply_successful_save(path.to_path_buf(), cx);
+                self.apply_successful_save(path.to_path_buf(), &markdown, cx);
                 window.set_window_edited(false);
                 true
             }
@@ -187,7 +198,7 @@ impl Editor {
 
             let path_for_state = path.clone();
             let _ = weak_editor.update(cx, move |this, cx| {
-                this.apply_successful_save(path_for_state, cx);
+                this.apply_successful_save(path_for_state, &markdown, cx);
             });
             let _ = cx.update_window(
                 window_handle,
