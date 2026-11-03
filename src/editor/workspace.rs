@@ -1,12 +1,14 @@
 //! Lightweight workspace panel state, file-tree scanning, and outline parsing.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context as _, Result};
 use gpui::*;
 
+use super::file_watch::{FileSignature, directory_modified};
 use super::{BlockKind, Editor};
 use crate::components::InlineTextTree;
 use crate::config::EditorSettings;
@@ -75,6 +77,19 @@ pub(super) struct WorkspaceState {
     /// `None` means the user has never dragged the resize handle; the width
     /// then tracks the viewport automatically. Deliberately in-memory only.
     width: Option<f32>,
+}
+
+/// Filesystem identities for everything the Files sidebar currently shows.
+///
+/// Directory mtimes tell us when entries were added, removed, or renamed;
+/// per-file signatures tell us when a Markdown file listed in the tree was
+/// edited outside the app. `changed_files` drives the small dot shown on such
+/// rows until the file is opened.
+#[derive(Default)]
+pub(super) struct WorkspaceWatchState {
+    pub(super) dir_signatures: HashMap<PathBuf, Option<SystemTime>>,
+    pub(super) file_signatures: HashMap<PathBuf, Option<FileSignature>>,
+    pub(super) changed_files: HashSet<PathBuf>,
 }
 
 impl Default for WorkspaceState {
@@ -263,6 +278,7 @@ impl Editor {
 
         let Some(root) = next_root else {
             self.workspace.selected_file = None;
+            self.workspace_watch = WorkspaceWatchState::default();
             return;
         };
 
@@ -270,6 +286,7 @@ impl Editor {
         if root.as_os_str().is_empty() {
             self.workspace.file_error = Some("Invalid workspace path: empty path".to_string());
             self.workspace.selected_file = None;
+            self.workspace_watch = WorkspaceWatchState::default();
             return;
         }
 
@@ -282,11 +299,142 @@ impl Editor {
                 restore_expanded_descendants(&mut tree, &self.workspace.expanded);
                 self.workspace.file_tree = Some(tree);
                 self.workspace.selected_file = self.file_path.clone();
+                self.seed_workspace_watch_state();
             }
             Err(err) => {
                 self.workspace.file_error = Some(err.to_string());
+                self.workspace_watch = WorkspaceWatchState::default();
             }
         }
+    }
+
+    /// Records the current identity of every directory and Markdown file the
+    /// sidebar has loaded. Called after a scan or lazy directory load, never on
+    /// a plain render, so the baseline is not reset before a change can be
+    /// noticed.
+    fn seed_workspace_watch_state(&mut self) {
+        let mut dirs = HashSet::new();
+        let mut files = HashSet::new();
+
+        if let Some(tree) = self.workspace.file_tree.as_ref() {
+            collect_watch_targets(tree, &mut dirs, &mut files);
+        } else if let Some(root) = self.workspace.root.as_ref() {
+            dirs.insert(root.clone());
+        }
+
+        self.workspace_watch
+            .dir_signatures
+            .retain(|path, _| dirs.contains(path));
+        self.workspace_watch
+            .file_signatures
+            .retain(|path, _| files.contains(path));
+        self.workspace_watch
+            .changed_files
+            .retain(|path| files.contains(path));
+
+        for dir in dirs {
+            // Directory mtimes are the trigger for a rescan, so a reseed after
+            // that rescan must consume the new value. Otherwise the poll would
+            // see the same stale signature and rescan forever.
+            self.workspace_watch
+                .dir_signatures
+                .insert(dir.clone(), directory_modified(&dir));
+        }
+        for file in files {
+            self.workspace_watch
+                .file_signatures
+                .entry(file.clone())
+                .or_insert_with(|| FileSignature::read(&file));
+        }
+    }
+
+    /// Polls the Files sidebar's visible directories and Markdown files.
+    /// A directory mtime change means entries were added, removed, or renamed,
+    /// so the tree is rescanned with its expansion state preserved. A file
+    /// signature change marks that row as externally updated until it is
+    /// opened.
+    pub(super) fn poll_workspace_external_changes(&mut self, cx: &mut Context<Self>) {
+        if !self.workspace.is_open {
+            return;
+        }
+        let Some(root) = self.workspace.root.clone() else {
+            self.workspace_watch = WorkspaceWatchState::default();
+            return;
+        };
+
+        // Keep watching the root even while a previous scan is in the error
+        // state, so a directory that reappears can be picked up again.
+        self.workspace_watch
+            .dir_signatures
+            .entry(root.clone())
+            .or_insert_with(|| directory_modified(&root));
+
+        let structure_changed = self
+            .workspace_watch
+            .dir_signatures
+            .iter()
+            .any(|(dir, signature)| directory_modified(dir) != *signature);
+        if structure_changed {
+            self.refresh_workspace_file_tree(cx);
+            return;
+        }
+
+        let updates: Vec<(PathBuf, Option<FileSignature>)> = self
+            .workspace_watch
+            .file_signatures
+            .iter()
+            .filter_map(|(file, previous)| {
+                let current = FileSignature::read(file);
+                (*previous != current).then(|| (file.clone(), current))
+            })
+            .collect();
+
+        let mut newly_changed = Vec::new();
+        for (file, signature) in updates {
+            self.workspace_watch
+                .file_signatures
+                .insert(file.clone(), signature);
+            if signature.is_some() && self.file_path.as_deref() != Some(file.as_path()) {
+                newly_changed.push(file);
+            }
+        }
+
+        let mut needs_repaint = false;
+        for file in newly_changed {
+            needs_repaint |= self.workspace_watch.changed_files.insert(file);
+        }
+        if needs_repaint {
+            cx.notify();
+        }
+    }
+
+    /// Rescans the sidebar root after an external structural change, keeping
+    /// the user's expanded folders and selection intact.
+    fn refresh_workspace_file_tree(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.workspace.root.clone() else {
+            self.workspace_watch = WorkspaceWatchState::default();
+            return;
+        };
+
+        match scan_workspace_dir(&root) {
+            Ok(mut tree) => {
+                restore_expanded_descendants(&mut tree, &self.workspace.expanded);
+                self.workspace.file_tree = Some(tree);
+                self.workspace.file_error = None;
+                self.workspace.selected_file = self.file_path.clone();
+                self.seed_workspace_watch_state();
+            }
+            Err(err) => {
+                self.workspace.file_error = Some(err.to_string());
+                self.workspace.file_tree = None;
+                self.workspace.selected_file = self.file_path.clone();
+                self.workspace_watch = WorkspaceWatchState::default();
+                self.workspace_watch
+                    .dir_signatures
+                    .insert(root.clone(), directory_modified(&root));
+            }
+        }
+        cx.notify();
     }
 
     fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
@@ -312,6 +460,13 @@ impl Editor {
         prune_outline_state(&mut self.workspace, &outline);
         self.workspace.outline_tree = outline;
         self.workspace.outline_source = Some(source);
+    }
+
+    /// Forces the outline to rebuild after the document text was replaced
+    /// outside the normal editing path.
+    pub(super) fn invalidate_workspace_outline(&mut self) {
+        self.workspace.outline_source = None;
+        self.workspace.outline_fingerprint = None;
     }
 
     fn toggle_workspace_section(&mut self, section: WorkspaceSection, cx: &mut Context<Self>) {
@@ -387,6 +542,7 @@ impl Editor {
             return;
         };
         find_and_load_dir(root, dir, expanded);
+        self.seed_workspace_watch_state();
     }
 
     fn select_outline_node(&mut self, id: String, cx: &mut Context<Self>) {
@@ -662,7 +818,11 @@ impl Editor {
     /// scanned tree. Deliberately not a `WorkspaceTreeKind` variant and not
     /// part of the scanned tree, so it stays out of the `expanded`/
     /// `selected` id namespaces.
-    fn render_workspace_parent_row(&self, theme: &Theme, editor: &WeakEntity<Editor>) -> AnyElement {
+    fn render_workspace_parent_row(
+        &self,
+        theme: &Theme,
+        editor: &WeakEntity<Editor>,
+    ) -> AnyElement {
         let c = &theme.colors;
         let t = &theme.typography;
         let click_editor = editor.clone();
@@ -811,6 +971,12 @@ impl Editor {
             }
             WorkspaceTreeKind::Directory(_) => false,
         };
+        let externally_changed = match &node.kind {
+            WorkspaceTreeKind::MarkdownFile(path) => {
+                self.workspace_watch.changed_files.contains(path)
+            }
+            _ => false,
+        };
         let node_id = node.id.clone();
         let click_editor = editor.clone();
         let click_kind = node.kind.clone();
@@ -902,6 +1068,15 @@ impl Editor {
                     .text_color(label_color)
                     .child(node.label.clone()),
             )
+            .children(externally_changed.then(|| {
+                div()
+                    .w(px(6.0))
+                    .h(px(6.0))
+                    .flex_shrink_0()
+                    .rounded_full()
+                    .bg(c.dialog_primary_button_bg)
+                    .into_any_element()
+            }))
             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                 let Some((path, is_directory)) = context_menu_entry.clone() else {
                     return;
@@ -1160,6 +1335,27 @@ fn collect_node_ids(nodes: &[WorkspaceTreeNode], ids: &mut HashSet<String>) {
     }
 }
 
+fn collect_watch_targets(
+    node: &WorkspaceTreeNode,
+    dirs: &mut HashSet<PathBuf>,
+    files: &mut HashSet<PathBuf>,
+) {
+    match &node.kind {
+        WorkspaceTreeKind::Directory(path) => {
+            dirs.insert(path.clone());
+            if node.children_loaded {
+                for child in &node.children {
+                    collect_watch_targets(child, dirs, files);
+                }
+            }
+        }
+        WorkspaceTreeKind::MarkdownFile(path) => {
+            files.insert(path.clone());
+        }
+        WorkspaceTreeKind::Heading { .. } => {}
+    }
+}
+
 fn is_outline_node_id(id: &str) -> bool {
     id.starts_with("outline:")
 }
@@ -1272,8 +1468,8 @@ fn line_start_offset(source: &str, line: usize) -> Option<usize> {
 mod tests {
     use super::{
         Editor, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection, WorkspaceState,
-        WorkspaceTreeKind, build_outline_tree, find_and_load_dir,
-        line_start_offset, prune_outline_state, read_dir_one_level, resolve_workspace_panel_width,
+        WorkspaceTreeKind, build_outline_tree, find_and_load_dir, line_start_offset,
+        prune_outline_state, read_dir_one_level, resolve_workspace_panel_width,
         restore_expanded_descendants, scan_workspace_dir, toggle_workspace_section_state,
         workspace_entry_context_menu_target, workspace_panel_drag_max_width,
         workspace_panel_width_for_viewport,
@@ -1304,7 +1500,9 @@ mod tests {
             // failure mode a content fingerprint can introduce.
             let heading = editor.document.root_blocks()[0].clone();
             heading.update(cx, |block, _| {
-                block.record.set_title(crate::components::InlineTextTree::plain("Renamed"));
+                block
+                    .record
+                    .set_title(crate::components::InlineTextTree::plain("Renamed"));
             });
             editor.sync_workspace_models(cx);
             assert_eq!(editor.workspace.outline_tree[0].label, "Renamed");
@@ -1381,8 +1579,8 @@ mod tests {
         // be far too slow for a unit test, so this only exercises the
         // invariant that a level's child count is bounded by the constant,
         // not the boundary itself.
-        let root = std::env::temp_dir()
-            .join(format!("velotype-scan-level-cap-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("velotype-scan-level-cap-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("create dir");
         for i in 0..10 {
             fs::write(root.join(format!("f{i}.md")), "x").expect("write md");
@@ -1397,8 +1595,8 @@ mod tests {
 
     #[test]
     fn scan_workspace_dir_loads_only_the_requested_level() {
-        let root = std::env::temp_dir()
-            .join(format!("velotype-scan-one-level-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("velotype-scan-one-level-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("nested")).expect("create dirs");
         fs::write(root.join("nested").join("deep.md"), "x").expect("write nested md");
         fs::write(root.join("a.md"), "x").expect("write md");
@@ -1420,8 +1618,8 @@ mod tests {
 
     #[test]
     fn find_and_load_dir_populates_only_the_target_directory() {
-        let root = std::env::temp_dir()
-            .join(format!("velotype-find-load-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("velotype-find-load-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("nested").join("deeper")).expect("create dirs");
         fs::write(root.join("nested").join("deep.md"), "x").expect("write nested md");
         fs::write(root.join("a.md"), "x").expect("write md");
@@ -1438,7 +1636,11 @@ mod tests {
             .find(|node| node.label == "nested")
             .expect("nested dir present");
         assert!(nested.children_loaded);
-        let labels: Vec<&str> = nested.children.iter().map(|node| node.label.as_str()).collect();
+        let labels: Vec<&str> = nested
+            .children
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect();
         assert_eq!(labels, vec!["deeper", "deep.md"]);
 
         // Loading "nested" must not have loaded its own child directory.
@@ -1457,8 +1659,10 @@ mod tests {
         // Simulates a re-scan: `expanded` still names a directory from
         // before the scan, but the fresh tree has not read it yet. Without
         // this restore step it would render expanded-yet-empty.
-        let root = std::env::temp_dir()
-            .join(format!("velotype-restore-expanded-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-restore-expanded-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(root.join("nested")).expect("create dirs");
         fs::write(root.join("nested").join("deep.md"), "x").expect("write nested md");
 
@@ -1493,8 +1697,10 @@ mod tests {
 
     #[test]
     fn workspace_scan_skips_noise_dirs_but_keeps_real_files() {
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-skip-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-skip-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(root.join("node_modules")).expect("create dir");
         fs::write(root.join("node_modules").join("pkg.md"), "x").expect("write md");
         fs::create_dir_all(root.join(".git")).expect("create dir");
@@ -1502,7 +1708,11 @@ mod tests {
         fs::write(root.join("notes.md"), "keep").expect("write md");
 
         let tree = scan_workspace_dir(&root).expect("scan tree");
-        let labels: Vec<&str> = tree.children.iter().map(|node| node.label.as_str()).collect();
+        let labels: Vec<&str> = tree
+            .children
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect();
 
         assert!(!labels.contains(&"node_modules"));
         assert!(!labels.contains(&".git"));
@@ -1516,8 +1726,10 @@ mod tests {
     fn workspace_scan_skips_unreadable_subdirectories_without_failing() {
         use std::os::unix::fs::PermissionsExt;
 
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-perm-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-perm-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let denied = root.join("denied");
         fs::create_dir_all(&denied).expect("create dirs");
         fs::write(root.join("notes.md"), "keep").expect("write md");
@@ -1531,7 +1743,11 @@ mod tests {
         fs::set_permissions(&denied, fs::Permissions::from_mode(0o755)).expect("restore perms");
 
         let tree = result.expect("an unreadable subdir must not abort the scan");
-        let labels: Vec<&str> = tree.children.iter().map(|node| node.label.as_str()).collect();
+        let labels: Vec<&str> = tree
+            .children
+            .iter()
+            .map(|node| node.label.as_str())
+            .collect();
         assert!(labels.contains(&"notes.md"));
         assert!(labels.contains(&"denied"));
 
@@ -1546,8 +1762,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         init_editor_test_app(cx);
-        let root = std::env::temp_dir()
-            .join(format!("velotype-load-denied-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-load-denied-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let denied = root.join("denied");
         fs::create_dir_all(&denied).expect("create dirs");
         fs::write(root.join("notes.md"), "keep").expect("write md");
@@ -1738,8 +1956,8 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         init_editor_test_app(cx);
-        let (editor, cx) = cx
-            .add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_string(), None));
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_string(), None));
 
         editor.read_with(cx, |editor, _cx| {
             assert!(!editor.workspace.is_open);
@@ -1782,8 +2000,10 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         init_editor_test_app(cx);
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-override-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-override-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&root).expect("create dir");
         fs::write(root.join("note.md"), "hello").expect("write md");
 
@@ -1811,10 +2031,87 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn workspace_poll_picks_up_a_file_created_outside_the_app(cx: &mut gpui::TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-live-create-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dir");
+        fs::write(root.join("a.md"), "a").expect("write md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+        });
+        editor.update(cx, |editor, cx| {
+            // Seed the baseline the same way the poll loop sees it.
+            editor.poll_workspace_external_changes(cx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(root.join("b.md"), "b").expect("write new md");
+
+        editor.update(cx, |editor, cx| {
+            editor.poll_workspace_external_changes(cx);
+        });
+        editor.read_with(cx, |editor, _cx| {
+            let tree = editor.workspace.file_tree.as_ref().expect("tree present");
+            let labels: Vec<&str> = tree
+                .children
+                .iter()
+                .map(|node| node.label.as_str())
+                .collect();
+            assert_eq!(labels, vec!["a.md", "b.md"]);
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn workspace_poll_marks_an_externally_edited_file(cx: &mut gpui::TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-live-edit-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dir");
+        let note = root.join("note.md");
+        fs::write(&note, "old").expect("write md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.poll_workspace_external_changes(cx);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&note, "new content").expect("external write");
+
+        editor.update(cx, |editor, cx| {
+            editor.poll_workspace_external_changes(cx);
+        });
+        editor.read_with(cx, |editor, _cx| {
+            assert!(
+                editor.workspace_watch.changed_files.contains(&note),
+                "an externally edited row should be marked changed"
+            );
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
     async fn opening_a_document_inside_the_override_root_keeps_it(cx: &mut gpui::TestAppContext) {
         init_editor_test_app(cx);
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-override-keep-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-override-keep-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&root).expect("create dir");
 
         let (editor, cx) =
@@ -1843,14 +2140,16 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn opening_a_document_outside_the_override_root_clears_it(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    async fn opening_a_document_outside_the_override_root_clears_it(cx: &mut gpui::TestAppContext) {
         init_editor_test_app(cx);
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-override-clear-test-{}", uuid::Uuid::new_v4()));
-        let elsewhere = std::env::temp_dir()
-            .join(format!("velotype-workspace-elsewhere-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-override-clear-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let elsewhere = std::env::temp_dir().join(format!(
+            "velotype-workspace-elsewhere-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&root).expect("create dir");
         fs::create_dir_all(&elsewhere).expect("create dir");
 
@@ -1886,8 +2185,10 @@ mod tests {
     #[gpui::test]
     async fn navigate_workspace_root_up_reroots_to_the_parent(cx: &mut gpui::TestAppContext) {
         init_editor_test_app(cx);
-        let root = std::env::temp_dir()
-            .join(format!("velotype-workspace-nav-up-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-nav-up-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let child = root.join("child");
         fs::create_dir_all(&child).expect("create dirs");
 

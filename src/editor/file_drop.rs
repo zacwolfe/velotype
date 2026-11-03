@@ -81,6 +81,7 @@ impl Editor {
         let markdown = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
         self.replace_document_from_markdown(markdown, Some(path.to_path_buf()), cx);
+        self.workspace_watch.changed_files.remove(path);
         crate::app_menu::record_recent_file_from_editor(path, cx);
         Ok(())
     }
@@ -99,6 +100,9 @@ impl Editor {
         }
 
         self.file_path = file_path;
+        self.document_disk_text = self.file_path.as_ref().map(|_| normalized.clone());
+        self.watched_document_signature = None;
+        self.pending_external_reload = None;
         self.unsaved_image_assets_dir = None;
         self.pending_picgo_uploads.clear();
         self.pending_image_paste_prompts.clear();
@@ -320,7 +324,7 @@ impl Editor {
 
             let saved_path = save_path.clone();
             let replace_result = weak_editor.update(cx, move |this, cx| {
-                this.apply_successful_save(saved_path, cx);
+                this.apply_successful_save(saved_path, &markdown, cx);
                 this.pending_drop_replace_path = Some(drop_path);
                 this.replace_after_successful_save_async(cx)
             });
@@ -371,7 +375,7 @@ impl Editor {
     }
 
     /// Clears all pending drop state, notifying only when something changed.
-    fn clear_pending_drop_replace_state(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn clear_pending_drop_replace_state(&mut self, cx: &mut Context<Self>) {
         let had_path = self.pending_drop_replace_path.take().is_some();
         let had_dialog = self.show_drop_replace_dialog;
         let had_after_save = self.pending_drop_replace_after_save;

@@ -717,6 +717,10 @@ impl Editor {
             self.pending_window_edited = false;
             window.set_window_edited(true);
         }
+        if self.pending_window_edited_clear {
+            self.pending_window_edited_clear = false;
+            window.set_window_edited(false);
+        }
     }
 
     /// Tracks viewport size and requests caret scrolling after meaningful resize.
@@ -1666,6 +1670,8 @@ impl Editor {
 impl Render for Editor {
     /// Synchronizes deferred window work and renders the editor and overlays.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_external_file_watch(cx);
+        self.sync_external_reload_prompt(window, cx);
         self.install_close_guard(cx, window);
         self.apply_pending_focus(window, cx);
         self.follow_caret_movement(window, cx);

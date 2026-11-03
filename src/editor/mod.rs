@@ -30,6 +30,7 @@ mod document;
 mod events;
 mod export;
 mod file_drop;
+mod file_watch;
 mod history;
 mod persistence;
 pub(crate) mod picgo;
@@ -47,9 +48,10 @@ mod update;
 mod window_state;
 mod workspace;
 
+use self::file_watch::FileSignature;
 use self::search::SearchBarState;
 use self::status_bar::StatusBarState;
-use self::workspace::{WorkspaceResizeDrag, WorkspaceState};
+use self::workspace::{WorkspaceResizeDrag, WorkspaceState, WorkspaceWatchState};
 
 /// Link navigation request deferred until a `Window` is available.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,12 +119,25 @@ pub struct Editor {
     unsaved_image_assets_dir: Option<PathBuf>,
     /// Desired native edited indicator, applied when a window is available.
     pending_window_edited: bool,
+    /// Set when a reload should clear the platform's edited dot too.
+    pending_window_edited_clear: bool,
     /// Whether the native title needs rebuilding from path and dirty state.
     pending_window_title_refresh: bool,
     /// Whether the current document has unsaved edits.
     document_dirty: bool,
     /// Current document path, absent for a new untitled document.
     file_path: Option<PathBuf>,
+    /// Last content read from (or written to) `file_path`, normalized. Used to
+    /// tell a real external edit apart from a timestamp change caused by our
+    /// own save.
+    document_disk_text: Option<String>,
+    /// Signature observed on the previous external-change poll.
+    watched_document_signature: Option<FileSignature>,
+    /// New disk contents waiting for the user's Reload / Keep choice because
+    /// the buffer has unsaved edits.
+    pending_external_reload: Option<String>,
+    external_reload_prompt_active: bool,
+    external_watch_task: Option<Task<()>>,
     /// Scroll state for the main block column.
     scroll_handle: ScrollHandle,
     /// Viewport size used to detect meaningful resize.
@@ -167,6 +182,7 @@ pub struct Editor {
     info_dialog: Option<InfoDialogKind>,
     /// Cached file tree and document outline for the workspace drawer.
     workspace: WorkspaceState,
+    workspace_watch: WorkspaceWatchState,
     workspace_resize_drag: Option<WorkspaceResizeDrag>,
     /// Sidebar root requested explicitly (e.g. launching with a directory
     /// argument), used when no open document implies one. Takes precedence so
@@ -478,6 +494,7 @@ impl Editor {
         file_path: Option<PathBuf>,
     ) -> Self {
         let normalized = markdown.replace("\r\n", "\n").replace('\r', "\n");
+        let document_disk_text = file_path.as_ref().map(|_| normalized.clone());
         let mut roots = Self::build_root_blocks_from_markdown(cx, &normalized);
         if roots.is_empty() {
             roots.push(Self::new_block(cx, BlockRecord::paragraph(String::new())));
@@ -506,9 +523,15 @@ impl Editor {
             pending_picgo_uploads: HashMap::new(),
             unsaved_image_assets_dir: None,
             pending_window_edited: false,
+            pending_window_edited_clear: false,
             pending_window_title_refresh: false,
             document_dirty: false,
             file_path,
+            document_disk_text,
+            watched_document_signature: None,
+            pending_external_reload: None,
+            external_reload_prompt_active: false,
+            external_watch_task: None,
             scroll_handle: ScrollHandle::new(),
             last_scroll_viewport_size: None,
             prev_visible_block_ids: Vec::new(),
@@ -528,6 +551,7 @@ impl Editor {
             info_dialog: None,
 
             workspace: WorkspaceState::from_settings(cx),
+            workspace_watch: WorkspaceWatchState::default(),
             workspace_resize_drag: None,
             workspace_root_override: None,
             status_bar: StatusBarState::default(),
