@@ -1453,8 +1453,7 @@ impl Editor {
                     self.workspace.keyboard_outline_node.as_deref() == Some(node.id.as_str())
                 }
             };
-        let selected = keyboard_selected
-            || match &node.kind {
+        let active = match &node.kind {
             WorkspaceTreeKind::MarkdownFile(path) => {
                 self.workspace.selected_file.as_deref() == Some(path.as_path())
             }
@@ -1494,7 +1493,7 @@ impl Editor {
             WorkspaceTreeKind::Heading { .. } => None,
         };
 
-        let label_color = if selected {
+        let label_color = if keyboard_selected || active {
             c.text_default
         } else {
             c.dialog_muted
@@ -1535,7 +1534,7 @@ impl Editor {
             .pl(px(8.0 + depth as f32 * WORKSPACE_NODE_INDENT))
             .pr(px(8.0))
             .rounded(px(6.0))
-            .bg(if selected {
+            .bg(if keyboard_selected {
                 c.selection
             } else {
                 hsla(0.0, 0.0, 0.0, 0.0)
