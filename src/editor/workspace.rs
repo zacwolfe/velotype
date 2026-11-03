@@ -26,6 +26,7 @@ const WORKSPACE_PANEL_DRAG_MIN_WIDTH: f32 = 180.0;
 const WORKSPACE_PANEL_DRAG_MAX_WIDTH: f32 = 720.0;
 const WORKSPACE_NODE_HEIGHT: f32 = 28.0;
 const WORKSPACE_NODE_INDENT: f32 = 18.0;
+const WORKSPACE_PARENT_NODE_ID: &str = "workspace-parent-row";
 // Loading is lazy (one directory level at a time), which removes the need
 // for a depth or whole-tree cap. A single directory holding tens of
 // thousands of entries would still stall the one read that loads it, so
@@ -596,6 +597,15 @@ impl Editor {
         let mut rows = Vec::new();
         match section {
             WorkspaceSection::Files => {
+                if let Some(parent) = self.workspace.root.as_deref().and_then(Path::parent) {
+                    rows.push(WorkspaceVisibleRow {
+                        id: WORKSPACE_PARENT_NODE_ID.to_string(),
+                        parent_id: None,
+                        kind: WorkspaceTreeKind::Directory(parent.to_path_buf()),
+                        expanded: false,
+                        expandable: false,
+                    });
+                }
                 if let Some(root) = self.workspace.file_tree.as_ref() {
                     collect_workspace_visible_rows(
                         std::slice::from_ref(root),
@@ -650,7 +660,12 @@ impl Editor {
         };
         selected
             .filter(|id| rows.iter().any(|row| row.id == *id))
-            .or_else(|| rows.first().map(|row| row.id.clone()))
+            .or_else(|| {
+                rows.iter()
+                    .find(|row| row.id != WORKSPACE_PARENT_NODE_ID)
+                    .or_else(|| rows.first())
+                    .map(|row| row.id.clone())
+            })
     }
 
     fn focus_workspace_node(
@@ -787,6 +802,15 @@ impl Editor {
             return false;
         };
 
+        if section == WorkspaceSection::Files && row.id == WORKSPACE_PARENT_NODE_ID {
+            if self.navigate_workspace_root_up(cx) {
+                self.workspace.keyboard_file_node = None;
+                self.focus_workspace_section(WorkspaceSection::Files, window, cx);
+            }
+            self.retain_workspace_keyboard_focus(window, cx);
+            return true;
+        }
+
         match (section, row.kind) {
             (WorkspaceSection::Files, WorkspaceTreeKind::MarkdownFile(path)) => {
                 self.set_workspace_keyboard_node(section, row.id.clone());
@@ -910,6 +934,12 @@ impl Editor {
                     return true;
                 };
                 let row = rows[index].clone();
+                if section == WorkspaceSection::Files && row.id == WORKSPACE_PARENT_NODE_ID {
+                    if self.navigate_workspace_root_up(cx) {
+                        self.workspace.keyboard_file_node = None;
+                    }
+                    return true;
+                }
                 if row.expandable && !row.expanded {
                     let dir = match &row.kind {
                         WorkspaceTreeKind::Directory(path) => Some(path.as_path()),
@@ -972,6 +1002,10 @@ impl Editor {
             return false;
         };
         self.focus_block_range(&block, endpoint.offset..endpoint.offset, cx);
+        // `focus_block_range` resets the explicit target, and the sidebar keeps
+        // keyboard focus afterward, so remember the heading separately. The
+        // pending-scroll pass uses this instead of the focused caret.
+        self.pending_scroll_target = Some(block.entity_id());
         // The heading is a label; the content under it is the point. Set this
         // after `focus_block_range`, which resets alignment to `Nearest`.
         self.pending_scroll_align = super::ScrollAlign::Top;
@@ -1244,6 +1278,13 @@ impl Editor {
         let c = &theme.colors;
         let t = &theme.typography;
         let click_editor = editor.clone();
+        let selected = self.workspace.keyboard_section == Some(WorkspaceSection::Files)
+            && self.workspace.keyboard_file_node.as_deref() == Some(WORKSPACE_PARENT_NODE_ID);
+        let label_color = if selected {
+            c.text_default
+        } else {
+            c.dialog_muted
+        };
 
         div()
             .id("workspace-parent-row")
@@ -1256,6 +1297,11 @@ impl Editor {
             .pl(px(8.0))
             .pr(px(8.0))
             .rounded(px(6.0))
+            .bg(if selected {
+                c.selection
+            } else {
+                hsla(0.0, 0.0, 0.0, 0.0)
+            })
             .hover(|this| this.bg(c.dialog_secondary_button_hover))
             .cursor_pointer()
             .child(div().w(px(14.0)).h(px(18.0)).flex_shrink_0())
@@ -1275,12 +1321,21 @@ impl Editor {
                     .truncate()
                     .text_size(px(t.text_size * 0.9))
                     .line_height(px(t.text_size * t.text_line_height))
-                    .text_color(c.dialog_muted)
+                    .text_color(label_color)
                     .child(".."),
             )
-            .on_click(move |_event, _window, cx| {
+            .on_click(move |_event, window, cx| {
                 let _ = click_editor.update(cx, |editor, cx| {
+                    editor.focus_workspace_node(
+                        WorkspaceSection::Files,
+                        WORKSPACE_PARENT_NODE_ID.to_string(),
+                        window,
+                        cx,
+                    );
                     editor.navigate_workspace_root_up(cx);
+                    editor.workspace.keyboard_file_node = None;
+                    editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+                    editor.retain_workspace_keyboard_focus(window, cx);
                 });
             })
             .into_any_element()
@@ -1940,12 +1995,12 @@ fn line_start_offset(source: &str, line: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Editor, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection, WorkspaceState,
-        WorkspaceTreeKind, build_outline_tree, find_and_load_dir, line_start_offset,
-        prune_outline_state, read_dir_one_level, resolve_workspace_panel_width,
-        restore_expanded_descendants, scan_workspace_dir, toggle_workspace_section_state,
-        workspace_entry_context_menu_target, workspace_panel_drag_max_width,
-        workspace_panel_width_for_viewport,
+        Editor, WORKSPACE_PARENT_NODE_ID, WORKSPACE_SCAN_MAX_ENTRIES_PER_DIR, WorkspaceSection,
+        WorkspaceState, WorkspaceTreeKind, build_outline_tree, find_and_load_dir,
+        line_start_offset, prune_outline_state, read_dir_one_level,
+        resolve_workspace_panel_width, restore_expanded_descendants, scan_workspace_dir,
+        toggle_workspace_section_state, workspace_entry_context_menu_target,
+        workspace_panel_drag_max_width, workspace_panel_width_for_viewport,
     };
     use gpui::{AppContext, TestAppContext};
     use std::collections::HashSet;
@@ -2641,11 +2696,18 @@ mod tests {
                 Some(root_id.as_str())
             );
 
-            // Up at the first row is a handled no-op, not a wrap.
+            // Up moves from the root to the `..` parent row.
             assert!(editor.workspace_handle_navigation_key("up", cx));
             assert_eq!(
                 editor.workspace.keyboard_file_node.as_deref(),
-                Some(root_id.as_str())
+                Some(WORKSPACE_PARENT_NODE_ID)
+            );
+
+            // Up on the first row is a handled no-op, not a wrap.
+            assert!(editor.workspace_handle_navigation_key("up", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(WORKSPACE_PARENT_NODE_ID)
             );
         });
 
@@ -2780,7 +2842,49 @@ mod tests {
             assert!(editor.workspace_focus_handle.is_focused(window));
             assert_eq!(editor.workspace.selected_outline.as_deref(), Some("outline:0"));
             assert!(editor.active_entity_id.is_some());
+            assert_eq!(editor.pending_scroll_target, editor.active_entity_id);
         });
+    }
+
+    #[gpui::test]
+    async fn files_keyboard_reaches_and_activates_the_parent_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-parent-row-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let child = root.join("child");
+        fs::create_dir_all(&child).expect("create dirs");
+        fs::write(child.join("note.md"), "note").expect("write md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(child.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.workspace.keyboard_section = Some(WorkspaceSection::Files);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+
+            let child_id = format!("file:{}", child.to_string_lossy());
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(child_id.as_str())
+            );
+
+            assert!(editor.workspace_handle_navigation_key("up", cx));
+            assert_eq!(
+                editor.workspace.keyboard_file_node.as_deref(),
+                Some(WORKSPACE_PARENT_NODE_ID)
+            );
+
+            assert!(editor.workspace_activate_cursor(window, cx));
+            assert_eq!(editor.workspace.root.as_deref(), Some(root.as_path()));
+            assert!(editor.workspace_focus_handle.is_focused(window));
+        });
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[gpui::test]

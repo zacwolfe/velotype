@@ -267,6 +267,7 @@ impl Editor {
         // should not yank the viewport, so cancel that and put the old offset
         // back. The next frame clamps it if the document got shorter.
         self.pending_scroll_active_block_into_view = false;
+        self.pending_scroll_target = None;
         self.pending_scroll_recheck_after_layout = false;
         self.suppress_caret_scroll_follow = true;
         self.scroll_handle.set_offset(scroll_offset);

@@ -78,6 +78,10 @@ pub struct Editor {
     /// How the pending scroll should align its target. Reset to `Nearest` by
     /// `focus_block`, so a jump that wants another alignment sets it afterward.
     pending_scroll_align: ScrollAlign,
+    /// Block to scroll to even when keyboard focus belongs to the sidebar.
+    /// Outline jumps leave focus in the tree but still need the document to
+    /// reveal the selected heading.
+    pending_scroll_target: Option<EntityId>,
     pending_scroll_recheck_after_layout: bool,
     /// Focused target plus its caret/selection range as of the last frame, so
     /// the viewport can follow the caret however it moved. Caret motion inside a
@@ -398,6 +402,7 @@ impl Editor {
             active_entity_id: pending_focus,
             pending_scroll_active_block_into_view: true,
             pending_scroll_align: ScrollAlign::Nearest,
+            pending_scroll_target: None,
             pending_scroll_recheck_after_layout: true,
             last_caret_position: None,
             suppress_caret_scroll_follow: false,

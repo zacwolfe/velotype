@@ -465,6 +465,13 @@ impl Editor {
         let Some(focused_block) = self.focused_edit_target(window, cx) else {
             return false;
         };
+        self.ensure_block_visible(&focused_block, cx)
+    }
+
+    /// Same viewport correction as `ensure_focused_caret_visible`, but for an
+    /// explicitly queued block. Used when the sidebar keeps keyboard focus yet
+    /// still needs to reveal a document heading.
+    fn ensure_block_visible(&mut self, target: &Entity<Block>, cx: &App) -> bool {
         // A block's cached bounds are from the last frame it actually painted.
         // For a row that virtualization culled, that can be a frame at a
         // completely different scroll offset, and comparing those stale
@@ -473,12 +480,12 @@ impl Editor {
         // undone until a second one. Only trust bounds from a row that painted
         // in the previous frame; otherwise report unsettled so the row mounts
         // (as the focus island) and is re-measured next frame.
-        if !self.target_painted_last_frame(&focused_block) {
+        if !self.target_painted_last_frame(target) {
             return false;
         }
 
         let Some(active_bounds) =
-            focused_block.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds())
+            target.read_with(cx, |block, _cx| block.active_range_or_cursor_bounds())
         else {
             // A block showing a rendered image (a standalone image, or a
             // mixed-visual title with an inline image) never runs through
@@ -582,7 +589,15 @@ impl Editor {
         // `settled` is false both when there is no bounds yet (row not mounted)
         // and when a correction was just applied (possibly still an
         // estimate-based undershoot) — either way, another pass is needed.
-        let settled = self.ensure_focused_caret_visible(window, cx);
+        let settled = if let Some(target) = self
+            .pending_scroll_target
+            .and_then(|entity_id| self.focusable_entity_by_id(entity_id))
+        {
+            self.ensure_block_visible(&target, cx)
+        } else {
+            self.pending_scroll_target = None;
+            self.ensure_focused_caret_visible(window, cx)
+        };
         if self.pending_scroll_recheck_after_layout {
             self.pending_scroll_recheck_after_layout = false;
             self.schedule_scroll_recheck(cx);
@@ -595,6 +610,7 @@ impl Editor {
         }
 
         self.pending_scroll_active_block_into_view = false;
+        self.pending_scroll_target = None;
         self.pending_scroll_align = ScrollAlign::Nearest;
         self.scroll_recheck_task = None;
     }
@@ -1864,10 +1880,12 @@ impl Render for Editor {
             index += 1;
         }
 
-        // The focused row is always kept mounted so its caret is not blurred; a
-        // table cell maps to its containing table block's row.
+        // The focused row (or an explicit scroll target while the sidebar owns
+        // focus) is always kept mounted so its caret is not blurred; a table
+        // cell maps to its containing table block's row.
         let focus_row = self
-            .focused_edit_target_entity_id(window, cx)
+            .pending_scroll_target
+            .or_else(|| self.focused_edit_target_entity_id(window, cx))
             .and_then(|id| {
                 self.document.visible_index_for_entity_id(id).or_else(|| {
                     self.table_cell_binding(id).and_then(|binding| {
