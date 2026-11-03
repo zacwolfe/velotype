@@ -890,46 +890,37 @@ impl Editor {
             .and_then(|id| rows.iter().position(|row| row.id == id));
 
         match key {
-            "up" => {
-                match current {
-                    Some(0) => {}
-                    Some(index) => {
-                        self.set_workspace_keyboard_node(section, rows[index - 1].id.clone());
-                        cx.notify();
-                    }
-                    None => {
-                        self.set_workspace_keyboard_node(
-                            section,
-                            rows.last().expect("rows is non-empty").id.clone(),
-                        );
-                        cx.notify();
-                    }
+            "up" => match current {
+                Some(0) => {}
+                Some(index) => {
+                    self.set_workspace_keyboard_node(section, rows[index - 1].id.clone());
                 }
-                true
-            }
-            "down" => {
-                match current {
-                    Some(index) if index + 1 < rows.len() => {
-                        self.set_workspace_keyboard_node(section, rows[index + 1].id.clone());
-                        cx.notify();
-                    }
-                    Some(_) => {}
-                    None => {
-                        self.set_workspace_keyboard_node(
-                            section,
-                            rows.first().expect("rows is non-empty").id.clone(),
-                        );
-                        cx.notify();
-                    }
+                None => {
+                    self.set_workspace_keyboard_node(
+                        section,
+                        rows.last().expect("rows is non-empty").id.clone(),
+                    );
                 }
-                true
-            }
+            },
+            "down" => match current {
+                Some(index) if index + 1 < rows.len() => {
+                    self.set_workspace_keyboard_node(section, rows[index + 1].id.clone());
+                }
+                Some(_) => {}
+                None => {
+                    self.set_workspace_keyboard_node(
+                        section,
+                        rows.first().expect("rows is non-empty").id.clone(),
+                    );
+                }
+            },
             "right" => {
                 let Some(index) = current else {
                     self.set_workspace_keyboard_node(
                         section,
                         rows.first().expect("rows is non-empty").id.clone(),
                     );
+                    self.scroll_workspace_cursor_into_view(section);
                     cx.notify();
                     return true;
                 };
@@ -938,28 +929,26 @@ impl Editor {
                     if self.navigate_workspace_root_up(cx) {
                         self.workspace.keyboard_file_node = None;
                     }
-                    return true;
+                } else {
+                    if row.expandable && !row.expanded {
+                        let dir = match &row.kind {
+                            WorkspaceTreeKind::Directory(path) => Some(path.as_path()),
+                            _ => None,
+                        };
+                        self.toggle_workspace_node(&row.id, dir, cx);
+                    }
+                    // After expanding, or when already expanded, step into the
+                    // first visible child. This makes Right literally descend one
+                    // level rather than only toggling the disclosure arrow.
+                    let expanded_rows = self.workspace_visible_rows(section);
+                    let first_child = expanded_rows
+                        .get(index + 1)
+                        .filter(|child| child.parent_id.as_deref() == Some(row.id.as_str()))
+                        .map(|child| child.id.clone());
+                    if let Some(child) = first_child {
+                        self.set_workspace_keyboard_node(section, child);
+                    }
                 }
-                if row.expandable && !row.expanded {
-                    let dir = match &row.kind {
-                        WorkspaceTreeKind::Directory(path) => Some(path.as_path()),
-                        _ => None,
-                    };
-                    self.toggle_workspace_node(&row.id, dir, cx);
-                }
-                // After expanding, or when already expanded, step into the
-                // first visible child. This makes Right literally descend one
-                // level rather than only toggling the disclosure arrow.
-                let expanded_rows = self.workspace_visible_rows(section);
-                let first_child = expanded_rows
-                    .get(index + 1)
-                    .filter(|child| child.parent_id.as_deref() == Some(row.id.as_str()))
-                    .map(|child| child.id.clone());
-                if let Some(child) = first_child {
-                    self.set_workspace_keyboard_node(section, child);
-                    cx.notify();
-                }
-                true
             }
             "left" => {
                 let Some(index) = current else {
@@ -967,6 +956,7 @@ impl Editor {
                         section,
                         rows.first().expect("rows is non-empty").id.clone(),
                     );
+                    self.scroll_workspace_cursor_into_view(section);
                     cx.notify();
                     return true;
                 };
@@ -979,11 +969,33 @@ impl Editor {
                     self.toggle_workspace_node(&row.id, dir, cx);
                 } else if let Some(parent) = row.parent_id {
                     self.set_workspace_keyboard_node(section, parent);
-                    cx.notify();
                 }
-                true
             }
-            _ => false,
+            _ => return false,
+        }
+
+        self.scroll_workspace_cursor_into_view(section);
+        cx.notify();
+        true
+    }
+
+    /// Flat index of the keyboard cursor within a section's visible rows,
+    /// which is exactly the order the section's rows are rendered (and thus
+    /// the order its scroll container lays children out).
+    fn workspace_cursor_row_index(&self, section: WorkspaceSection) -> Option<usize> {
+        let rows = self.workspace_visible_rows(section);
+        let node_id = self.workspace_keyboard_node(section)?;
+        rows.iter().position(|row| row.id == node_id)
+    }
+
+    /// Scrolls a section's viewport so the highlighted row is visible.
+    fn scroll_workspace_cursor_into_view(&self, section: WorkspaceSection) {
+        let Some(index) = self.workspace_cursor_row_index(section) else {
+            return;
+        };
+        match section {
+            WorkspaceSection::Files => self.workspace_files_scroll_handle.scroll_to_item(index),
+            WorkspaceSection::Outline => self.workspace_outline_scroll_handle.scroll_to_item(index),
         }
     }
 
@@ -1153,7 +1165,7 @@ impl Editor {
         label: String,
         is_open: bool,
         scroll_id: &'static str,
-        body: Option<AnyElement>,
+        body: Option<Vec<AnyElement>>,
         theme: &Theme,
         editor: &WeakEntity<Editor>,
     ) -> Vec<AnyElement> {
@@ -1167,6 +1179,10 @@ impl Editor {
         };
         let arrow = if is_open { "v" } else { ">" };
         let header_editor = editor.clone();
+        let scroll_handle = match section {
+            WorkspaceSection::Files => &self.workspace_files_scroll_handle,
+            WorkspaceSection::Outline => &self.workspace_outline_scroll_handle,
+        };
 
         let header = div()
             .id(header_id)
@@ -1206,12 +1222,15 @@ impl Editor {
             elements.push(
                 div()
                     .id(scroll_id)
+                    .flex()
+                    .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
                     .overflow_y_scroll()
+                    .track_scroll(scroll_handle)
                     .px(px(8.0))
                     .py(px(10.0))
-                    .child(body)
+                    .children(body)
                     .into_any_element(),
             );
         }
@@ -1223,47 +1242,49 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         editor: &WeakEntity<Editor>,
-    ) -> AnyElement {
+    ) -> Vec<AnyElement> {
         if self.workspace.root.is_none() {
-            return self.render_workspace_empty_state(
+            return vec![self.render_workspace_empty_state(
                 &strings.workspace_no_file_title,
                 &strings.workspace_no_file_message,
                 theme,
-            );
+            )];
         }
 
         if let Some(error) = self.workspace.file_error.as_ref() {
-            return self.render_workspace_empty_state(
+            return vec![self.render_workspace_empty_state(
                 &strings.workspace_scan_failed_title,
                 error,
                 theme,
-            );
+            )];
         }
 
         let Some(root) = self.workspace.file_tree.as_ref() else {
-            return self.render_workspace_empty_state("", &strings.workspace_empty_files, theme);
+            return vec![self.render_workspace_empty_state(
+                "",
+                &strings.workspace_empty_files,
+                theme,
+            )];
         };
 
-        let parent_row = self
+        let mut rows = Vec::new();
+        if self
             .workspace
             .root
             .as_deref()
             .and_then(Path::parent)
-            .map(|_| self.render_workspace_parent_row(theme, editor));
-
-        div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .children(parent_row)
-            .children(self.render_workspace_nodes(
-                std::slice::from_ref(root),
-                0,
-                WorkspaceSection::Files,
-                theme,
-                editor,
-            ))
-            .into_any_element()
+            .is_some()
+        {
+            rows.push(self.render_workspace_parent_row(theme, editor));
+        }
+        rows.extend(self.render_workspace_nodes(
+            std::slice::from_ref(root),
+            0,
+            WorkspaceSection::Files,
+            theme,
+            editor,
+        ));
+        rows
     }
 
     /// The synthetic "navigate to parent directory" row prepended above the
@@ -1346,23 +1367,22 @@ impl Editor {
         theme: &Theme,
         strings: &I18nStrings,
         editor: &WeakEntity<Editor>,
-    ) -> AnyElement {
+    ) -> Vec<AnyElement> {
         if self.workspace.outline_tree.is_empty() {
-            return self.render_workspace_empty_state("", &strings.workspace_empty_outline, theme);
+            return vec![self.render_workspace_empty_state(
+                "",
+                &strings.workspace_empty_outline,
+                theme,
+            )];
         }
 
-        div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .children(self.render_workspace_nodes(
-                &self.workspace.outline_tree,
-                0,
-                WorkspaceSection::Outline,
-                theme,
-                editor,
-            ))
-            .into_any_element()
+        self.render_workspace_nodes(
+            &self.workspace.outline_tree,
+            0,
+            WorkspaceSection::Outline,
+            theme,
+            editor,
+        )
     }
 
     fn render_workspace_empty_state(
@@ -2707,6 +2727,62 @@ mod tests {
             assert_eq!(
                 editor.workspace.keyboard_file_node.as_deref(),
                 Some(WORKSPACE_PARENT_NODE_ID)
+            );
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn arrow_key_navigation_scrolls_files_row_into_view(cx: &mut gpui::TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-scroll-files-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dirs");
+        for i in 0..40 {
+            fs::write(root.join(format!("f{i:02}.md")), "x").expect("write md");
+        }
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            for _ in 0..100 {
+                editor.workspace_handle_navigation_key("down", cx);
+            }
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, _cx| {
+            let section = WorkspaceSection::Files;
+            let rows = editor.workspace_visible_rows(section);
+            let index = editor
+                .workspace_cursor_row_index(section)
+                .expect("cursor has a visible row");
+            assert_eq!(index, rows.len() - 1, "cursor should sit on the last row");
+
+            let handle = &editor.workspace_files_scroll_handle;
+            let bounds = handle
+                .bounds_for_item(index)
+                .expect("row bounds available after layout");
+            let viewport = handle.bounds();
+            let offset = handle.offset();
+            let top = bounds.top() + offset.y;
+            let bottom = bounds.bottom() + offset.y;
+            assert!(
+                top >= viewport.top() - gpui::px(1.0)
+                    && bottom <= viewport.bottom() + gpui::px(1.0),
+                "selected row {bounds:?} (offset {offset:?}) is not inside viewport {viewport:?}"
             );
         });
 
