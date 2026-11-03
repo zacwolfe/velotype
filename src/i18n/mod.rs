@@ -256,6 +256,7 @@ pub struct I18nStrings {
     pub preferences_shortcut_dismiss_transient_ui: String,
     pub preferences_shortcut_toggle_view_mode: String,
     pub preferences_shortcut_toggle_workspace: String,
+    pub preferences_shortcut_cycle_workspace_focus: String,
     pub preferences_shortcut_find: String,
     pub preferences_shortcut_find_next: String,
     pub preferences_shortcut_find_previous: String,
@@ -522,6 +523,7 @@ struct I18nStringsDe {
     preferences_shortcut_dismiss_transient_ui: Option<String>,
     preferences_shortcut_toggle_view_mode: Option<String>,
     preferences_shortcut_toggle_workspace: Option<String>,
+    preferences_shortcut_cycle_workspace_focus: Option<String>,
     preferences_shortcut_find: Option<String>,
     preferences_shortcut_find_next: Option<String>,
     preferences_shortcut_find_previous: Option<String>,
@@ -730,6 +732,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_shortcut_dismiss_transient_ui",
     "preferences_shortcut_toggle_view_mode",
     "preferences_shortcut_toggle_workspace",
+    "preferences_shortcut_cycle_workspace_focus",
     "preferences_shortcut_find",
     "preferences_shortcut_find_next",
     "preferences_shortcut_find_previous",
@@ -1194,6 +1197,9 @@ impl I18nStringsDe {
             preferences_shortcut_toggle_workspace: self
                 .preferences_shortcut_toggle_workspace
                 .unwrap_or(defaults.preferences_shortcut_toggle_workspace),
+            preferences_shortcut_cycle_workspace_focus: self
+                .preferences_shortcut_cycle_workspace_focus
+                .unwrap_or(defaults.preferences_shortcut_cycle_workspace_focus),
             preferences_shortcut_find: self
                 .preferences_shortcut_find
                 .unwrap_or(defaults.preferences_shortcut_find),
@@ -1510,6 +1516,7 @@ impl I18nStrings {
             preferences_shortcut_dismiss_transient_ui: "关闭临时界面".into(),
             preferences_shortcut_toggle_view_mode: "切换视图模式".into(),
             preferences_shortcut_toggle_workspace: "切换工作区".into(),
+            preferences_shortcut_cycle_workspace_focus: "切换文件、大纲与文档焦点".into(),
             preferences_shortcut_find: "查找".into(),
             preferences_shortcut_find_next: "查找下一个".into(),
             preferences_shortcut_find_previous: "查找上一个".into(),
@@ -1748,6 +1755,8 @@ impl I18nStrings {
             preferences_shortcut_dismiss_transient_ui: "Dismiss Temporary UI".into(),
             preferences_shortcut_toggle_view_mode: "Toggle View Mode".into(),
             preferences_shortcut_toggle_workspace: "Toggle Workspace".into(),
+            preferences_shortcut_cycle_workspace_focus: "Cycle Files, Outline, and Document Focus"
+                .into(),
             preferences_shortcut_find: "Find".into(),
             preferences_shortcut_find_next: "Find Next".into(),
             preferences_shortcut_find_previous: "Find Previous".into(),

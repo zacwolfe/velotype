@@ -72,6 +72,7 @@ actions!(
         DismissTransientUi,
         ToggleViewMode,
         ToggleWorkspace,
+        CycleWorkspaceFocus,
         SelectNextWindow,
         SelectPreviousWindow,
         Find,
@@ -168,6 +169,7 @@ pub(crate) enum ShortcutCommand {
     DismissTransientUi,
     ToggleViewMode,
     ToggleWorkspace,
+    CycleWorkspaceFocus,
     SelectNextWindow,
     SelectPreviousWindow,
     Find,
@@ -545,6 +547,13 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         default_keys: &["ctrl-w"],
         context: None,
     },
+    ShortcutDefinition {
+        command: ShortcutCommand::CycleWorkspaceFocus,
+        id: "cycle_workspace_focus",
+        category: ShortcutCategory::Navigation,
+        default_keys: &["ctrl-shift-tab"],
+        context: None,
+    },
     // Window cycling matches the macOS convention (cmd-` / cmd-shift-`). Global
     // context so it works while editing; handled app-wide, not per block.
     ShortcutDefinition {
@@ -794,6 +803,9 @@ fn key_binding_for(
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),
         ShortcutCommand::ToggleViewMode => KeyBinding::new(key, ToggleViewMode, context),
         ShortcutCommand::ToggleWorkspace => KeyBinding::new(key, ToggleWorkspace, context),
+        ShortcutCommand::CycleWorkspaceFocus => {
+            KeyBinding::new(key, CycleWorkspaceFocus, context)
+        }
         ShortcutCommand::SelectNextWindow => KeyBinding::new(key, SelectNextWindow, context),
         ShortcutCommand::SelectPreviousWindow => {
             KeyBinding::new(key, SelectPreviousWindow, context)
@@ -865,6 +877,24 @@ mod tests {
         assert_eq!(
             resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::ToggleWorkspace),
             vec!["ctrl-w".to_string()]
+        );
+    }
+
+    #[test]
+    fn cycle_workspace_focus_shortcut_is_configurable() {
+        assert_eq!(
+            resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::CycleWorkspaceFocus),
+            vec!["ctrl-shift-tab".to_string()]
+        );
+
+        let mut config = BTreeMap::new();
+        config.insert(
+            "cycle_workspace_focus".to_string(),
+            vec!["alt-1".to_string()],
+        );
+        assert_eq!(
+            resolved_shortcut_keys(&config, ShortcutCommand::CycleWorkspaceFocus),
+            vec!["alt-1".to_string()]
         );
     }
 

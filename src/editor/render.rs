@@ -2191,6 +2191,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::on_close_window))
             .on_action(cx.listener(Self::on_toggle_view_mode_action))
             .on_action(cx.listener(Self::on_toggle_workspace_action))
+            .on_action(cx.listener(Self::on_cycle_workspace_focus))
             .on_action(cx.listener(Self::on_find))
             .on_action(cx.listener(Self::on_find_next))
             .on_action(cx.listener(Self::on_find_previous))

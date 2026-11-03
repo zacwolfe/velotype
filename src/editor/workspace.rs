@@ -688,10 +688,135 @@ impl Editor {
         cx.notify();
     }
 
+    /// Keeps the sidebar keyboard cursor focused after an action that would
+    /// otherwise hand focus to the document (opening a file, jumping to a
+    /// heading, or applying a stale pending focus).
+    fn retain_workspace_keyboard_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_drop_replace_dialog {
+            return;
+        }
+        self.pending_focus = None;
+        window.focus(&self.workspace_focus_handle);
+        cx.notify();
+    }
+
+    fn focus_document_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self
+            .active_entity_id
+            .filter(|id| self.focusable_entity_by_id(*id).is_some())
+            .or_else(|| self.first_focusable_entity_id(cx));
+        if let Some(entity_id) = target
+            && let Some(block) = self.focusable_entity_by_id(entity_id)
+        {
+            block.read(cx).focus_handle.focus(window);
+            self.active_entity_id = Some(entity_id);
+            self.pending_focus = None;
+            self.pending_scroll_active_block_into_view = true;
+        }
+        cx.notify();
+    }
+
+    /// Cycles focus through the visible sidebar sections and the document.
+    pub(super) fn cycle_workspace_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspace.is_open {
+            self.reveal_workspace_drawer(cx);
+        }
+        self.sync_workspace_models(cx);
+
+        let mut sections = Vec::new();
+        if self.workspace_section_is_usable(WorkspaceSection::Files) {
+            sections.push(WorkspaceSection::Files);
+        }
+        if self.workspace_section_is_usable(WorkspaceSection::Outline) {
+            sections.push(WorkspaceSection::Outline);
+        }
+
+        let current_section = self
+            .workspace_focus_handle
+            .is_focused(window)
+            .then_some(self.workspace.keyboard_section)
+            .flatten()
+            .filter(|section| sections.contains(section));
+
+        let next_section = match current_section.and_then(|current| {
+            sections
+                .iter()
+                .position(|section| *section == current)
+                .map(|index| index + 1)
+        }) {
+            Some(index) if index < sections.len() => Some(sections[index]),
+            Some(_) => None,
+            None => sections.first().copied(),
+        };
+
+        if let Some(section) = next_section {
+            self.focus_workspace_section(section, window, cx);
+        } else {
+            self.focus_document_panel(window, cx);
+        }
+    }
+
+    pub(super) fn on_cycle_workspace_focus(
+        &mut self,
+        _: &crate::components::CycleWorkspaceFocus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cycle_workspace_focus(window, cx);
+    }
+
+    /// Activates the keyboard cursor: opens a file in the Files tree, toggles a
+    /// directory, or jumps to a heading in the Outline tree.
+    fn workspace_activate_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(section) = self.workspace_active_section() else {
+            return false;
+        };
+        let rows = self.workspace_visible_rows(section);
+        let node_id = self
+            .workspace_keyboard_node(section)
+            .filter(|id| rows.iter().any(|row| row.id == *id))
+            .or_else(|| self.workspace_default_cursor(section, &rows));
+        let Some(node_id) = node_id else {
+            return false;
+        };
+        let Some(row) = rows.into_iter().find(|row| row.id == node_id) else {
+            return false;
+        };
+
+        match (section, row.kind) {
+            (WorkspaceSection::Files, WorkspaceTreeKind::MarkdownFile(path)) => {
+                self.set_workspace_keyboard_node(section, row.id.clone());
+                self.open_workspace_file(path, window, cx);
+                self.retain_workspace_keyboard_focus(window, cx);
+                true
+            }
+            (WorkspaceSection::Files, WorkspaceTreeKind::Directory(path)) => {
+                self.set_workspace_keyboard_node(section, row.id.clone());
+                if row.expandable {
+                    self.toggle_workspace_node(&row.id, Some(&path), cx);
+                }
+                self.retain_workspace_keyboard_focus(window, cx);
+                true
+            }
+            (WorkspaceSection::Outline, WorkspaceTreeKind::Heading { line, .. }) => {
+                self.set_workspace_keyboard_node(section, row.id.clone());
+                self.select_outline_node(row.id, cx);
+                self.jump_to_outline_heading(line, cx);
+                self.retain_workspace_keyboard_focus(window, cx);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn on_workspace_key_down(
         &mut self,
         event: &KeyDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let modifiers = event.keystroke.modifiers;
@@ -705,10 +830,17 @@ impl Editor {
         }
 
         let key = event.keystroke.key.as_str();
+        if key == "enter" {
+            if self.workspace_activate_cursor(window, cx) {
+                cx.stop_propagation();
+            }
+            return;
+        }
         if !matches!(key, "up" | "down" | "left" | "right") {
             return;
         }
         if self.workspace_handle_navigation_key(key, cx) {
+            self.retain_workspace_keyboard_focus(window, cx);
             cx.stop_propagation();
         }
     }
@@ -1330,6 +1462,7 @@ impl Editor {
                     let _ = arrow_editor.update(cx, |editor, cx| {
                         editor.focus_workspace_node(section, arrow_node_id.clone(), window, cx);
                         editor.toggle_workspace_node(&arrow_node_id, arrow_dir.as_deref(), cx);
+                        editor.retain_workspace_keyboard_focus(window, cx);
                     });
                     cx.stop_propagation();
                 },
@@ -1416,6 +1549,7 @@ impl Editor {
                             editor.jump_to_outline_heading(line, cx);
                         }
                     }
+                    editor.retain_workspace_keyboard_focus(window, cx);
                 });
             })
             .into_any_element()
@@ -2579,6 +2713,104 @@ mod tests {
                 Some("outline:0")
             );
         });
+    }
+
+    #[gpui::test]
+    async fn cycle_focus_visits_files_then_outline_then_document(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-focus-cycle-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dir");
+        let path = root.join("note.md");
+        fs::write(&path, "# Heading\n\nbody").expect("write md");
+
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "# Heading\n\nbody".to_string(), Some(path.clone()))
+        });
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+            assert!(editor.workspace_focus_handle.is_focused(window));
+
+            editor.cycle_workspace_focus(window, cx);
+            assert_eq!(
+                editor.workspace.keyboard_section,
+                Some(WorkspaceSection::Outline)
+            );
+            assert!(editor.workspace_focus_handle.is_focused(window));
+
+            editor.cycle_workspace_focus(window, cx);
+            assert!(!editor.workspace_focus_handle.is_focused(window));
+            let first = editor.document.visible_blocks()[0].entity.clone();
+            assert!(first.read(cx).focus_handle.is_focused(window));
+
+            editor.cycle_workspace_focus(window, cx);
+            assert_eq!(
+                editor.workspace.keyboard_section,
+                Some(WorkspaceSection::Files)
+            );
+            assert!(editor.workspace_focus_handle.is_focused(window));
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn enter_on_outline_heading_jumps_and_keeps_sidebar_focus(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let (editor, cx) = cx.add_window_view(|_window, cx| {
+            Editor::from_markdown(cx, "# A\n\n## B\n\nbody".to_string(), None)
+        });
+
+        editor.update_in(cx, |editor, window, cx| {
+            editor.sync_workspace_models(cx);
+            editor.workspace.keyboard_section = Some(WorkspaceSection::Outline);
+            editor.workspace.keyboard_outline_node = Some("outline:0".to_string());
+            editor.focus_workspace_section(WorkspaceSection::Outline, window, cx);
+
+            assert!(editor.workspace_activate_cursor(window, cx));
+            assert!(editor.pending_focus.is_none());
+            assert!(editor.workspace_focus_handle.is_focused(window));
+            assert_eq!(editor.workspace.selected_outline.as_deref(), Some("outline:0"));
+            assert!(editor.active_entity_id.is_some());
+        });
+    }
+
+    #[gpui::test]
+    async fn enter_on_file_opens_it_and_keeps_sidebar_focus(cx: &mut gpui::TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-enter-file-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dir");
+        let path = root.join("note.md");
+        fs::write(&path, "# Opened\n\nbody").expect("write md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            let file_id = format!("file:{}", path.to_string_lossy());
+            editor.workspace.keyboard_section = Some(WorkspaceSection::Files);
+            editor.workspace.keyboard_file_node = Some(file_id);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+
+            assert!(editor.workspace_activate_cursor(window, cx));
+            assert_eq!(editor.file_path.as_deref(), Some(path.as_path()));
+            assert!(editor.pending_focus.is_none());
+            assert!(editor.workspace_focus_handle.is_focused(window));
+        });
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[gpui::test]
