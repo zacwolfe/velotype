@@ -164,6 +164,7 @@ pub(crate) enum ShortcutCommand {
     NewWindow,
     OpenFile,
     OpenFolder,
+    OpenPreferences,
     QuitApplication,
     CloseWindow,
     DismissTransientUi,
@@ -513,6 +514,13 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         context: None,
     },
     ShortcutDefinition {
+        command: ShortcutCommand::OpenPreferences,
+        id: "open_preferences",
+        category: ShortcutCategory::File,
+        default_keys: &["cmd-,", "ctrl-,"],
+        context: None,
+    },
+    ShortcutDefinition {
         command: ShortcutCommand::QuitApplication,
         id: "quit_application",
         category: ShortcutCategory::File,
@@ -798,6 +806,7 @@ fn key_binding_for(
         ShortcutCommand::NewWindow => KeyBinding::new(key, NewWindow, context),
         ShortcutCommand::OpenFile => KeyBinding::new(key, OpenFile, context),
         ShortcutCommand::OpenFolder => KeyBinding::new(key, OpenFolder, context),
+        ShortcutCommand::OpenPreferences => KeyBinding::new(key, OpenPreferences, context),
         ShortcutCommand::QuitApplication => KeyBinding::new(key, QuitApplication, context),
         ShortcutCommand::CloseWindow => KeyBinding::new(key, CloseWindow, context),
         ShortcutCommand::DismissTransientUi => KeyBinding::new(key, DismissTransientUi, context),
@@ -1063,6 +1072,14 @@ mod tests {
         assert_eq!(
             resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::JumpToBottom),
             vec!["ctrl-end".to_string(), "cmd-down".to_string()]
+        );
+    }
+
+    #[test]
+    fn open_preferences_uses_cmd_comma_default() {
+        assert_eq!(
+            resolved_shortcut_keys(&BTreeMap::new(), ShortcutCommand::OpenPreferences),
+            vec!["cmd-,".to_string(), "ctrl-,".to_string()]
         );
     }
 

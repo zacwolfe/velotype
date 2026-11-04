@@ -1918,6 +1918,7 @@ impl PreferencesWindow {
             ShortcutCommand::NewWindow => strings.preferences_shortcut_new_window.clone(),
             ShortcutCommand::OpenFile => strings.preferences_shortcut_open_file.clone(),
             ShortcutCommand::OpenFolder => strings.menu_open_folder.clone(),
+            ShortcutCommand::OpenPreferences => strings.menu_preferences.clone(),
             ShortcutCommand::QuitApplication => {
                 strings.preferences_shortcut_quit_application.clone()
             }
