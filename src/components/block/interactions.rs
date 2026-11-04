@@ -1801,6 +1801,23 @@ impl Block {
     }
 
     /// Requests another body row from the editor for a native table.
+
+    /// Toggles this table between the centered column width and wide mode,
+    /// where it stretches to the full editor content width. View-only state:
+    /// nothing is written back to the document.
+    pub(crate) fn on_toggle_table_wide_mode(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.kind() == BlockKind::Table {
+            self.table_wide_mode = !self.table_wide_mode;
+            cx.notify();
+        }
+    }
+
+    /// Requests another body row from the editor for a native table.
     pub(crate) fn on_append_table_row(
         &mut self,
         _: &ClickEvent,

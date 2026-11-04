@@ -233,6 +233,9 @@ pub struct Block {
     pub(crate) table_append_row_button_hovered: bool,
     /// Deferred task that closes the append-row control.
     pub(crate) table_append_row_close_task: Option<Task<()>>,
+    /// Per-table view preference: when true the table stretches to the full
+    /// editor content width instead of the centered column. Not persisted.
+    pub(crate) table_wide_mode: bool,
     /// Resolved standalone image presentation, when applicable.
     image_runtime: Option<ImageRuntime>,
     /// Whether the image editor is currently expanded.
@@ -348,6 +351,7 @@ impl Block {
             table_append_row_zone_hovered: false,
             table_append_row_button_hovered: false,
             table_append_row_close_task: None,
+            table_wide_mode: false,
             image_runtime: None,
             image_edit_expanded: false,
             image_expand_requested: false,
@@ -369,6 +373,11 @@ impl Block {
     /// Returns the block's persistent kind.
     pub fn kind(&self) -> BlockKind {
         self.record.kind.clone()
+    }
+
+    /// True when this block is a table switched into wide mode by the user.
+    pub(crate) fn is_wide_table(&self) -> bool {
+        self.table_wide_mode && self.kind() == BlockKind::Table
     }
 
     /// Whether this block is editing source Markdown without rich parsing.
