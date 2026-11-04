@@ -79,6 +79,23 @@ impl Block {
         self.record.table_markdown_editing
     }
 
+    /// Whether this table is the active editing target. The native grid
+    /// focuses its cell editors rather than the non-editable table container,
+    /// so a table counts as focused when its own focus handle is focused
+    /// (raw-Markdown edit mode) or any of its cells is focused (grid mode).
+    pub(crate) fn table_focus_active(&self, window: &Window, cx: &App) -> bool {
+        if self.focus_handle.is_focused(window) {
+            return true;
+        }
+        let Some(runtime) = self.table_runtime.as_ref() else {
+            return false;
+        };
+        let cell_focused = |cell: &Entity<Block>| {
+            cell.read_with(cx, |cell, _cx| cell.focus_handle.is_focused(window))
+        };
+        runtime.header.iter().any(cell_focused) || runtime.rows.iter().flatten().any(cell_focused)
+    }
+
     /// Keeps raw-Markdown table editing in sync with focus, mirroring
     /// `sync_image_focus_state`. `enabled` is the live `edit_tables_as_markdown`
     /// preference; the caller (`render`) reads it via `cx` since `BlockRecord`

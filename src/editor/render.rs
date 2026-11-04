@@ -423,9 +423,25 @@ impl Editor {
     }
 
     fn apply_pending_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(entity_id) = self.pending_focus.take()
-            && let Some(block) = self.focusable_entity_by_id(entity_id)
-        {
+        let Some(entity_id) = self.pending_focus.take() else {
+            return;
+        };
+        // With `edit_tables_as_markdown` enabled a table is edited as raw
+        // Markdown rather than as individual cells, so a focus request aimed
+        // at a cell is redirected to the table container. The container
+        // renders a focusable Markdown editor, so the caret lands in the
+        // text instead of a now-hidden cell.
+        let redirect = if crate::config::EditorSettings::edit_tables_as_markdown(cx) {
+            self.table_cell_binding(entity_id)
+                .map(|binding| binding.table_block.entity_id())
+        } else {
+            None
+        };
+        let target_id = redirect.unwrap_or(entity_id);
+        if redirect.is_some() {
+            self.active_entity_id = Some(target_id);
+        }
+        if let Some(block) = self.focusable_entity_by_id(target_id) {
             block.read(cx).focus_handle.focus(window);
         }
     }

@@ -3681,6 +3681,52 @@ async fn ctrl_enter_exits_focused_table_cell(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn focusing_table_cell_with_markdown_editing_enabled_switches_to_raw_markdown(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false));
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        let cell = table
+            .read(cx)
+            .table_runtime
+            .as_ref()
+            .expect("table runtime")
+            .rows[0][0]
+            .clone();
+        editor.focus_block(cell.entity_id());
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        assert!(table.read(cx).is_table_markdown_editing());
+    });
+
+    // A second paint must not reparse back to the grid: focus detection has
+    // to survive the grid being torn down in favour of the Markdown editor.
+    redraw(cx);
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        assert!(table.read(cx).is_table_markdown_editing());
+    });
+
+    // The caret must land in the Markdown text so typing edits the raw table.
+    cx.simulate_input("X");
+    redraw(cx);
+    editor.update(cx, |editor, cx| {
+        let table = editor.document.first_root().expect("table root").clone();
+        assert!(table.read(cx).is_table_markdown_editing());
+        assert!(table.read(cx).record.title.visible_text().starts_with("X"));
+    });
+}
+
+#[gpui::test]
 async fn ending_editor_pointer_selection_sessions_keeps_normal_selection(cx: &mut TestAppContext) {
     let editor =
         cx.new(|cx| Editor::from_markdown(cx, "```rust\nfn main() {}\n```".to_string(), None));

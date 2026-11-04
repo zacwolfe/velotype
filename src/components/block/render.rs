@@ -1808,7 +1808,8 @@ impl Render for Block {
             cx.notify();
         }
         let edit_tables_as_markdown = crate::config::EditorSettings::edit_tables_as_markdown(cx);
-        if self.sync_table_markdown_focus_state(focused, edit_tables_as_markdown) {
+        let table_focus_active = self.table_focus_active(window, cx);
+        if self.sync_table_markdown_focus_state(table_focus_active, edit_tables_as_markdown) {
             cx.notify();
         }
 
