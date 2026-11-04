@@ -217,14 +217,15 @@ impl Editor {
     }
 
     pub(super) fn sync_workspace_after_document_path_change(&mut self, cx: &mut Context<Self>) {
+        // Capture where the sidebar was pointed before clearing it, so opening
+        // a file that already lives inside it keeps browsing there.
+        let previous_root = self.workspace.root.clone();
         self.workspace.root = None;
         self.workspace.file_tree = None;
         self.workspace.file_error = None;
         self.workspace.outline_source = None;
         self.workspace.outline_fingerprint = None;
-        // Keep an explicit root while the document being opened lives inside
-        // it, so browsing to a parent survives opening files from the tree;
-        // an unrelated document elsewhere reclaims the root.
+
         let inside_override = match (
             self.workspace_root_override.as_ref(),
             self.file_path.as_ref(),
@@ -232,7 +233,21 @@ impl Editor {
             (Some(root), Some(path)) => path.starts_with(root),
             _ => false,
         };
-        if !inside_override {
+        let inside_previous = match (previous_root.as_ref(), self.file_path.as_ref()) {
+            (Some(root), Some(path)) => path.starts_with(root),
+            _ => false,
+        };
+
+        if inside_override {
+            // Keep an explicit root while the document being opened lives inside
+            // it, so browsing to a parent survives opening files from the tree.
+        } else if inside_previous {
+            // No explicit root, but the file lives inside the directory the
+            // sidebar was already showing; pin it so selecting a file from a
+            // nested folder does not re-root the tree and hide its neighbours.
+            self.workspace_root_override = previous_root;
+        } else {
+            // An unrelated document elsewhere reclaims the root.
             self.workspace_root_override = None;
         }
         if self.workspace.is_open {
@@ -3255,6 +3270,55 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&elsewhere);
+    }
+
+    #[gpui::test]
+    async fn opening_a_file_in_a_nested_folder_keeps_the_current_root(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-nested-open-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).expect("create docs dir");
+        fs::write(root.join("AGENTS.md"), "x").expect("write AGENTS.md");
+        fs::write(root.join("README.md"), "x").expect("write README.md");
+        fs::write(docs.join("README.zh-CN.md"), "x").expect("write README.zh-CN.md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_string(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.toggle_workspace_drawer(window, cx);
+        });
+
+        // Opening a file at the root points the sidebar at that directory.
+        let agents = root.join("AGENTS.md");
+        editor.update(cx, |editor, cx| {
+            editor.file_path = Some(agents.clone());
+            editor.sync_workspace_after_document_path_change(cx);
+        });
+        editor.read_with(cx, |editor, _cx| {
+            assert_eq!(editor.workspace.root, Some(root.clone()));
+        });
+
+        // Selecting a file inside a nested folder must keep browsing the root,
+        // not re-root the tree at that folder and hide everything around it.
+        let zh_cn = docs.join("README.zh-CN.md");
+        editor.update(cx, |editor, cx| {
+            editor.file_path = Some(zh_cn.clone());
+            editor.sync_workspace_after_document_path_change(cx);
+        });
+        editor.read_with(cx, |editor, _cx| {
+            assert_eq!(
+                editor.workspace.root,
+                Some(root.clone()),
+                "opening a nested file re-rooted the sidebar away from the browsed directory"
+            );
+        });
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[gpui::test]
