@@ -2611,7 +2611,10 @@ impl Render for Block {
                 let append_extent = px(d.table_append_button_extent);
                 let append_inset = px(d.table_append_button_inset);
                 let activation_band = px(d.table_append_activation_band);
-                let column_append_top = activation_band;
+                // Reserve a fixed gutter above the header row and a fixed footer
+                // below the last row, so the column highlight and the row append
+                // control appear without shifting the table or following content.
+                let column_append_top = activation_band + activation_band;
                 let column_control_visible = self.table_append_column_hovered;
                 let row_control_visible = self.table_append_row_hovered;
                 let right_gutter = if column_control_visible {
@@ -2619,14 +2622,92 @@ impl Render for Block {
                 } else {
                     px(0.0)
                 };
-                let bottom_gutter = if row_control_visible {
-                    append_extent + append_inset
-                } else {
-                    px(0.0)
-                };
+                let bottom_gutter = append_extent + append_inset;
                 let weak_table_block = cx.entity().downgrade();
 
                 let header_cells = runtime.header;
+                // The column axis handle lives in its own reserved row above the
+                // header rather than overlapping the header cells, so hovering or
+                // right-clicking it never falls through to a cell (which would
+                // flip the table into raw Markdown under edit_tables_as_markdown).
+                let column_axis_row = div()
+                    .w_full()
+                    .h(activation_band)
+                    .flex()
+                    .gap(px(0.0))
+                    .children(header_cells.iter().enumerate().map(|(column, _cell)| {
+                        let hover_block = weak_table_block.clone();
+                        let select_block = weak_table_block.clone();
+                        let menu_block = weak_table_block.clone();
+                        let marker = crate::components::TableAxisMarker {
+                            kind: TableAxisKind::Column,
+                            index: column,
+                        };
+                        let band_bg = if selected_marker == Some(marker) {
+                            c.table_axis_selected_bg
+                        } else if preview_marker == Some(marker) {
+                            c.table_axis_preview_bg
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0)
+                        };
+                        div()
+                            .relative()
+                            .flex_none()
+                            .flex_basis(relative(column_layout.fraction(column)))
+                            .w(relative(column_layout.fraction(column)))
+                            .h_full()
+                            .min_w(px(0.0))
+                            .child(
+                                div()
+                                    .id(ElementId::Name(
+                                        format!(
+                                            "table-column-axis-band-{}-{}",
+                                            self.record.id, column
+                                        )
+                                        .into(),
+                                    ))
+                                    .w_full()
+                                    .h_full()
+                                    .rounded(px(6.0))
+                                    .bg(band_bg)
+                                    .cursor_pointer()
+                                    .on_hover(move |hovered, _window, cx| {
+                                        let _ = hover_block.update(cx, |_block, cx| {
+                                            cx.emit(BlockEvent::RequestTableAxisPreview {
+                                                kind: TableAxisKind::Column,
+                                                index: column,
+                                                hovered: *hovered,
+                                            });
+                                        });
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        move |_event, _window, cx| {
+                                            let _ = select_block.update(cx, |_block, cx| {
+                                                cx.stop_propagation();
+                                                cx.emit(BlockEvent::RequestSelectTableAxis {
+                                                    kind: TableAxisKind::Column,
+                                                    index: column,
+                                                });
+                                            });
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        move |event, _window, cx| {
+                                            let _ = menu_block.update(cx, |_block, cx| {
+                                                cx.stop_propagation();
+                                                cx.emit(BlockEvent::RequestOpenTableAxisMenu {
+                                                    kind: TableAxisKind::Column,
+                                                    index: column,
+                                                    position: event.position,
+                                                });
+                                            });
+                                        },
+                                    )
+                                    .block_mouse_except_scroll(),
+                            )
+                    }));
 
                 let header_hover_block = weak_table_block.clone();
                 let header_select_block = weak_table_block.clone();
@@ -2699,17 +2780,6 @@ impl Render for Block {
                         let hover_block = weak_table_block.clone();
                         let select_block = weak_table_block.clone();
                         let menu_block = weak_table_block.clone();
-                        let column_marker = crate::components::TableAxisMarker {
-                            kind: TableAxisKind::Column,
-                            index: column,
-                        };
-                        let column_band_bg = if selected_marker == Some(column_marker) {
-                            c.table_axis_selected_bg
-                        } else if preview_marker == Some(column_marker) {
-                            c.table_axis_preview_bg
-                        } else {
-                            hsla(0.0, 0.0, 0.0, 0.0)
-                        };
                         div()
                             .relative()
                             .flex_none()
@@ -2731,8 +2801,6 @@ impl Render for Block {
                                     .left_0()
                                     .right_0()
                                     .h(activation_band)
-                                    .rounded(px(6.0))
-                                    .bg(column_band_bg)
                                     .cursor_pointer()
                                     .on_hover(move |hovered, _window, cx| {
                                         let _ = hover_block.update(cx, |_block, cx| {
@@ -2860,7 +2928,8 @@ impl Render for Block {
                         });
 
                 {
-                    let mut rows = Vec::with_capacity(1 + body_row_count);
+                    let mut rows = Vec::with_capacity(2 + body_row_count);
+                    rows.push(column_axis_row.into_any_element());
                     rows.push(header_row.into_any_element());
                     rows.extend(body_rows.map(|row| row.into_any_element()));
 
