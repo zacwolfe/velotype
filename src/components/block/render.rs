@@ -194,7 +194,13 @@ fn visible_quote_guides(block: &Block) -> usize {
 }
 
 fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
-    let centered_width = Editor::centered_column_width(viewport_width, d);
+    // Wide mode stretches the table across the full editor content width; the
+    // default keeps it inside the narrower centered reading column.
+    let base_width = if block.table_wide_mode {
+        (viewport_width - d.editor_padding * 2.0).max(1.0)
+    } else {
+        Editor::centered_column_width(viewport_width, d)
+    };
     let visible_quote_guides = visible_quote_guides(block);
     let quote_inset = d.quote_padding_left * visible_quote_guides as f32;
     let callout_inset = if block.callout_depth > 0 {
@@ -203,7 +209,7 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
         0.0
     };
 
-    (centered_width - quote_inset - callout_inset)
+    (base_width - quote_inset - callout_inset)
         .max((d.table_cell_padding_x * 2.0 + 80.0).max(120.0))
 }
 
@@ -3043,6 +3049,37 @@ impl Render for Block {
                         }
                     };
 
+                    // Always-visible control in the reserved top-right gutter
+                    // that flips this table between the centered column and
+                    // wide mode (full editor content width).
+                    let wide_mode_active = self.table_wide_mode;
+                    let wide_toggle = div()
+                        .id(ElementId::Name(
+                            format!("table-wide-toggle-{}", self.record.id).into(),
+                        ))
+                        .absolute()
+                        .occlude()
+                        .top_0()
+                        .right_0()
+                        .w(px(d.table_append_button_extent))
+                        .h(activation_band)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .bg(if wide_mode_active {
+                            c.table_axis_selected_bg
+                        } else {
+                            c.table_append_button_bg
+                        })
+                        .hover(|this| this.bg(c.table_append_button_hover))
+                        .cursor_pointer()
+                        .text_size(px((t.text_size - 2.0).max(9.0)))
+                        .text_color(c.table_append_button_text)
+                        .block_mouse_except_scroll()
+                        .on_click(cx.listener(Self::on_toggle_table_wide_mode))
+                        .child("\u{2194}");
+
                     div()
                         .id(block_id)
                         .w_full()
@@ -3057,6 +3094,7 @@ impl Render for Block {
                         .child(row_edge_band)
                         .child(column_control)
                         .child(row_control)
+                        .child(wide_toggle)
                         .into_any_element()
                 }
             }

@@ -72,6 +72,9 @@ struct RenderedRowSpacingInfo {
     is_callout_header: bool,
     footnote_anchor: Option<uuid::Uuid>,
     is_footnote_header: bool,
+    /// True when the row's block is a table switched into wide mode, which
+    /// stretches the row to the full editor content width.
+    wide_table: bool,
 }
 
 impl RenderedRowSpacingInfo {
@@ -84,6 +87,7 @@ impl RenderedRowSpacingInfo {
             is_callout_header: block.kind().is_callout(),
             footnote_anchor: block.footnote_anchor,
             is_footnote_header: block.kind().is_footnote_definition(),
+            wide_table: block.is_wide_table(),
         }
     }
 }
@@ -1677,6 +1681,11 @@ impl Render for Editor {
         let has_overflow = max_scroll_y > 0.5;
 
         let centered_width = Self::centered_column_width(viewport_width, &theme.dimensions);
+        // Full content width available to a row: the viewport minus the editor
+        // padding applied by the scroll container. Wide-mode tables use this so
+        // they can break out of the narrower centered reading column.
+        let available_content_width =
+            (viewport_width - theme.dimensions.editor_padding * 2.0).max(1.0);
         let current_scroll_y = (-f32::from(self.scroll_handle.offset().y)).clamp(0.0, max_scroll_y);
         let scrollbar_geometry =
             Self::scrollbar_geometry(viewport_height, max_scroll_y, current_scroll_y);
@@ -1872,8 +1881,13 @@ impl Render for Editor {
             }
 
             let entity = first_visible.entity.clone();
+            let row_width = if first_spacing.wide_table {
+                available_content_width
+            } else {
+                centered_width
+            };
             let row = div()
-                .w(px(centered_width))
+                .w(px(row_width))
                 .max_w(relative(1.0))
                 .flex_shrink_0()
                 .mt(px(top_gap))
