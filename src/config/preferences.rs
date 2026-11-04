@@ -1105,6 +1105,8 @@ pub(crate) fn save_preferences_from_window(
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
     auto_download_updates: bool,
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -1121,6 +1123,8 @@ pub(crate) fn save_preferences_from_window(
         image_paste_fallback,
         picgo_server_url,
         auto_download_updates,
+        show_table_headers,
+        edit_tables_as_markdown,
         reveal_source_on_focus,
         reveal_image_source_on_click,
         keybindings,
@@ -1140,6 +1144,8 @@ fn save_preferences_from_window_with_dirs(
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
     auto_download_updates: bool,
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -1157,6 +1163,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.image_paste_fallback = image_paste_fallback.local_only();
     preferences.picgo_server_url = picgo_server_url.to_string();
     preferences.auto_download_updates = auto_download_updates;
+    preferences.show_table_headers = show_table_headers;
+    preferences.edit_tables_as_markdown = edit_tables_as_markdown;
     preferences.reveal_source_on_focus = reveal_source_on_focus;
     preferences.reveal_image_source_on_click = reveal_image_source_on_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
@@ -1238,6 +1246,8 @@ pub(crate) struct PreferencesWindow {
     /// Keeps the current check alive without doing OS work during rendering.
     file_association_task: Option<Task<()>>,
     /// Draft shortcut overrides.
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -1258,6 +1268,8 @@ pub(crate) struct PreferencesWindow {
     /// Cancels superseded checks while the address field is being edited.
     picgo_check_task: Option<Task<()>>,
     /// Shortcut overrides used as the dirty-state baseline.
+    saved_show_table_headers: bool,
+    saved_edit_tables_as_markdown: bool,
     saved_reveal_source_on_focus: bool,
     saved_reveal_image_source_on_click: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
@@ -1417,6 +1429,8 @@ impl PreferencesWindow {
             image_paste_behavior,
             image_paste_fallback,
             picgo_server_url: picgo_server_url.clone(),
+            show_table_headers: preferences.show_table_headers,
+            edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             reveal_source_on_focus: preferences.reveal_source_on_focus,
             reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             keybindings: keybindings.clone(),
@@ -1434,6 +1448,8 @@ impl PreferencesWindow {
             picgo_status: PicGoStatus::Checking,
             picgo_check_generation: 0,
             picgo_check_task: None,
+            saved_show_table_headers: preferences.show_table_headers,
+            saved_edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             saved_keybindings: keybindings,
@@ -1523,6 +1539,8 @@ impl PreferencesWindow {
             || self.image_paste_fallback != self.saved_image_paste_fallback
             || self.picgo_server_url != self.saved_picgo_server_url
             || self.auto_download_updates != self.saved_auto_download_updates
+            || self.show_table_headers != self.saved_show_table_headers
+            || self.edit_tables_as_markdown != self.saved_edit_tables_as_markdown
             || self.reveal_source_on_focus != self.saved_reveal_source_on_focus
             || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
             || normalize_shortcut_config(&self.keybindings)
@@ -1827,6 +1845,8 @@ impl PreferencesWindow {
             self.image_paste_fallback,
             &self.picgo_server_url,
             self.auto_download_updates,
+            self.show_table_headers,
+            self.edit_tables_as_markdown,
             self.reveal_source_on_focus,
             self.reveal_image_source_on_click,
             self.keybindings.clone(),
@@ -1888,6 +1908,8 @@ impl PreferencesWindow {
                 preferences.status_bar.show_sidebar_toggle;
             settings.status_bar_settings.status_bar_show_mode_switch =
                 preferences.status_bar.show_mode_switch;
+            settings.show_table_headers = preferences.show_table_headers;
+            settings.edit_tables_as_markdown = preferences.edit_tables_as_markdown;
             settings.reveal_source_on_focus = preferences.reveal_source_on_focus;
             settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
         });
@@ -1912,6 +1934,8 @@ impl PreferencesWindow {
         self.saved_status_bar_show_sidebar_toggle = self.status_bar_show_sidebar_toggle;
         self.saved_status_bar_show_mode_switch = self.status_bar_show_mode_switch;
         self.saved_fonts = self.fonts.clone();
+        self.saved_show_table_headers = self.show_table_headers;
+        self.saved_edit_tables_as_markdown = self.edit_tables_as_markdown;
         self.saved_reveal_source_on_focus = self.reveal_source_on_focus;
         self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
         cx.notify();
@@ -2512,6 +2536,26 @@ impl PreferencesWindow {
                 self.reveal_source_on_focus,
                 |this, _, _, cx| {
                     this.reveal_source_on_focus = !this.reveal_source_on_focus;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
+            .child(self.switch_row(
+                &strings.preferences_show_table_headers,
+                self.show_table_headers,
+                |this, _, _, cx| {
+                    this.show_table_headers = !this.show_table_headers;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
+            .child(self.switch_row(
+                &strings.preferences_edit_tables_as_markdown,
+                self.edit_tables_as_markdown,
+                |this, _, _, cx| {
+                    this.edit_tables_as_markdown = !this.edit_tables_as_markdown;
                     cx.notify();
                 },
                 theme,
@@ -3842,6 +3886,7 @@ mod tests {
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             DEFAULT_PICGO_SERVER_URL,
+            false,
             true,
             true,
             false,
@@ -3866,6 +3911,8 @@ mod tests {
         );
         assert!(saved.reveal_source_on_focus);
         assert!(!saved.reveal_image_source_on_click);
+        assert!(!saved.show_table_headers);
+        assert!(saved.edit_tables_as_markdown);
         let _ = std::fs::remove_dir_all(root);
     }
 
