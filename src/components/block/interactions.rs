@@ -1453,7 +1453,9 @@ impl Block {
     ) {
         if self.showing_rendered_image() {
             self.is_selecting = false;
-            self.request_image_edit_expansion();
+            if crate::config::EditorSettings::reveal_image_source_on_click(cx) {
+                self.request_image_edit_expansion();
+            }
             if self.focus_handle.is_focused(window) {
                 if self.sync_image_focus_state(true) {
                     cx.notify();
@@ -1473,7 +1475,9 @@ impl Block {
         // (see `on_rendered_link_mouse_down`), so link-following is unaffected.
         if self.record.title.has_inline_images() && !self.image_edit_expanded() {
             self.is_selecting = false;
-            self.request_image_edit_expansion();
+            if crate::config::EditorSettings::reveal_image_source_on_click(cx) {
+                self.request_image_edit_expansion();
+            }
             if self.focus_handle.is_focused(window) {
                 if self.sync_image_focus_state(true) {
                     cx.notify();
