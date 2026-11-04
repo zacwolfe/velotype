@@ -3028,6 +3028,79 @@ async fn ctrl_a_selects_entire_source_document_in_source_mode(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+async fn ctrl_a_in_source_mode_does_not_oscillate_scroll(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Regression guard: in source mode Ctrl+A selects the whole single tall
+    // block, whose union bounds are taller than the viewport. `ensure_block_visible`
+    // used to alternate between aligning the selection's top and bottom edges,
+    // making the scrollbars oscillate without settling.
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) = cx.add_window_view(move |_window, cx| {
+        Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    editor.update(cx, |editor, cx| {
+        editor.toggle_view_mode(cx);
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+        let source = editor.document.visible_blocks()[0].entity.clone();
+        editor.focus_block(source.entity_id());
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    // Park the viewport mid-document so the full selection spans it, exposing
+    // any top/bottom oscillation.
+    editor.update(cx, |editor, _cx| {
+        editor
+            .scroll_handle
+            .set_offset(gpui::point(gpui::px(0.0), gpui::px(800.0)));
+    });
+    redraw(cx);
+
+    cx.simulate_keystrokes("ctrl-a");
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    let settled = editor.update(cx, |editor, cx| {
+        let source = editor.document.visible_blocks()[0].entity.read(cx);
+        assert_eq!(source.selected_range, 0..source.visible_len());
+        editor.scroll_handle.offset().y
+    });
+
+    // The offset must settle: further frames must not keep moving the viewport.
+    for _ in 0..3 {
+        redraw(cx);
+    }
+    let after = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    assert!(
+        (f32::from(after) - f32::from(settled)).abs() < 1.0,
+        "viewport kept moving after Ctrl+A: settled {settled:?}, after {after:?}"
+    );
+
+    // The caret (document end) should be visible, not stuck oscillating between edges.
+    editor.update(cx, |editor, cx| {
+        let source = editor.document.visible_blocks()[0].entity.clone();
+        let bounds = source
+            .read(cx)
+            .active_range_or_cursor_bounds()
+            .expect("caret bounds");
+        let viewport = editor.scroll_handle.bounds();
+        assert!(
+            bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
+            "caret should be visible after Ctrl+A, at {bounds:?} in viewport {viewport:?}"
+        );
+    });
+}
+
+#[gpui::test]
 async fn ctrl_a_selects_only_focused_block_text_in_rendered_mode(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let (editor, cx) = cx.add_window_view(|_window, cx| {

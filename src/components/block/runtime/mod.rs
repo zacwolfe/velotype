@@ -2328,30 +2328,33 @@ impl Block {
         let lines = self.last_layout.as_ref()?;
         let line_height = self.last_line_height;
         let text = self.display_text();
-        let active_range = self
-            .marked_range
-            .clone()
-            .unwrap_or_else(|| self.selected_range.clone());
 
-        if active_range.is_empty() {
-            return super::element::cursor_bounds_for_offset(
-                lines,
-                bounds,
-                line_height,
-                text,
-                self.cursor_offset(),
-                self.text_align(),
-                px(1.0),
-            );
+        // A search match (`marked_range`) scrolls to reveal the whole match, but
+        // a live text selection must follow the caret. Unioning a whole-document
+        // selection (source-mode Ctrl+A) into one box taller than the viewport made
+        // the caret-follow scroll alternate between the selection's top and bottom
+        // edges without ever settling.
+        if let Some(marked) = self.marked_range.clone() {
+            if !marked.is_empty() {
+                return super::element::range_bounds(
+                    lines,
+                    bounds,
+                    line_height,
+                    text,
+                    marked,
+                    self.text_align(),
+                );
+            }
         }
 
-        super::element::range_bounds(
+        super::element::cursor_bounds_for_offset(
             lines,
             bounds,
             line_height,
             text,
-            active_range,
+            self.cursor_offset(),
             self.text_align(),
+            px(1.0),
         )
     }
 }
