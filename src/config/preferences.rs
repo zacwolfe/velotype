@@ -1296,6 +1296,7 @@ impl PreferencesWindow {
         };
 
         self.apply_saved_preferences(preferences, window, cx);
+        window.remove_window();
     }
 
     fn apply_saved_preferences(
