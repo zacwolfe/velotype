@@ -44,9 +44,10 @@ struct RenderedRowSpacingInfo {
     footnote_anchor: Option<uuid::Uuid>,
     /// Whether this row is a footnote definition header.
     is_footnote_header: bool,
-    /// True when the row's block is a table switched into wide mode, which
-    /// stretches the row to the full editor content width.
-    wide_table: bool,
+    /// True when the row's block opted into expand mode (a wide table or a
+    /// canvas-wide image), which stretches the row to the full editor content
+    /// width.
+    expand_row: bool,
 }
 
 impl RenderedRowSpacingInfo {
@@ -60,7 +61,7 @@ impl RenderedRowSpacingInfo {
             is_callout_header: block.kind().is_callout(),
             footnote_anchor: block.footnote_anchor,
             is_footnote_header: block.kind().is_footnote_definition(),
-            wide_table: block.is_wide_table(),
+            expand_row: block.is_wide_table() || block.is_wide_image(),
         }
     }
 }
@@ -1974,7 +1975,7 @@ impl Render for Editor {
             }
 
             let entity = first_visible.entity.clone();
-            let row_width = if first_spacing.wide_table {
+            let row_width = if first_spacing.expand_row {
                 available_content_width
             } else {
                 centered_width
