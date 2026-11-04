@@ -1105,6 +1105,8 @@ pub(crate) fn save_preferences_from_window(
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
     auto_download_updates: bool,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1119,6 +1121,8 @@ pub(crate) fn save_preferences_from_window(
         image_paste_fallback,
         picgo_server_url,
         auto_download_updates,
+        reveal_source_on_focus,
+        reveal_image_source_on_click,
         keybindings,
         status_bar,
         fonts,
@@ -1136,6 +1140,8 @@ fn save_preferences_from_window_with_dirs(
     image_paste_fallback: ImagePasteBehavior,
     picgo_server_url: &str,
     auto_download_updates: bool,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1151,6 +1157,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.image_paste_fallback = image_paste_fallback.local_only();
     preferences.picgo_server_url = picgo_server_url.to_string();
     preferences.auto_download_updates = auto_download_updates;
+    preferences.reveal_source_on_focus = reveal_source_on_focus;
+    preferences.reveal_image_source_on_click = reveal_image_source_on_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -1180,6 +1188,7 @@ enum PreferencesNav {
     /// Clipboard image storage policy.
     Image,
     /// Keyboard shortcut overrides.
+    Editor,
     Shortcuts,
     /// Status bar visibility controls.
     StatusBar,
@@ -1229,6 +1238,8 @@ pub(crate) struct PreferencesWindow {
     /// Keeps the current check alive without doing OS work during rendering.
     file_association_task: Option<Task<()>>,
     /// Draft shortcut overrides.
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
     saved_startup_open: StartupOpenPreference,
@@ -1247,6 +1258,8 @@ pub(crate) struct PreferencesWindow {
     /// Cancels superseded checks while the address field is being edited.
     picgo_check_task: Option<Task<()>>,
     /// Shortcut overrides used as the dirty-state baseline.
+    saved_reveal_source_on_focus: bool,
+    saved_reveal_image_source_on_click: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
     /// Theme catalog snapshot captured when this window opens.
     theme_options: Vec<ThemeCatalogEntry>,
@@ -1404,6 +1417,8 @@ impl PreferencesWindow {
             image_paste_behavior,
             image_paste_fallback,
             picgo_server_url: picgo_server_url.clone(),
+            reveal_source_on_focus: preferences.reveal_source_on_focus,
+            reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
@@ -1419,6 +1434,8 @@ impl PreferencesWindow {
             picgo_status: PicGoStatus::Checking,
             picgo_check_generation: 0,
             picgo_check_task: None,
+            saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
+            saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -1506,6 +1523,8 @@ impl PreferencesWindow {
             || self.image_paste_fallback != self.saved_image_paste_fallback
             || self.picgo_server_url != self.saved_picgo_server_url
             || self.auto_download_updates != self.saved_auto_download_updates
+            || self.reveal_source_on_focus != self.saved_reveal_source_on_focus
+            || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -1680,6 +1699,17 @@ impl PreferencesWindow {
     }
 
     /// Shows shortcut settings, closes dropdowns, and clears the recording error.
+    fn set_nav_editor(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.nav = PreferencesNav::Editor;
+        self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        self.recording_shortcut = None;
+        cx.notify();
+    }
+
     fn set_nav_shortcuts(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Shortcuts;
         self.startup_dropdown_open = false;
@@ -1797,6 +1827,8 @@ impl PreferencesWindow {
             self.image_paste_fallback,
             &self.picgo_server_url,
             self.auto_download_updates,
+            self.reveal_source_on_focus,
+            self.reveal_image_source_on_click,
             self.keybindings.clone(),
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
@@ -1856,6 +1888,8 @@ impl PreferencesWindow {
                 preferences.status_bar.show_sidebar_toggle;
             settings.status_bar_settings.status_bar_show_mode_switch =
                 preferences.status_bar.show_mode_switch;
+            settings.reveal_source_on_focus = preferences.reveal_source_on_focus;
+            settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
         });
         FontSettings::update(cx, preferences.fonts.clone())
             .expect("saved font stacks were validated");
@@ -1878,6 +1912,8 @@ impl PreferencesWindow {
         self.saved_status_bar_show_sidebar_toggle = self.status_bar_show_sidebar_toggle;
         self.saved_status_bar_show_mode_switch = self.status_bar_show_mode_switch;
         self.saved_fonts = self.fonts.clone();
+        self.saved_reveal_source_on_focus = self.reveal_source_on_focus;
+        self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
         cx.notify();
     }
 
@@ -2017,6 +2053,35 @@ impl PreferencesWindow {
     }
 
     /// Renders the draft startup document policy dropdown.
+    fn switch_row(
+        &self,
+        label: &str,
+        checked: bool,
+        on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let c = &theme.colors;
+        let t = &theme.typography;
+        div()
+            .w(px(280.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(px(t.dialog_body_size))
+                    .text_color(c.dialog_body)
+                    .child(SharedString::from(label.to_string())),
+            )
+            .child(
+                Switch::new(ElementId::Name(
+                    format!("preferences-toggle-{}", label).into(),
+                ))
+                .checked(checked)
+                .on_click(cx.listener(on_click)),
+            )
+    }
     fn render_startup_page(
         &self,
         theme: &Theme,
@@ -2405,7 +2470,53 @@ impl PreferencesWindow {
                         .child(status.clone()),
                 );
         }
+        content = content
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap(px(12.0))
+                    .child(self.labeled_row(
+                        &strings.preferences_image_insert_behavior,
+                        dropdown,
+                        theme,
+                    ))
+                    .child(self.switch_row(
+                        &strings.preferences_reveal_image_source_on_click,
+                        self.reveal_image_source_on_click,
+                        |this, _, _, cx| {
+                            this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
+                            cx.notify();
+                        },
+                        theme,
+                        cx,
+                    )),
+            );
         content
+    }
+
+    fn render_editor_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.0))
+            .child(self.switch_row(
+                &strings.preferences_reveal_source_on_focus,
+                self.reveal_source_on_focus,
+                |this, _, _, cx| {
+                    this.reveal_source_on_focus = !this.reveal_source_on_focus;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
     }
 
     /// Resolves the localized heading for a shortcut category.
@@ -3100,6 +3211,14 @@ impl Render for PreferencesWindow {
                                 cx,
                             ))
                             .child(self.nav_button(
+                                "preferences-nav-editor",
+                                strings.preferences_nav_editor.clone(),
+                                self.nav == PreferencesNav::Editor,
+                                &theme,
+                                Self::set_nav_editor,
+                                cx,
+                            ))
+                            .child(self.nav_button(
                                 "preferences-nav-shortcuts",
                                 strings.preferences_nav_shortcuts.clone(),
                                 self.nav == PreferencesNav::Shortcuts,
@@ -3153,6 +3272,9 @@ impl Render for PreferencesWindow {
                                         PreferencesNav::Image => {
                                             strings.preferences_nav_image.clone()
                                         }
+                                        PreferencesNav::Editor => {
+                                            strings.preferences_nav_editor.clone()
+                                        }
                                         PreferencesNav::Shortcuts => {
                                             strings.preferences_nav_shortcuts.clone()
                                         }
@@ -3203,6 +3325,15 @@ impl Render for PreferencesWindow {
                                     .overflow_y_scroll()
                                     .pr(px(4.0))
                                     .child(self.render_image_page(&theme, &strings, cx))
+                                    .into_any_element(),
+                                PreferencesNav::Editor => div()
+                                    .w_full()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(self.render_editor_page(&theme, &strings, cx))
                                     .into_any_element(),
                                 PreferencesNav::Shortcuts => div()
                                     .w_full()
@@ -3712,6 +3843,8 @@ mod tests {
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             DEFAULT_PICGO_SERVER_URL,
             true,
+            true,
+            false,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &FontPreferences::default(),
@@ -3731,6 +3864,8 @@ mod tests {
             saved.keybindings.get("save_document"),
             Some(&vec!["ctrl-alt-s".to_string()])
         );
+        assert!(saved.reveal_source_on_focus);
+        assert!(!saved.reveal_image_source_on_click);
         let _ = std::fs::remove_dir_all(root);
     }
 
