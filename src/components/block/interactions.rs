@@ -1357,6 +1357,15 @@ impl Block {
     ) {
         if self.showing_rendered_image() {
             self.is_selecting = false;
+            // Clicking a rendered image expands it to the canvas width; a
+            // second click restores the reading-column width. Source reveal on
+            // click keeps priority when the user opted into it.
+            if self.can_toggle_image_wide_mode()
+                && !crate::config::EditorSettings::reveal_image_source_on_click(cx)
+            {
+                self.image_wide_mode = !self.image_wide_mode;
+                cx.notify();
+            }
             if crate::config::EditorSettings::reveal_image_source_on_click(cx) {
                 self.request_image_edit_expansion();
             }

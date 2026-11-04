@@ -214,7 +214,13 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
 }
 
 fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
-    let centered_width = Editor::centered_column_width(viewport_width, d);
+    // A canvas-wide image uses the full editor content width; otherwise stay
+    // inside the narrower centered reading column.
+    let base_width = if block.is_wide_image() {
+        (viewport_width - d.editor_padding * 2.0).max(1.0)
+    } else {
+        Editor::centered_column_width(viewport_width, d)
+    };
     let visible_quote_guides = visible_quote_guides(block);
     let quote_inset = d.quote_padding_left * visible_quote_guides as f32;
     let callout_inset = if block.callout_depth > 0 {
@@ -223,7 +229,7 @@ fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDim
         0.0
     };
 
-    centered_width - quote_inset - callout_inset
+    base_width - quote_inset - callout_inset
 }
 
 fn effective_image_width(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
@@ -461,6 +467,7 @@ impl Block {
         &self,
         runtime: &ImageRuntime,
         max_width: Length,
+        expand_width: Option<f32>,
         max_height: Pixels,
         placeholder_height: Pixels,
         theme: &Theme,
@@ -484,19 +491,27 @@ impl Block {
             // Empty bytes never decode, which routes straight to the fallback
             // element below — the placeholder this case should show anyway.
             ImageResolvedSource::Unusable => img(Arc::new(Image::empty())),
-        }
-        .max_w(max_width)
-        .max_h(max_height)
-        .object_fit(ObjectFit::Contain)
-        .with_fallback(move || {
-            render_image_placeholder(
-                &runtime_for_fallback,
-                max_width,
-                placeholder_height,
-                &placeholder_theme,
-                &placeholder_strings,
-            )
-        })
+        };
+        // A definite width lets gpui derive the height from the image aspect
+        // ratio, so a wide-mode image fills the requested width and letterboxes
+        // inside `max_height`. Otherwise it keeps its natural size clamped by
+        // `max_width`.
+        let image = match expand_width {
+            Some(width) => image.w(px(width)),
+            None => image.max_w(max_width),
+        };
+        let image = image
+            .max_h(max_height)
+            .object_fit(ObjectFit::Contain)
+            .with_fallback(move || {
+                render_image_placeholder(
+                    &runtime_for_fallback,
+                    max_width,
+                    placeholder_height,
+                    &placeholder_theme,
+                    &placeholder_strings,
+                )
+            })
         .with_loading(move || {
             render_loading_placeholder(
                 &runtime_for_loading,
@@ -1584,6 +1599,7 @@ impl Block {
         let content = self.render_image_content(
             &runtime,
             Length::Definite(relative(zoom)),
+            None,
             px(theme.dimensions.image_root_max_height * zoom),
             px(theme.dimensions.image_root_placeholder_height * zoom),
             theme,
@@ -1903,6 +1919,7 @@ impl Render for Block {
                     .child(self.render_image_content(
                         runtime,
                         Length::Definite(relative(1.0)),
+                        None,
                         px(d.image_cell_max_height),
                         px(d.image_cell_placeholder_height),
                         &theme,
@@ -2015,6 +2032,7 @@ impl Render for Block {
                     .child(self.render_image_content(
                         runtime,
                         max_width.into(),
+                        self.is_wide_image().then(|| f32::from(max_width)),
                         px(d.image_root_max_height),
                         px(d.image_root_placeholder_height),
                         &theme,
@@ -2160,6 +2178,7 @@ impl Render for Block {
                             div().flex_grow().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
+                                self.is_wide_image().then(|| f32::from(max_width)),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
@@ -2255,6 +2274,7 @@ impl Render for Block {
                                 div().flex_grow().child(self.render_image_content(
                                     runtime,
                                     max_width.into(),
+                                    self.is_wide_image().then(|| f32::from(max_width)),
                                     px(d.image_root_max_height),
                                     px(d.image_root_placeholder_height),
                                     &theme,
@@ -2317,6 +2337,7 @@ impl Render for Block {
                             div().flex_grow().child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
+                                self.is_wide_image().then(|| f32::from(max_width)),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
