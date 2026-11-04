@@ -2884,6 +2884,11 @@ async fn source_mode_save_adds_no_underscore_escapes_to_repo_markdown(cx: &mut T
 #[gpui::test]
 async fn typing_identifiers_with_underscores_stays_literal(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
+    // This test validates underscore/italic normalization, which depends on the
+    // inline projection. The projection is opt-in (`reveal_source_on_focus`,
+    // default off), so enable it explicitly to keep this normalization under
+    // test independent of the default.
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, false, true, false));
     let (editor, cx) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, String::new(), None));
     redraw(cx);

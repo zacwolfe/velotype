@@ -1816,12 +1816,16 @@ impl Render for Block {
         // Inline math stays in the projected view while focused (its `$...$`
         // source shows as editable text), so links and other styling in the same
         // block keep their attributes instead of collapsing to raw Markdown, the
-        // same way script spans already behave.
-        // A settled cross-block selection also reveals delimiters, so what is
+        // same way script spans already behave. This focus reveal is opt-in via
+        // `reveal_source_on_focus` (default off): a focused block stays rendered
+        // unless the user enables the preference.
+        // A settled cross-block selection still reveals delimiters, so what is
         // highlighted matches the Markdown that copying will produce.
         let reveal_for_selection = self.editor_selection_settled;
+        let reveal_source_on_focus = crate::config::EditorSettings::reveal_source_on_focus(cx);
         self.sync_inline_projection_for_focus(
-            (focused || reveal_for_selection) && !showing_rendered_image,
+            ((focused && reveal_source_on_focus) || reveal_for_selection)
+                && !showing_rendered_image,
         );
 
         if blink_active && self.cursor_blink_task.is_none() {

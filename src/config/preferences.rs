@@ -148,6 +148,14 @@ pub(crate) struct AppPreferences {
     /// into the grid. Defaults to `false` so today's native cell editing is
     /// unchanged unless a user turns this on from the table context menu.
     pub(crate) edit_tables_as_markdown: bool,
+    /// Opt-in: when true, focusing (clicking or keyboard-selecting) a rich
+    /// block reveals its inline Markdown delimiters for editing. Defaults to
+    /// `false` so focused blocks stay rendered.
+    pub(crate) reveal_source_on_focus: bool,
+    /// Opt-in: when true, clicking a rendered image expands it to its raw
+    /// Markdown source for editing. Defaults to `false` so clicking an image
+    /// leaves it rendered.
+    pub(crate) reveal_image_source_on_click: bool,
     pub(crate) image_paste_behavior: ImagePasteBehavior,
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     pub(crate) status_bar: StatusBarPreferences,
@@ -164,6 +172,8 @@ impl Default for AppPreferences {
             default_theme_id: DEFAULT_THEME_ID.into(),
             show_table_headers: true,
             edit_tables_as_markdown: false,
+            reveal_source_on_focus: false,
+            reveal_image_source_on_click: false,
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -187,6 +197,8 @@ struct StatusBarSettings {
 pub struct EditorSettings {
     show_table_headers: bool,
     edit_tables_as_markdown: bool,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     status_bar_settings: StatusBarSettings,
     workspace: WorkspacePreferences,
 }
@@ -194,7 +206,13 @@ pub struct EditorSettings {
 impl Global for EditorSettings {}
 
 impl EditorSettings {
-    pub fn init(cx: &mut App, show_table_headers: bool, edit_tables_as_markdown: bool) {
+    pub fn init(
+        cx: &mut App,
+        show_table_headers: bool,
+        edit_tables_as_markdown: bool,
+        reveal_source_on_focus: bool,
+        reveal_image_source_on_click: bool,
+    ) {
         let preferences = read_app_preferences().ok();
         let status_bar = preferences
             .as_ref()
@@ -207,6 +225,8 @@ impl EditorSettings {
             cx,
             show_table_headers,
             edit_tables_as_markdown,
+            reveal_source_on_focus,
+            reveal_image_source_on_click,
             &status_bar,
             &workspace,
         );
@@ -216,12 +236,16 @@ impl EditorSettings {
         cx: &mut App,
         show_table_headers: bool,
         edit_tables_as_markdown: bool,
+        reveal_source_on_focus: bool,
+        reveal_image_source_on_click: bool,
         status_bar: &StatusBarPreferences,
         workspace: &WorkspacePreferences,
     ) {
         cx.set_global(Self {
             show_table_headers,
             edit_tables_as_markdown,
+            reveal_source_on_focus,
+            reveal_image_source_on_click,
             status_bar_settings: StatusBarSettings {
                 status_bar_enabled: status_bar.enabled,
                 status_bar_show_word_count: status_bar.show_word_count,
@@ -242,6 +266,8 @@ impl EditorSettings {
     }
 
     pub fn set_show_table_headers(cx: &mut App, show_table_headers: bool) {
+        let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
+        let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
@@ -249,6 +275,8 @@ impl EditorSettings {
             cx,
             show_table_headers,
             edit_tables_as_markdown,
+            reveal_source_on_focus,
+            reveal_image_source_on_click,
             &status_bar,
             &workspace,
         );
@@ -273,14 +301,36 @@ impl EditorSettings {
             .unwrap_or(false)
     }
 
+    /// Opt-in: when true, focusing (clicking or keyboard-selecting) a rich
+    /// block reveals its inline Markdown delimiters for editing. Defaults to
+    /// `false` so focused blocks stay rendered.
+    pub fn reveal_source_on_focus(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .map(|settings| settings.reveal_source_on_focus)
+            .unwrap_or(false)
+    }
+
+    /// Opt-in: when true, clicking a rendered image expands it to its raw
+    /// Markdown source for editing. Defaults to `false` so clicking an image
+    /// leaves it rendered.
+    pub fn reveal_image_source_on_click(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .map(|settings| settings.reveal_image_source_on_click)
+            .unwrap_or(false)
+    }
+
     pub fn set_edit_tables_as_markdown(cx: &mut App, edit_tables_as_markdown: bool) {
         let show_table_headers = Self::show_table_headers(cx);
+        let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
+        let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
         Self::set_global(
             cx,
             show_table_headers,
             edit_tables_as_markdown,
+            reveal_source_on_focus,
+            reveal_image_source_on_click,
             &status_bar,
             &workspace,
         );
@@ -303,6 +353,72 @@ impl EditorSettings {
         }
     }
 
+    /// Opt-in: when true, focusing (clicking or keyboard-selecting) a rich
+    /// block reveals its inline Markdown delimiters for editing. Defaults to
+    /// `false` so focused blocks stay rendered.
+    pub fn set_reveal_source_on_focus(cx: &mut App, reveal_source_on_focus: bool) {
+        let show_table_headers = Self::show_table_headers(cx);
+        let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
+        let status_bar = Self::status_bar_preferences(cx);
+        let workspace = Self::workspace_preferences(cx);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            reveal_source_on_focus,
+            Self::reveal_image_source_on_click(cx),
+            &status_bar,
+            &workspace,
+        );
+
+        if cfg!(test) {
+            return;
+        }
+
+        match read_app_preferences() {
+            Ok(mut preferences) => {
+                preferences.reveal_source_on_focus = reveal_source_on_focus;
+                if let Err(err) = save_app_preferences(&preferences) {
+                    eprintln!("failed to save reveal-source-on-focus preference: {err}");
+                }
+            }
+            Err(err) => eprintln!("failed to read reveal-source-on-focus preference: {err}"),
+        }
+    }
+
+    /// Opt-in: when true, clicking a rendered image expands it to its raw
+    /// Markdown source for editing. Defaults to `false` so clicking an image
+    /// leaves it rendered.
+    pub fn set_reveal_image_source_on_click(cx: &mut App, reveal_image_source_on_click: bool) {
+        let show_table_headers = Self::show_table_headers(cx);
+        let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
+        let status_bar = Self::status_bar_preferences(cx);
+        let workspace = Self::workspace_preferences(cx);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            Self::reveal_source_on_focus(cx),
+            reveal_image_source_on_click,
+            &status_bar,
+            &workspace,
+        );
+
+        if cfg!(test) {
+            return;
+        }
+
+        match read_app_preferences() {
+            Ok(mut preferences) => {
+                preferences.reveal_image_source_on_click = reveal_image_source_on_click;
+                if let Err(err) = save_app_preferences(&preferences) {
+                    eprintln!("failed to save reveal-image-source-on-click preference: {err}");
+                }
+            }
+            Err(err) => eprintln!("failed to read reveal-image-source-on-click preference: {err}"),
+        }
+    }
+
     /// Sidebar section state. Defaults to both sections open when the global
     /// has not been installed (e.g. in unit tests), so tests never depend on
     /// the developer's own config file.
@@ -315,11 +431,15 @@ impl EditorSettings {
     pub fn set_workspace_preferences(cx: &mut App, workspace: WorkspacePreferences) {
         let show_table_headers = Self::show_table_headers(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
+        let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
+        let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         Self::set_global(
             cx,
             show_table_headers,
             edit_tables_as_markdown,
+            reveal_source_on_focus,
+            reveal_image_source_on_click,
             &status_bar,
             &workspace,
         );
@@ -382,6 +502,8 @@ struct StartupPreferencesFile {
 struct EditorPreferencesFile {
     show_table_headers: bool,
     edit_tables_as_markdown: bool,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     image_paste_behavior: String,
 }
 
@@ -453,6 +575,8 @@ impl From<&AppPreferences> for PreferencesFile {
             editor: EditorPreferencesFile {
                 show_table_headers: value.show_table_headers,
                 edit_tables_as_markdown: value.edit_tables_as_markdown,
+                reveal_source_on_focus: value.reveal_source_on_focus,
+                reveal_image_source_on_click: value.reveal_image_source_on_click,
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
@@ -556,6 +680,16 @@ fn app_preferences_from_toml_value(
         .and_then(|editor| editor.get("edit_tables_as_markdown"))
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+    let reveal_source_on_focus = value
+        .get("editor")
+        .and_then(|editor| editor.get("reveal_source_on_focus"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let reveal_image_source_on_click = value
+        .get("editor")
+        .and_then(|editor| editor.get("reveal_image_source_on_click"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let image_paste_behavior = value
         .get("editor")
         .and_then(|editor| editor.get("image_paste_behavior"))
@@ -646,6 +780,8 @@ fn app_preferences_from_toml_value(
         default_theme_id,
         show_table_headers,
         edit_tables_as_markdown,
+        reveal_source_on_focus,
+        reveal_image_source_on_click,
         image_paste_behavior,
         keybindings,
         status_bar,
@@ -2381,7 +2517,7 @@ mod tests {
             I18nManager::init_with_language_id(cx, "en-US");
             ThemeManager::init_with_theme_id(cx, "velotype");
             crate::components::init(cx);
-            EditorSettings::init(cx, true, false);
+            EditorSettings::init(cx, true, false, false, false);
         });
     }
 
@@ -2489,6 +2625,8 @@ mod tests {
             default_theme_id: "velotype-light".into(),
             show_table_headers: false,
             edit_tables_as_markdown: true,
+            reveal_source_on_focus: true,
+            reveal_image_source_on_click: true,
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -2507,6 +2645,8 @@ mod tests {
         assert!(text.contains("default_theme_id = \"velotype-light\""));
         assert!(text.contains("show_table_headers = false"));
         assert!(text.contains("edit_tables_as_markdown = true"));
+        assert!(text.contains("reveal_source_on_focus = true"));
+        assert!(text.contains("reveal_image_source_on_click = true"));
         assert!(text.contains("single_instance = false"));
         assert!(text.contains("image_paste_behavior = \"copy_to_assets_folder\""));
         let _ = std::fs::remove_dir_all(root);
@@ -2579,6 +2719,8 @@ mod tests {
             default_theme_id: "velotype".into(),
             show_table_headers: true,
             edit_tables_as_markdown: false,
+            reveal_source_on_focus: false,
+            reveal_image_source_on_click: false,
             image_paste_behavior: ImagePasteBehavior::None,
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
@@ -2818,7 +2960,7 @@ mod tests {
     async fn edit_tables_as_markdown_setter_round_trips_through_the_global(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| EditorSettings::init(cx, true, false));
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
 
         cx.update(|cx| EditorSettings::set_edit_tables_as_markdown(cx, true));
@@ -2826,5 +2968,51 @@ mod tests {
 
         cx.update(|cx| EditorSettings::set_edit_tables_as_markdown(cx, false));
         assert!(!cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
+    }
+
+    #[gpui::test]
+    async fn reveal_source_on_focus_defaults_to_false_with_no_global(cx: &mut TestAppContext) {
+        // No `EditorSettings::init` call: the getter must not depend on the
+        // developer's own config.toml, so tests never observe their config.
+        let enabled = cx.update(|cx| EditorSettings::reveal_source_on_focus(cx));
+        assert!(!enabled);
+    }
+
+    #[gpui::test]
+    async fn reveal_source_on_focus_setter_round_trips_through_the_global(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
+        assert!(!cx.update(|cx| EditorSettings::reveal_source_on_focus(cx)));
+
+        cx.update(|cx| EditorSettings::set_reveal_source_on_focus(cx, true));
+        assert!(cx.update(|cx| EditorSettings::reveal_source_on_focus(cx)));
+
+        cx.update(|cx| EditorSettings::set_reveal_source_on_focus(cx, false));
+        assert!(!cx.update(|cx| EditorSettings::reveal_source_on_focus(cx)));
+    }
+
+    #[gpui::test]
+    async fn reveal_image_source_on_click_defaults_to_false_with_no_global(
+        cx: &mut TestAppContext,
+    ) {
+        // No `EditorSettings::init` call: the getter must not depend on the
+        // developer's own config.toml, so tests never observe their config.
+        let enabled = cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx));
+        assert!(!enabled);
+    }
+
+    #[gpui::test]
+    async fn reveal_image_source_on_click_setter_round_trips_through_the_global(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
+        assert!(!cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx)));
+
+        cx.update(|cx| EditorSettings::set_reveal_image_source_on_click(cx, true));
+        assert!(cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx)));
+
+        cx.update(|cx| EditorSettings::set_reveal_image_source_on_click(cx, false));
+        assert!(!cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx)));
     }
 }
