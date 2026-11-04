@@ -172,13 +172,15 @@ impl Editor {
             block.record.table = Some(table.clone());
         });
         self.rebuild_table_runtimes(cx);
-        if let Some(cell) = table_block
-            .read(cx)
-            .table_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.header.last())
-        {
-            self.focus_block(cell.entity_id());
+        if !crate::config::EditorSettings::edit_tables_as_markdown(cx) {
+            if let Some(cell) = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.header.last())
+            {
+                self.focus_block(cell.entity_id());
+            }
         }
         self.mark_dirty(cx);
         self.request_active_block_scroll_into_view(cx);
@@ -206,14 +208,16 @@ impl Editor {
             block.record.table = Some(table.clone());
         });
         self.rebuild_table_runtimes(cx);
-        if let Some(cell) = table_block
-            .read(cx)
-            .table_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.rows.last())
-            .and_then(|row| row.first())
-        {
-            self.focus_block(cell.entity_id());
+        if !crate::config::EditorSettings::edit_tables_as_markdown(cx) {
+            if let Some(cell) = table_block
+                .read(cx)
+                .table_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.rows.last())
+                .and_then(|row| row.first())
+            {
+                self.focus_block(cell.entity_id());
+            }
         }
         self.mark_dirty(cx);
         self.request_active_block_scroll_into_view(cx);

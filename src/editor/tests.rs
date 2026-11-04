@@ -3727,6 +3727,33 @@ async fn focusing_table_cell_with_markdown_editing_enabled_switches_to_raw_markd
 }
 
 #[gpui::test]
+async fn column_operation_does_not_switch_table_to_raw_markdown(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false));
+    let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
+    let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
+
+    editor.update(cx, |editor, cx| {
+        // A column operation is reached by right-clicking the grid without
+        // focusing a cell first, so clear the initial focus that `from_markdown`
+        // assigned to the first block.
+        editor.pending_focus = None;
+        let table = editor.document.first_root().expect("table root").clone();
+        editor.move_table_column(&table, 0, 1, cx);
+
+        // The column move happened...
+        assert_eq!(
+            table.read(cx).record.table.as_ref().expect("table").header[0].serialize_markdown(),
+            "B"
+        );
+        // ...but with Markdown editing enabled the operation must not focus a
+        // cell: that focus would be redirected to the table container and
+        // switch it into raw Markdown editing.
+        assert_eq!(editor.pending_focus, None);
+    });
+}
+
+#[gpui::test]
 async fn ending_editor_pointer_selection_sessions_keeps_normal_selection(cx: &mut TestAppContext) {
     let editor =
         cx.new(|cx| Editor::from_markdown(cx, "```rust\nfn main() {}\n```".to_string(), None));

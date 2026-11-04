@@ -1125,6 +1125,14 @@ impl Editor {
         position: TableCellPosition,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Structural operations (move/delete/append column/row, alignment) focus a
+        // cell to keep the caret in the grid. With Markdown editing enabled that
+        // focus would be redirected to the table container and switch to raw
+        // Markdown, which a column/row operation does not intend. Leave focus
+        // alone so the table stays in grid mode.
+        if crate::config::EditorSettings::edit_tables_as_markdown(cx) {
+            return false;
+        }
         let Some(cell) = table_block
             .read(cx)
             .table_runtime
