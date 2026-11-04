@@ -1877,6 +1877,7 @@ impl PreferencesWindow {
         };
 
         self.apply_saved_preferences(preferences, window, cx);
+        window.remove_window();
     }
 
     /// Applies saved theme, shortcuts, bar flags, and fonts, then resets dirty baselines.
