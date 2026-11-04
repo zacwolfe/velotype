@@ -912,6 +912,8 @@ pub(crate) fn save_preferences_from_window(
     single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -924,6 +926,8 @@ pub(crate) fn save_preferences_from_window(
         single_instance,
         default_theme_id,
         image_paste_behavior,
+        show_table_headers,
+        edit_tables_as_markdown,
         reveal_source_on_focus,
         reveal_image_source_on_click,
         keybindings,
@@ -938,6 +942,8 @@ fn save_preferences_from_window_with_dirs(
     single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -951,6 +957,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.single_instance = single_instance;
     preferences.default_theme_id = default_theme_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
+    preferences.show_table_headers = show_table_headers;
+    preferences.edit_tables_as_markdown = edit_tables_as_markdown;
     preferences.reveal_source_on_focus = reveal_source_on_focus;
     preferences.reveal_image_source_on_click = reveal_image_source_on_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
@@ -986,6 +994,8 @@ pub(crate) struct PreferencesWindow {
     single_instance: bool,
     selected_theme_id: String,
     image_paste_behavior: ImagePasteBehavior,
+    show_table_headers: bool,
+    edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
@@ -994,6 +1004,8 @@ pub(crate) struct PreferencesWindow {
     saved_single_instance: bool,
     saved_theme_id: String,
     saved_image_paste_behavior: ImagePasteBehavior,
+    saved_show_table_headers: bool,
+    saved_edit_tables_as_markdown: bool,
     saved_reveal_source_on_focus: bool,
     saved_reveal_image_source_on_click: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
@@ -1044,6 +1056,8 @@ impl PreferencesWindow {
             single_instance,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
+            show_table_headers: preferences.show_table_headers,
+            edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             reveal_source_on_focus: preferences.reveal_source_on_focus,
             reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             keybindings: keybindings.clone(),
@@ -1052,6 +1066,8 @@ impl PreferencesWindow {
             saved_single_instance: single_instance,
             saved_theme_id: selected_theme_id,
             saved_image_paste_behavior: image_paste_behavior,
+            saved_show_table_headers: preferences.show_table_headers,
+            saved_edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             saved_keybindings: keybindings,
@@ -1091,6 +1107,8 @@ impl PreferencesWindow {
             || self.single_instance != self.saved_single_instance
             || self.selected_theme_id != self.saved_theme_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
+            || self.show_table_headers != self.saved_show_table_headers
+            || self.edit_tables_as_markdown != self.saved_edit_tables_as_markdown
             || self.reveal_source_on_focus != self.saved_reveal_source_on_focus
             || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
             || normalize_shortcut_config(&self.keybindings)
@@ -1247,6 +1265,8 @@ impl PreferencesWindow {
             self.single_instance,
             &self.selected_theme_id,
             self.image_paste_behavior,
+            self.show_table_headers,
+            self.edit_tables_as_markdown,
             self.reveal_source_on_focus,
             self.reveal_image_source_on_click,
             self.keybindings.clone(),
@@ -1305,6 +1325,8 @@ impl PreferencesWindow {
                 preferences.status_bar.show_sidebar_toggle;
             settings.status_bar_settings.status_bar_show_mode_switch =
                 preferences.status_bar.show_mode_switch;
+            settings.show_table_headers = preferences.show_table_headers;
+            settings.edit_tables_as_markdown = preferences.edit_tables_as_markdown;
             settings.reveal_source_on_focus = preferences.reveal_source_on_focus;
             settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
         });
@@ -1322,6 +1344,8 @@ impl PreferencesWindow {
         self.saved_status_bar_show_cursor_position = self.status_bar_show_cursor_position;
         self.saved_status_bar_show_sidebar_toggle = self.status_bar_show_sidebar_toggle;
         self.saved_status_bar_show_mode_switch = self.status_bar_show_mode_switch;
+        self.saved_show_table_headers = self.show_table_headers;
+        self.saved_edit_tables_as_markdown = self.edit_tables_as_markdown;
         self.saved_reveal_source_on_focus = self.reveal_source_on_focus;
         self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
         cx.notify();
@@ -1790,6 +1814,26 @@ impl PreferencesWindow {
                 self.reveal_source_on_focus,
                 |this, _, _, cx| {
                     this.reveal_source_on_focus = !this.reveal_source_on_focus;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
+            .child(self.switch_row(
+                &strings.preferences_show_table_headers,
+                self.show_table_headers,
+                |this, _, _, cx| {
+                    this.show_table_headers = !this.show_table_headers;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
+            .child(self.switch_row(
+                &strings.preferences_edit_tables_as_markdown,
+                self.edit_tables_as_markdown,
+                |this, _, _, cx| {
+                    this.edit_tables_as_markdown = !this.edit_tables_as_markdown;
                     cx.notify();
                 },
                 theme,
@@ -2863,6 +2907,8 @@ mod tests {
             false,
             "velotype-light",
             ImagePasteBehavior::CopyToNamedAssetsFolder,
+            false,
+            true,
             true,
             false,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
@@ -2885,6 +2931,8 @@ mod tests {
         );
         assert!(saved.reveal_source_on_focus);
         assert!(!saved.reveal_image_source_on_click);
+        assert!(!saved.show_table_headers);
+        assert!(saved.edit_tables_as_markdown);
         let _ = std::fs::remove_dir_all(root);
     }
 
