@@ -2469,12 +2469,7 @@ impl PreferencesWindow {
                 ));
             }
         }
-        let mut content = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(14.0))
-            .child(self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme));
+        let mut content = div().w_full().flex().flex_col().gap(px(14.0));
         if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
             let status = match self.picgo_status {
                 PicGoStatus::Checking => &strings.preferences_picgo_checking,
@@ -3887,6 +3882,7 @@ mod tests {
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             ImagePasteBehavior::CopyToNamedAssetsFolder,
             DEFAULT_PICGO_SERVER_URL,
+            false,
             false,
             true,
             true,

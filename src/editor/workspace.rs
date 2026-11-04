@@ -2802,7 +2802,7 @@ mod tests {
             editor.toggle_workspace_drawer(window, cx);
             editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
         });
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
 
         editor.update(cx, |editor, cx| {
@@ -2810,7 +2810,7 @@ mod tests {
                 editor.workspace_handle_navigation_key("down", cx);
             }
         });
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
 
         editor.update(cx, |editor, _cx| {
@@ -2857,7 +2857,7 @@ mod tests {
             editor.toggle_workspace_drawer(window, cx);
             editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
         });
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
 
         // Scroll to the bottom, drawing after every step so the scroll handle
@@ -2866,7 +2866,7 @@ mod tests {
             editor.update(cx, |editor, cx| {
                 editor.workspace_handle_navigation_key("down", cx);
             });
-            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
         }
         cx.run_until_parked();
 
@@ -2885,7 +2885,7 @@ mod tests {
             editor.update(cx, |editor, cx| {
                 editor.workspace_handle_navigation_key("up", cx);
             });
-            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
             editor.update(cx, |editor, _cx| {
                 let section = WorkspaceSection::Files;
                 let Some(index) = editor.workspace_cursor_row_index(section) else {
@@ -2943,7 +2943,7 @@ mod tests {
             editor.toggle_workspace_drawer(window, cx);
             editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
         });
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
 
         // Expand both directories by navigating right from the root into d1,
@@ -2954,7 +2954,7 @@ mod tests {
             editor.workspace_handle_navigation_key("down", cx);
             editor.workspace_handle_navigation_key("right", cx);
         });
-        cx.update(|window, cx| window.draw(cx).clear());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.run_until_parked();
 
         // Walk all the way to the bottom, then back up, checking visibility.
@@ -2962,13 +2962,13 @@ mod tests {
             editor.update(cx, |editor, cx| {
                 editor.workspace_handle_navigation_key("down", cx);
             });
-            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
         }
         for _ in 0..100 {
             editor.update(cx, |editor, cx| {
                 editor.workspace_handle_navigation_key("up", cx);
             });
-            cx.update(|window, cx| window.draw(cx).clear());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
             editor.update(cx, |editor, _cx| {
                 let section = WorkspaceSection::Files;
                 let Some(index) = editor.workspace_cursor_row_index(section) else {
