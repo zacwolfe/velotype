@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use gpui::{prelude::FluentBuilder, *};
+use gpui::*;
 
 const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 
@@ -14,7 +14,7 @@ use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime};
 use crate::components::{
     Editor, HtmlCssColor, HtmlDocument, HtmlImageLength, HtmlNode, HtmlNodeKind, InlineScript,
-    MermaidPalette, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
+    MermaidPalette, TableAxisHighlight, TableAxisKind, TableCellInlineImageSegment,
     TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
     parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
     parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
@@ -35,25 +35,6 @@ fn bulleted_list_marker(depth: usize) -> &'static str {
         1 => BULLET_HOLLOW,
         _ => BULLET_SQUARE,
     }
-}
-
-fn column_axis_gutter_visible(
-    preview_marker: Option<TableAxisMarker>,
-    selected_marker: Option<TableAxisMarker>,
-) -> bool {
-    matches!(
-        preview_marker,
-        Some(TableAxisMarker {
-            kind: TableAxisKind::Column,
-            ..
-        })
-    ) || matches!(
-        selected_marker,
-        Some(TableAxisMarker {
-            kind: TableAxisKind::Column,
-            ..
-        })
-    )
 }
 
 /// Makes a row-axis highlight color more opaque (more solid, still translucent)
@@ -2630,11 +2611,6 @@ impl Render for Block {
                 let append_extent = px(d.table_append_button_extent);
                 let append_inset = px(d.table_append_button_inset);
                 let activation_band = px(d.table_append_activation_band);
-                let top_gutter = if column_axis_gutter_visible(preview_marker, selected_marker) {
-                    activation_band
-                } else {
-                    px(0.0)
-                };
                 let column_append_top = activation_band;
                 let column_control_visible = self.table_append_column_hovered;
                 let row_control_visible = self.table_append_row_hovered;
@@ -2651,83 +2627,6 @@ impl Render for Block {
                 let weak_table_block = cx.entity().downgrade();
 
                 let header_cells = runtime.header;
-                let column_axis_row = (top_gutter > px(0.0)).then(|| {
-                    div().absolute().top_0().left_0().right(right_gutter).h(top_gutter).flex().gap(px(0.0)).children(
-                        header_cells.iter().enumerate().map(|(column, _cell)| {
-                            let hover_block = weak_table_block.clone();
-                            let select_block = weak_table_block.clone();
-                            let menu_block = weak_table_block.clone();
-                            let marker = crate::components::TableAxisMarker {
-                                kind: TableAxisKind::Column,
-                                index: column,
-                            };
-                            let band_bg = if selected_marker == Some(marker) {
-                                c.table_axis_selected_bg
-                            } else if preview_marker == Some(marker) {
-                                c.table_axis_preview_bg
-                            } else {
-                                hsla(0.0, 0.0, 0.0, 0.0)
-                            };
-                            div()
-                                .relative()
-                                .flex_none()
-                                .flex_basis(relative(column_layout.fraction(column)))
-                                .w(relative(column_layout.fraction(column)))
-                                .h_full()
-                                .min_w(px(0.0))
-                                .child(
-                                    div()
-                                        .id(ElementId::Name(
-                                            format!(
-                                                "table-column-axis-band-{}-{}",
-                                                self.record.id, column
-                                            )
-                                            .into(),
-                                        ))
-                                        .w_full()
-                                        .h_full()
-                                        .rounded(px(6.0))
-                                        .bg(band_bg)
-                                        .cursor_pointer()
-                                        .on_hover(move |hovered, _window, cx| {
-                                            let _ = hover_block.update(cx, |_block, cx| {
-                                                cx.emit(BlockEvent::RequestTableAxisPreview {
-                                                    kind: TableAxisKind::Column,
-                                                    index: column,
-                                                    hovered: *hovered,
-                                                });
-                                            });
-                                        })
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            move |_event, _window, cx| {
-                                                let _ = select_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestSelectTableAxis {
-                                                        kind: TableAxisKind::Column,
-                                                        index: column,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Right,
-                                            move |event, _window, cx| {
-                                                let _ = menu_block.update(cx, |_block, cx| {
-                                                    cx.stop_propagation();
-                                                    cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                                        kind: TableAxisKind::Column,
-                                                        index: column,
-                                                        position: event.position,
-                                                    });
-                                                });
-                                            },
-                                        )
-                                        .block_mouse_except_scroll(),
-                                )
-                        }),
-                    )
-                });
 
                 let header_hover_block = weak_table_block.clone();
                 let header_select_block = weak_table_block.clone();
@@ -2800,6 +2699,17 @@ impl Render for Block {
                         let hover_block = weak_table_block.clone();
                         let select_block = weak_table_block.clone();
                         let menu_block = weak_table_block.clone();
+                        let column_marker = crate::components::TableAxisMarker {
+                            kind: TableAxisKind::Column,
+                            index: column,
+                        };
+                        let column_band_bg = if selected_marker == Some(column_marker) {
+                            c.table_axis_selected_bg
+                        } else if preview_marker == Some(column_marker) {
+                            c.table_axis_preview_bg
+                        } else {
+                            hsla(0.0, 0.0, 0.0, 0.0)
+                        };
                         div()
                             .relative()
                             .flex_none()
@@ -2821,6 +2731,8 @@ impl Render for Block {
                                     .left_0()
                                     .right_0()
                                     .h(activation_band)
+                                    .rounded(px(6.0))
+                                    .bg(column_band_bg)
                                     .cursor_pointer()
                                     .on_hover(move |hovered, _window, cx| {
                                         let _ = hover_block.update(cx, |_block, cx| {
@@ -3072,7 +2984,6 @@ impl Render for Block {
                         .pb(bottom_gutter)
                         .gap(px(0.0))
                         .children(rows)
-                        .when_some(column_axis_row, |this, row| this.child(row))
                         .child(column_edge_band)
                         .child(row_edge_band)
                         .child(column_control)
@@ -3236,40 +3147,11 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HtmlComputedStyle, column_axis_gutter_visible, html_node_visual_style, inline_word_chunks,
-    };
+    use super::{HtmlComputedStyle, html_node_visual_style, inline_word_chunks};
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
-    use crate::components::{TableAxisKind, TableAxisMarker};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
     use gpui::{Hsla, Rgba, TestAppContext, px};
-
-    #[test]
-    fn top_gutter_only_appears_for_column_axis_state() {
-        assert!(!column_axis_gutter_visible(None, None));
-        assert!(!column_axis_gutter_visible(
-            Some(TableAxisMarker {
-                kind: TableAxisKind::Row,
-                index: 0,
-            }),
-            None,
-        ));
-        assert!(column_axis_gutter_visible(
-            Some(TableAxisMarker {
-                kind: TableAxisKind::Column,
-                index: 0,
-            }),
-            None,
-        ));
-        assert!(column_axis_gutter_visible(
-            None,
-            Some(TableAxisMarker {
-                kind: TableAxisKind::Column,
-                index: 0,
-            }),
-        ));
-    }
 
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
         let color = Rgba::from(color);
