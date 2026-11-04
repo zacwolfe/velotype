@@ -205,5 +205,8 @@
     "preferences_status_bar_show_cursor_position": "",
     "preferences_status_bar_show_sidebar_toggle": "",
     "preferences_status_bar_show_mode_switch": "",
+    "preferences_nav_editor": "",
+    "preferences_reveal_source_on_focus": "",
+    "preferences_reveal_image_source_on_click": "",
   }
 }

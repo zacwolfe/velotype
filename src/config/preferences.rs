@@ -912,6 +912,8 @@ pub(crate) fn save_preferences_from_window(
     single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
 ) -> anyhow::Result<AppPreferences> {
@@ -922,6 +924,8 @@ pub(crate) fn save_preferences_from_window(
         single_instance,
         default_theme_id,
         image_paste_behavior,
+        reveal_source_on_focus,
+        reveal_image_source_on_click,
         keybindings,
         status_bar,
         &dirs,
@@ -934,6 +938,8 @@ fn save_preferences_from_window_with_dirs(
     single_instance: bool,
     default_theme_id: &str,
     image_paste_behavior: ImagePasteBehavior,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     dirs: &VelotypeConfigDirs,
@@ -945,6 +951,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.single_instance = single_instance;
     preferences.default_theme_id = default_theme_id.into();
     preferences.image_paste_behavior = image_paste_behavior;
+    preferences.reveal_source_on_focus = reveal_source_on_focus;
+    preferences.reveal_image_source_on_click = reveal_image_source_on_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     save_app_preferences_with_dirs(&preferences, dirs)?;
@@ -965,6 +973,7 @@ enum PreferencesNav {
     File,
     Theme,
     Image,
+    Editor,
     Shortcuts,
     StatusBar,
 }
@@ -977,12 +986,16 @@ pub(crate) struct PreferencesWindow {
     single_instance: bool,
     selected_theme_id: String,
     image_paste_behavior: ImagePasteBehavior,
+    reveal_source_on_focus: bool,
+    reveal_image_source_on_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     saved_startup_open: StartupOpenPreference,
     saved_foreground_on_launch: bool,
     saved_single_instance: bool,
     saved_theme_id: String,
     saved_image_paste_behavior: ImagePasteBehavior,
+    saved_reveal_source_on_focus: bool,
+    saved_reveal_image_source_on_click: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
     theme_options: Vec<ThemeCatalogEntry>,
     focus_handle: FocusHandle,
@@ -1031,12 +1044,16 @@ impl PreferencesWindow {
             single_instance,
             selected_theme_id: selected_theme_id.clone(),
             image_paste_behavior,
+            reveal_source_on_focus: preferences.reveal_source_on_focus,
+            reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
             saved_single_instance: single_instance,
             saved_theme_id: selected_theme_id,
             saved_image_paste_behavior: image_paste_behavior,
+            saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
+            saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -1074,6 +1091,8 @@ impl PreferencesWindow {
             || self.single_instance != self.saved_single_instance
             || self.selected_theme_id != self.saved_theme_id
             || self.image_paste_behavior != self.saved_image_paste_behavior
+            || self.reveal_source_on_focus != self.saved_reveal_source_on_focus
+            || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -1107,6 +1126,17 @@ impl PreferencesWindow {
 
     fn set_nav_image(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Image;
+        self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
+        self.theme_dropdown_open = false;
+        self.image_dropdown_open = false;
+        self.recording_shortcut = None;
+        cx.notify();
+    }
+
+    fn set_nav_editor(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.nav = PreferencesNav::Editor;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
@@ -1217,6 +1247,8 @@ impl PreferencesWindow {
             self.single_instance,
             &self.selected_theme_id,
             self.image_paste_behavior,
+            self.reveal_source_on_focus,
+            self.reveal_image_source_on_click,
             self.keybindings.clone(),
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
@@ -1273,6 +1305,8 @@ impl PreferencesWindow {
                 preferences.status_bar.show_sidebar_toggle;
             settings.status_bar_settings.status_bar_show_mode_switch =
                 preferences.status_bar.show_mode_switch;
+            settings.reveal_source_on_focus = preferences.reveal_source_on_focus;
+            settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
         });
         cx.refresh_windows();
         window.activate_window();
@@ -1288,6 +1322,8 @@ impl PreferencesWindow {
         self.saved_status_bar_show_cursor_position = self.status_bar_show_cursor_position;
         self.saved_status_bar_show_sidebar_toggle = self.status_bar_show_sidebar_toggle;
         self.saved_status_bar_show_mode_switch = self.status_bar_show_mode_switch;
+        self.saved_reveal_source_on_focus = self.reveal_source_on_focus;
+        self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
         cx.notify();
     }
 
@@ -1416,6 +1452,36 @@ impl PreferencesWindow {
                     .child(SharedString::from(label.to_string())),
             )
             .child(control)
+    }
+
+    fn switch_row(
+        &self,
+        label: &str,
+        checked: bool,
+        on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let c = &theme.colors;
+        let t = &theme.typography;
+        div()
+            .w(px(280.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(px(t.dialog_body_size))
+                    .text_color(c.dialog_body)
+                    .child(SharedString::from(label.to_string())),
+            )
+            .child(
+                Switch::new(ElementId::Name(
+                    format!("preferences-toggle-{}", label).into(),
+                ))
+                .checked(checked)
+                .on_click(cx.listener(on_click)),
+            )
     }
 
     fn render_startup_page(
@@ -1686,7 +1752,49 @@ impl PreferencesWindow {
                 ));
             }
         }
-        self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme)
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.0))
+            .child(self.labeled_row(
+                &strings.preferences_image_insert_behavior,
+                dropdown,
+                theme,
+            ))
+            .child(self.switch_row(
+                &strings.preferences_reveal_image_source_on_click,
+                self.reveal_image_source_on_click,
+                |this, _, _, cx| {
+                    this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
+    }
+
+    fn render_editor_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(12.0))
+            .child(self.switch_row(
+                &strings.preferences_reveal_source_on_focus,
+                self.reveal_source_on_focus,
+                |this, _, _, cx| {
+                    this.reveal_source_on_focus = !this.reveal_source_on_focus;
+                    cx.notify();
+                },
+                theme,
+                cx,
+            ))
     }
 
     fn shortcut_category_label(
@@ -2250,6 +2358,14 @@ impl Render for PreferencesWindow {
                                 cx,
                             ))
                             .child(self.nav_button(
+                                "preferences-nav-editor",
+                                strings.preferences_nav_editor.clone(),
+                                self.nav == PreferencesNav::Editor,
+                                &theme,
+                                Self::set_nav_editor,
+                                cx,
+                            ))
+                            .child(self.nav_button(
                                 "preferences-nav-shortcuts",
                                 strings.preferences_nav_shortcuts.clone(),
                                 self.nav == PreferencesNav::Shortcuts,
@@ -2299,6 +2415,9 @@ impl Render for PreferencesWindow {
                                         }
                                         PreferencesNav::Image => {
                                             strings.preferences_nav_image.clone()
+                                        }
+                                        PreferencesNav::Editor => {
+                                            strings.preferences_nav_editor.clone()
                                         }
                                         PreferencesNav::Shortcuts => {
                                             strings.preferences_nav_shortcuts.clone()
@@ -2350,6 +2469,15 @@ impl Render for PreferencesWindow {
                                     .items_center()
                                     .justify_center()
                                     .child(self.render_image_page(&theme, &strings, cx))
+                                    .into_any_element(),
+                                PreferencesNav::Editor => div()
+                                    .w_full()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(self.render_editor_page(&theme, &strings, cx))
                                     .into_any_element(),
                                 PreferencesNav::Shortcuts => div()
                                     .w_full()
@@ -2735,6 +2863,8 @@ mod tests {
             false,
             "velotype-light",
             ImagePasteBehavior::CopyToNamedAssetsFolder,
+            true,
+            false,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &dirs,
@@ -2753,6 +2883,8 @@ mod tests {
             saved.keybindings.get("save_document"),
             Some(&vec!["ctrl-alt-s".to_string()])
         );
+        assert!(saved.reveal_source_on_focus);
+        assert!(!saved.reveal_image_source_on_click);
         let _ = std::fs::remove_dir_all(root);
     }
 

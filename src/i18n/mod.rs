@@ -368,6 +368,12 @@ pub struct I18nStrings {
     pub preferences_status_bar_show_sidebar_toggle: String,
     /// Label for the mode switch visibility.
     pub preferences_status_bar_show_mode_switch: String,
+    /// Nav label for the editor preferences tab.
+    pub preferences_nav_editor: String,
+    /// Label for the reveal-Markdown-source-on-focus toggle.
+    pub preferences_reveal_source_on_focus: String,
+    /// Label for the reveal-image-source-on-click toggle.
+    pub preferences_reveal_image_source_on_click: String,
 }
 
 /// Partial string set used by JSON language packs.
@@ -579,6 +585,9 @@ struct I18nStringsDe {
     preferences_status_bar_show_cursor_position: Option<String>,
     preferences_status_bar_show_sidebar_toggle: Option<String>,
     preferences_status_bar_show_mode_switch: Option<String>,
+    preferences_nav_editor: Option<String>,
+    preferences_reveal_source_on_focus: Option<String>,
+    preferences_reveal_image_source_on_click: Option<String>,
 }
 
 const I18N_STRING_KEYS: &[&str] = &[
@@ -788,6 +797,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_status_bar_show_cursor_position",
     "preferences_status_bar_show_sidebar_toggle",
     "preferences_status_bar_show_mode_switch",
+    "preferences_nav_editor",
+    "preferences_reveal_source_on_focus",
+    "preferences_reveal_image_source_on_click",
 ];
 
 impl I18nStringsDe {
@@ -1349,6 +1361,15 @@ impl I18nStringsDe {
             preferences_status_bar_show_mode_switch: self
                 .preferences_status_bar_show_mode_switch
                 .unwrap_or(defaults.preferences_status_bar_show_mode_switch),
+            preferences_nav_editor: self
+                .preferences_nav_editor
+                .unwrap_or(defaults.preferences_nav_editor),
+            preferences_reveal_source_on_focus: self
+                .preferences_reveal_source_on_focus
+                .unwrap_or(defaults.preferences_reveal_source_on_focus),
+            preferences_reveal_image_source_on_click: self
+                .preferences_reveal_image_source_on_click
+                .unwrap_or(defaults.preferences_reveal_image_source_on_click),
         }
     }
 }
@@ -1583,6 +1604,9 @@ impl I18nStrings {
         strings.preferences_image_paste_copy_to_assets_folder = "复制图片到 ./assets 文件夹".into();
         strings.preferences_image_paste_copy_to_named_assets_folder =
             "复制图片到 ./${filename}.assets 文件夹".into();
+        strings.preferences_nav_editor = "编辑器".into();
+        strings.preferences_reveal_source_on_focus = "聚焦时显示 Markdown 源代码".into();
+        strings.preferences_reveal_image_source_on_click = "点击时显示图像源代码".into();
         strings
     }
 
@@ -1814,6 +1838,9 @@ impl I18nStrings {
             preferences_status_bar_show_cursor_position: "Cursor Position".into(),
             preferences_status_bar_show_sidebar_toggle: "Sidebar Toggle".into(),
             preferences_status_bar_show_mode_switch: "Mode Switch".into(),
+            preferences_nav_editor: "Editor".into(),
+            preferences_reveal_source_on_focus: "Reveal Markdown source on focus".into(),
+            preferences_reveal_image_source_on_click: "Reveal image source on click".into(),
         }
     }
 
