@@ -205,6 +205,11 @@ pub struct Editor {
     image_reference_definitions: Arc<ImageReferenceDefinitions>,
     link_reference_definitions: Arc<LinkReferenceDefinitions>,
     footnote_registry: Arc<FootnoteRegistry>,
+    /// Keeps the editor re-rendering when [`crate::config::EditorSettings`]
+    /// changes (e.g. table/reveal preferences applied from the preferences
+    /// window), so already-open documents reflect the new values immediately
+    /// instead of waiting for a reopen or restart.
+    editor_settings_observer: Option<Subscription>,
 }
 
 /// Runtime binding between a table block and one cell editor.
@@ -480,12 +485,15 @@ impl Editor {
             image_reference_definitions: Arc::default(),
             link_reference_definitions: Arc::default(),
             footnote_registry: Arc::default(),
+            editor_settings_observer: None,
         };
         editor.rebuild_table_runtimes(cx);
         editor.rebuild_image_runtimes(cx);
         editor.pending_focus = editor.first_focusable_entity_id(cx);
         editor.active_entity_id = editor.pending_focus;
         editor.refresh_stable_document_snapshot(cx);
+        editor.editor_settings_observer =
+            Some(cx.observe_global::<crate::config::EditorSettings>(|_, cx| cx.notify()));
         editor
     }
 }
