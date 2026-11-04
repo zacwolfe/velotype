@@ -1009,7 +1009,6 @@ impl Editor {
         };
 
         let viewport = handle.bounds();
-        let max_offset = handle.max_offset().height.max(px(0.0));
         let mut offset = handle.offset();
 
         // The rows sit directly under the body's top padding, so the cursor
@@ -1024,7 +1023,11 @@ impl Editor {
         } else if bottom_screen > viewport.bottom() {
             offset.y = viewport.bottom() - viewport.top() - px(row_bottom);
         }
-        offset.y = offset.y.min(px(0.0)).max(-max_offset);
+        // Do not clamp the lower bound against `handle.max_offset()` here: it
+        // can be stale in the same frame a tree node was expanded or collapsed,
+        // which would under-scroll and leave the cursor row out of view. GPUI
+        // re-clamps the offset to the freshly computed max on the next frame.
+        offset.y = offset.y.min(px(0.0));
         handle.set_offset(offset);
     }
 
@@ -2815,6 +2818,161 @@ mod tests {
                 "selected row {index} (offset {offset:?}) is not inside viewport {viewport:?}"
             );
         });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn arrow_key_navigation_keeps_rows_visible_scrolling_up(cx: &mut gpui::TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-scroll-up-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dirs");
+        for i in 0..60 {
+            fs::write(root.join(format!("f{i:02}.md")), "x").expect("write md");
+        }
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+
+        // Scroll to the bottom, drawing after every step so the scroll handle
+        // state (bounds / max_offset) tracks the real frame, as in the app.
+        for _ in 0..100 {
+            editor.update(cx, |editor, cx| {
+                editor.workspace_handle_navigation_key("down", cx);
+            });
+            cx.update(|window, cx| window.draw(cx).clear());
+        }
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, _cx| {
+            let section = WorkspaceSection::Files;
+            let rows = editor.workspace_visible_rows(section);
+            let index = editor
+                .workspace_cursor_row_index(section)
+                .expect("cursor has a visible row");
+            assert_eq!(index, rows.len() - 1, "cursor should sit on the last row");
+        });
+
+        // Now navigate all the way back up, drawing after every step, and
+        // assert the selected row stays inside the viewport each step.
+        for _ in 0..100 {
+            editor.update(cx, |editor, cx| {
+                editor.workspace_handle_navigation_key("up", cx);
+            });
+            cx.update(|window, cx| window.draw(cx).clear());
+            editor.update(cx, |editor, _cx| {
+                let section = WorkspaceSection::Files;
+                let Some(index) = editor.workspace_cursor_row_index(section) else {
+                    return;
+                };
+                let handle = &editor.workspace_files_scroll_handle;
+                let viewport = handle.bounds();
+                let offset = handle.offset();
+                let row_top = WORKSPACE_SECTION_PADDING_Y + WORKSPACE_NODE_HEIGHT * index as f32;
+                let row_bottom = row_top + WORKSPACE_NODE_HEIGHT;
+                let top = viewport.top() + gpui::px(row_top) + offset.y;
+                let bottom = viewport.top() + gpui::px(row_bottom) + offset.y;
+                assert!(
+                    top >= viewport.top() - gpui::px(1.0)
+                        && bottom <= viewport.bottom() + gpui::px(1.0),
+                    "after scrolling up, selected row {index} (offset {offset:?}) is not inside viewport {viewport:?}"
+                );
+            });
+        }
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, _cx| {
+            let section = WorkspaceSection::Files;
+            let index = editor
+                .workspace_cursor_row_index(section)
+                .expect("cursor has a visible row");
+            assert_eq!(index, 0, "cursor should be back at the top row");
+        });
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[gpui::test]
+    async fn expanding_directory_then_navigating_keeps_rows_visible(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-scroll-nested-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let d1 = root.join("d1");
+        let d2 = root.join("d2");
+        fs::create_dir_all(&d1).expect("create d1");
+        fs::create_dir_all(&d2).expect("create d2");
+        for i in 0..30 {
+            fs::write(d1.join(format!("d1f{i:02}.md")), "x").expect("write d1 md");
+            fs::write(d2.join(format!("d2f{i:02}.md")), "x").expect("write d2 md");
+        }
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+            editor.focus_workspace_section(WorkspaceSection::Files, window, cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+
+        // Expand both directories by navigating right from the root into d1,
+        // then right into d2 as well.
+        editor.update(cx, |editor, cx| {
+            // down to d1 (row 2: .., root, d1), then right to expand and descend
+            editor.workspace_handle_navigation_key("down", cx);
+            editor.workspace_handle_navigation_key("down", cx);
+            editor.workspace_handle_navigation_key("right", cx);
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+
+        // Walk all the way to the bottom, then back up, checking visibility.
+        for _ in 0..100 {
+            editor.update(cx, |editor, cx| {
+                editor.workspace_handle_navigation_key("down", cx);
+            });
+            cx.update(|window, cx| window.draw(cx).clear());
+        }
+        for _ in 0..100 {
+            editor.update(cx, |editor, cx| {
+                editor.workspace_handle_navigation_key("up", cx);
+            });
+            cx.update(|window, cx| window.draw(cx).clear());
+            editor.update(cx, |editor, _cx| {
+                let section = WorkspaceSection::Files;
+                let Some(index) = editor.workspace_cursor_row_index(section) else {
+                    return;
+                };
+                let handle = &editor.workspace_files_scroll_handle;
+                let viewport = handle.bounds();
+                let offset = handle.offset();
+                let row_top = WORKSPACE_SECTION_PADDING_Y + WORKSPACE_NODE_HEIGHT * index as f32;
+                let row_bottom = row_top + WORKSPACE_NODE_HEIGHT;
+                let top = viewport.top() + gpui::px(row_top) + offset.y;
+                let bottom = viewport.top() + gpui::px(row_bottom) + offset.y;
+                assert!(
+                    top >= viewport.top() - gpui::px(1.0)
+                        && bottom <= viewport.bottom() + gpui::px(1.0),
+                    "nested: after scrolling up, row {index} (offset {offset:?}) not inside viewport {viewport:?}"
+                );
+            });
+        }
+        cx.run_until_parked();
 
         let _ = fs::remove_dir_all(&root);
     }
