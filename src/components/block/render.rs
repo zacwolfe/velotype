@@ -3275,11 +3275,13 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 
 #[cfg(test)]
 mod tests {
-    use super::{HtmlComputedStyle, html_node_visual_style, inline_word_chunks};
+    use super::{
+        HtmlComputedStyle, effective_image_width, html_node_visual_style, inline_word_chunks,
+    };
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
-    use gpui::{Hsla, Rgba, TestAppContext, px};
+    use gpui::{AppContext, Hsla, Rgba, TestAppContext, px};
 
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
         let color = Rgba::from(color);
@@ -3400,5 +3402,39 @@ mod tests {
             "expected language input to sit near the code block right edge; right_gap={right_gap}, text_bounds={text_bounds:?}, language_bounds={language_bounds:?}"
         );
         assert!(language_bounds.size.width <= px(156.0));
+    }
+
+    #[gpui::test]
+    async fn wide_image_increases_effective_image_width(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let block = cx.new(|cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::new(
+                    BlockKind::Paragraph,
+                    InlineTextTree::from_markdown("![alt](img.png)"),
+                ),
+            )
+        });
+
+        let theme = Theme::default_theme();
+
+        block.update(cx, |block, _cx| {
+            if block.image_runtime().is_none() {
+                block.sync_render_cache();
+            }
+
+            let normal_width = effective_image_width(block, 1600.0, &theme.dimensions);
+            assert!(!block.is_wide_image());
+
+            block.image_wide_mode = true;
+            assert!(block.is_wide_image());
+            let wide_width = effective_image_width(block, 1600.0, &theme.dimensions);
+
+            assert!(
+                wide_width > normal_width,
+                "expected wide mode to widen the image; normal={normal_width}, wide={wide_width}"
+            );
+        });
     }
 }

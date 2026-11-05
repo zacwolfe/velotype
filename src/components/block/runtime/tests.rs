@@ -3374,3 +3374,29 @@ async fn typing_destination_into_empty_link_parens_keeps_caret_inside(cx: &mut T
         assert_eq!(block.selected_range, close..close);
     });
 }
+
+#[gpui::test]
+async fn standalone_image_block_can_toggle_wide_mode(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("![alt](img.png)"),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        if block.image_runtime().is_none() {
+            block.sync_render_cache();
+        }
+
+        assert!(block.can_toggle_image_wide_mode());
+        assert!(!block.is_wide_image());
+
+        block.image_wide_mode = true;
+        assert!(block.is_wide_image());
+    });
+}
