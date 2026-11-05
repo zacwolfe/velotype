@@ -2685,4 +2685,36 @@ mod tests {
         // inherit the English defaults above when merged, so there is nothing
         // extra to assert for them here.
     }
+
+    /// `I18N_STRING_KEYS` decides which keys a user-imported language pack may
+    /// override, so it has to stay in lockstep with the `I18nStrings` fields. A
+    /// field missing from the list is silently dropped from custom packs, and a
+    /// duplicate entry means the list has rotted. Both happened before.
+    #[test]
+    fn i18n_string_keys_cover_every_string_field() {
+        use super::I18N_STRING_KEYS;
+
+        let serialized = serde_json::to_value(I18nStrings::en_us()).expect("strings serialize");
+        let serialized_object = serialized.as_object().expect("strings serialize to an object");
+        let field_names: std::collections::BTreeSet<&str> =
+            serialized_object.keys().map(String::as_str).collect();
+        let whitelisted: std::collections::BTreeSet<&str> =
+            I18N_STRING_KEYS.iter().copied().collect();
+
+        let missing: Vec<&str> = field_names.difference(&whitelisted).copied().collect();
+        let unknown: Vec<&str> = whitelisted.difference(&field_names).copied().collect();
+        assert!(
+            missing.is_empty(),
+            "I18N_STRING_KEYS is missing fields: {missing:?}"
+        );
+        assert!(
+            unknown.is_empty(),
+            "I18N_STRING_KEYS lists keys with no matching field: {unknown:?}"
+        );
+        assert_eq!(
+            I18N_STRING_KEYS.len(),
+            whitelisted.len(),
+            "I18N_STRING_KEYS must not contain duplicate entries"
+        );
+    }
 }
