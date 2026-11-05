@@ -38,6 +38,7 @@ pub(crate) mod picgo;
 mod render;
 mod runtime_context;
 mod search;
+pub(crate) mod search_match;
 mod selection;
 mod source_mapping;
 mod status_bar;
@@ -212,6 +213,11 @@ pub struct Editor {
     table_insert_dialog: Option<TableInsertDialogState>,
     search_bar: Option<SearchBarState>,
     /// Delayed insert-submenu close task, canceled on renewed hover.
+    last_search_query: String,
+    last_search_replacement: String,
+    /// True while Replace All is applying edits. Suppresses the per-block undo
+    /// finalize so the whole batch becomes one undo entry.
+    search_replace_batch_in_progress: bool,
     context_menu_submenu_close_task: Option<Task<()>>,
     /// Hover preview is distinct from the committed row/column selection.
     table_axis_preview: Option<TableAxisSelection>,
@@ -583,6 +589,9 @@ impl Editor {
             context_menu: None,
             table_insert_dialog: None,
             search_bar: None,
+            last_search_query: String::new(),
+            last_search_replacement: String::new(),
+            search_replace_batch_in_progress: false,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,

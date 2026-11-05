@@ -140,6 +140,12 @@ impl Editor {
 
     /// Commits a changed capture, coalescing nearby text edits and invalidating redo.
     pub(super) fn finalize_pending_undo_capture(&mut self, cx: &mut Context<Self>) {
+        // Replace All keeps one pending capture for the whole batch and
+        // finalizes it once at the end, so per-block Changed events must not
+        // close it early.
+        if self.search_replace_batch_in_progress {
+            return;
+        }
         if self.history_restore_in_progress {
             self.pending_undo_capture = None;
             return;

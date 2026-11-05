@@ -9,8 +9,9 @@ use serde_json::{Map, Value};
 pub(crate) mod preferences;
 
 pub(crate) use preferences::{
-    EditorSettings, ImagePasteBehavior, StartupOpenPreference, apply_configured_language,
-    apply_configured_theme, first_existing_recent_markdown_file, import_language_config_and_select,
+    EditorSettings, ImagePasteBehavior, SearchPreferences, StartupOpenPreference,
+    apply_configured_language, apply_configured_theme,
+    first_existing_recent_markdown_file, import_language_config_and_select,
     import_theme_config_and_select, load_or_create_app_preferences, open_preferences_window,
     read_app_preferences,
 };
