@@ -87,7 +87,7 @@ impl Matcher {
             builder
                 .build()
                 .map(Matcher::Regex)
-                .map_err(|error| MatcherError::BadRegex(error.to_string()))
+                .map_err(|error| MatcherError::BadRegex(short_regex_error(&error)))
         } else {
             Ok(Matcher::Literal {
                 needle: query.to_string(),
@@ -145,6 +145,30 @@ impl Matcher {
             }
         }
     }
+}
+
+/// Shorten a regex compile error to the single line the find bar can show.
+///
+/// The `regex` crate renders syntax errors as a multi-line block, e.g.
+///
+/// ```text
+/// regex parse error:
+///     [
+///     ^
+/// error: unclosed character class
+/// ```
+///
+/// Only the trailing `error: <description>` line is useful in the find bar, so
+/// extract it. Errors without such a line (for example
+/// `regex::Error::CompiledTooBig`, which renders as a single-line size-limit
+/// message) fall back to the full message.
+fn short_regex_error(error: &regex::Error) -> String {
+    let full = error.to_string();
+    full.lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("error: ").map(str::trim))
+        .map(str::to_string)
+        .unwrap_or(full)
 }
 
 fn find_all_plain(haystack: &str, needle: &str, whole_word: bool) -> Vec<Range<usize>> {
@@ -381,7 +405,16 @@ mod tests {
     fn invalid_regex_returns_error_without_panicking() {
         let error = Matcher::build("[", &regex_options(false)).unwrap_err();
         assert!(matches!(error, MatcherError::BadRegex(_)));
-        assert!(!error.to_string().is_empty());
+        assert_eq!(error.to_string(), "unclosed character class");
+        assert!(!error.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn bad_regex_error_is_a_single_line_description() {
+        let error = Matcher::build("(", &regex_options(false)).unwrap_err();
+        assert!(matches!(error, MatcherError::BadRegex(_)));
+        assert_eq!(error.to_string(), "unclosed group");
+        assert!(!error.to_string().contains('\n'));
     }
 
     #[test]
