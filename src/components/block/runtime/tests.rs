@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::projection::{
@@ -12,13 +14,13 @@ use crate::components::markdown::inline::{
 };
 use crate::components::markdown::link::parse_link_reference_definitions;
 use crate::components::{
-    Block, BlockKind, BlockRecord, DeleteBack, ImageResolvedSource, IndentBlock, Newline,
+    Block, BlockEvent, BlockKind, BlockRecord, DeleteBack, ImageResolvedSource, IndentBlock, Newline,
     TableCellPosition, TableColumnAlignment, TableData,
 };
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
 use gpui::{
-    AppContext, EntityInputHandler, Modifiers, MouseButton, MouseMoveEvent, MouseUpEvent,
+    AppContext, EntityInputHandler, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     TestAppContext, point, px,
 };
 
@@ -3373,4 +3375,64 @@ async fn typing_destination_into_empty_link_parens_keeps_caret_inside(cx: &mut T
         let close = block.display_text().find(')').expect("closing paren");
         assert_eq!(block.selected_range, close..close);
     });
+}
+
+#[gpui::test]
+async fn clicking_rendered_image_emits_expand_request(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let block = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::new(
+                BlockKind::Paragraph,
+                InlineTextTree::from_markdown("![diagram](./assets/diagram.png)"),
+            ),
+        )
+    });
+
+    block.update(cx, |block, _cx| {
+        block.sync_render_cache();
+        assert!(block.showing_rendered_image());
+    });
+
+    let seen: Rc<RefCell<Vec<BlockEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    cx.update(|_window, cx| {
+        cx.subscribe(&block, move |_block, event: &BlockEvent, _cx| {
+            sink.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+
+    cx.update(|window, cx| {
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+    });
+
+    let events = seen.borrow();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, BlockEvent::RequestExpandImage { .. }))
+            .count(),
+        1,
+        "clicking a rendered image should emit exactly one expand request"
+    );
+    let runtime = events
+        .iter()
+        .find_map(|event| match event {
+            BlockEvent::RequestExpandImage { runtime } => Some(runtime.clone()),
+            _ => None,
+        })
+        .expect("expand request should carry an image runtime");
+    assert!(!matches!(
+        runtime.resolved_source,
+        ImageResolvedSource::Unusable
+    ));
 }

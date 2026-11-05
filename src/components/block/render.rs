@@ -3257,13 +3257,11 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HtmlComputedStyle, effective_image_width, html_node_visual_style, inline_word_chunks,
-    };
+    use super::{HtmlComputedStyle, html_node_visual_style, inline_word_chunks};
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
-    use gpui::{AppContext, Hsla, Rgba, TestAppContext, px};
+    use gpui::{Hsla, Rgba, TestAppContext, px};
 
     fn assert_color_near(color: Hsla, red: u8, green: u8, blue: u8, alpha: u8) {
         let color = Rgba::from(color);
