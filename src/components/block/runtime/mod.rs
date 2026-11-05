@@ -189,9 +189,6 @@ pub struct Block {
     image_runtime: Option<ImageRuntime>,
     image_edit_expanded: bool,
     image_expand_requested: bool,
-    /// Per-image view preference: when true a rendered standalone image fills
-    /// the editor content width instead of the centered column. Not persisted.
-    pub(crate) image_wide_mode: bool,
     pub(crate) html_details_open: bool,
     image_base_dir: Option<PathBuf>,
     /// Memoized [`resolve_image_source`] results, see
@@ -292,7 +289,6 @@ impl Block {
             image_runtime: None,
             image_edit_expanded: false,
             image_expand_requested: false,
-            image_wide_mode: false,
             html_details_open: false,
             image_base_dir: None,
             resolved_image_cache: RefCell::new(HashMap::new()),

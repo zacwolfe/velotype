@@ -147,11 +147,12 @@ impl Editor {
 
     pub(super) fn dismiss_contextual_overlays(&mut self, cx: &mut Context<Self>) {
         let had_menu = self.context_menu.take().is_some();
+        let had_expanded_image = self.expanded_image.take().is_some();
         let had_dialog = self.table_insert_dialog.take().is_some();
         let had_submenu_close = self.context_menu_submenu_close_task.take().is_some();
         let had_search = self.search_bar.is_some();
         self.close_search_bar(cx);
-        if had_menu || had_dialog || had_submenu_close || had_search {
+        if had_menu || had_expanded_image || had_dialog || had_submenu_close || had_search {
             cx.notify();
         }
     }

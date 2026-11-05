@@ -17,7 +17,8 @@ use self::context_menu::{ContextMenuState, TableInsertDialogState};
 use self::tree::DocumentTree;
 use crate::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
-    FootnoteRegistry, FootnoteResolvedOccurrence, ImageReferenceDefinitions, InlineTextTree,
+    FootnoteRegistry, FootnoteResolvedOccurrence, ImageReferenceDefinitions, ImageRuntime,
+    InlineTextTree,
     LinkReferenceDefinitions, parse_image_reference_definitions, parse_link_reference_definitions,
 };
 use crate::components::{
@@ -145,6 +146,8 @@ pub struct Editor {
     drop_replace_restore_focus: Option<EntityId>,
     /// Optional informational dialog shown from the Help menu.
     info_dialog: Option<InfoDialogKind>,
+    /// Image the user clicked to enlarge, drawn over the whole application frame.
+    expanded_image: Option<ImageRuntime>,
     /// True while an online update check is running in the background.
     update_check_in_progress: bool,
     workspace: WorkspaceState,
@@ -445,6 +448,7 @@ impl Editor {
             pending_drop_replace_after_save: false,
             drop_replace_restore_focus: None,
             info_dialog: None,
+            expanded_image: None,
             update_check_in_progress: false,
             workspace: WorkspaceState::from_settings(cx),
             workspace_watch: WorkspaceWatchState::default(),

@@ -9,7 +9,9 @@ use gpui::*;
 use super::{Editor, InfoDialogKind, MountedRun, ScrollAlign};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
-use crate::components::{AddLanguageConfig, AddThemeConfig, Block, NoRecentFiles};
+use crate::components::{
+    AddLanguageConfig, AddThemeConfig, Block, ImageResolvedSource, NoRecentFiles,
+};
 use crate::i18n::{I18nManager, I18nStrings};
 use crate::theme::{Theme, ThemeDimensions, ThemeManager};
 use crate::window_chrome::{custom_titlebar_height, render_custom_titlebar};
@@ -88,7 +90,7 @@ impl RenderedRowSpacingInfo {
             is_callout_header: block.kind().is_callout(),
             footnote_anchor: block.footnote_anchor,
             is_footnote_header: block.kind().is_footnote_definition(),
-            expand_row: block.is_wide_table() || block.is_wide_image(),
+            expand_row: block.is_wide_table(),
         }
     }
 }
@@ -1638,6 +1640,65 @@ impl Editor {
                     ),
             )
     }
+
+    /// Full-frame view of the image the user clicked to enlarge. Clicking
+    /// anywhere on the scrim, including the image, dismisses it.
+    fn render_expanded_image_overlay(
+        &self,
+        theme: &Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let runtime = self.expanded_image.as_ref()?;
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let image = match runtime.resolved_source.clone() {
+            ImageResolvedSource::Local(path) => img(path),
+            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Inline(image) => img(image),
+            ImageResolvedSource::Unusable => return None,
+        };
+        let viewport = window.viewport_size();
+        let margin = (d.editor_padding * 2.0).max(64.0);
+        let max_w = (f32::from(viewport.width) - margin).max(160.0);
+        let max_h = (f32::from(viewport.height) - margin).max(160.0);
+
+        Some(
+            div()
+                .id("expanded-image-overlay")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(c.dialog_backdrop)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(Self::on_dismiss_expanded_image),
+                )
+                .child(
+                    image
+                        .max_w(px(max_w))
+                        .max_h(px(max_h))
+                        .object_fit(ObjectFit::Contain),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn on_dismiss_expanded_image(
+        &mut self,
+        _event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.expanded_image.take().is_some() {
+            cx.notify();
+        }
+    }
 }
 
 impl Render for Editor {
@@ -2325,6 +2386,13 @@ impl Render for Editor {
         };
         let base = if let Some(context_menu) = self.render_context_menu_overlay(&theme, cx) {
             base.child(context_menu)
+        } else {
+            base
+        };
+        let base = if let Some(expanded_image) =
+            self.render_expanded_image_overlay(&theme, window, cx)
+        {
+            base.child(expanded_image)
         } else {
             base
         };

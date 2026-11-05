@@ -1581,6 +1581,12 @@ impl Editor {
         event: &BlockEvent,
         cx: &mut Context<Self>,
     ) {
+        if let BlockEvent::RequestExpandImage { runtime } = event {
+            self.expanded_image = Some(runtime.clone());
+            cx.notify();
+            return;
+        }
+
         if let BlockEvent::PrepareUndo { kind } = event {
             self.prepare_undo_capture_from_stable_snapshot(*kind);
             return;
@@ -2340,6 +2346,7 @@ impl Editor {
                 cx.notify();
             }
             BlockEvent::RequestRenderedSelectAll => {}
+            BlockEvent::RequestExpandImage { .. } => {}
             BlockEvent::PrepareUndo { .. } => {}
         }
     }
