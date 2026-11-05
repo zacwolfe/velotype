@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -43,6 +43,15 @@ use crate::theme::Theme;
 /// Hard cap on collected matches. A one-character query on a big document
 /// would otherwise stall every keystroke; the bar reports `10 000+` instead.
 pub(super) const MAX_SEARCH_MATCHES: usize = 10_000;
+
+/// Caret stays solid this long after each edit or caret move, so typing never
+/// fights a blink. Mirrors the block caret's timing.
+const SEARCH_CURSOR_SOLID_AFTER_EDIT: Duration = Duration::from_millis(500);
+/// How long the caret stays in each on/off state once blinking.
+const SEARCH_CURSOR_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
+/// Blink poll interval. A fraction of the half-period so a state flip is never
+/// more than this late, while still costing ~4 repaints/second instead of ~30.
+const SEARCH_CURSOR_BLINK_POLL: Duration = Duration::from_millis(125);
 
 /// One occurrence of the current query in the document.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +93,12 @@ pub(super) struct SearchBarState {
     /// Whatever had real focus before the bar stole it, so closing the bar
     /// without ever jumping to a match restores it.
     previous_focus: Option<EntityId>,
+    /// When the last edit or caret move happened; the caret stays solid for a
+    /// short window after this before it starts blinking.
+    cursor_blink_epoch: Instant,
+    /// Repaints the caret only when its on/off state flips. Dropped when the
+    /// bar closes or no field is focused, so a closed bar costs nothing.
+    cursor_blink_task: Option<Task<()>>,
 }
 
 impl SearchBarState {
@@ -104,6 +119,36 @@ impl SearchBarState {
         match field {
             SearchField::Query => self.query_cursor = cursor,
             SearchField::Replacement => self.replacement_cursor = cursor,
+        }
+        // Every caret move is an edit for blink purposes: hold the caret solid
+        // briefly so the user sees it land before it starts blinking.
+        self.reset_cursor_blink();
+    }
+
+    /// Marks the caret as freshly moved/edited so it stays solid for a short
+    /// window before resuming its blink.
+    fn reset_cursor_blink(&mut self) {
+        self.cursor_blink_epoch = Instant::now();
+    }
+
+    /// Caret alpha: solid for [`SEARCH_CURSOR_SOLID_AFTER_EDIT`] after each
+    /// reset, then a hard on/off step every [`SEARCH_CURSOR_BLINK_HALF_PERIOD`].
+    ///
+    /// Deliberately a step rather than a fade: GPUI has no partial
+    /// invalidation, so a smooth fade would repaint the whole window ~30 times
+    /// a second while the caret merely sits there. A step repaints only when
+    /// the state flips.
+    fn cursor_opacity(&self) -> f32 {
+        let elapsed = self.cursor_blink_epoch.elapsed();
+        if elapsed < SEARCH_CURSOR_SOLID_AFTER_EDIT {
+            return 1.0;
+        }
+        let phases = (elapsed - SEARCH_CURSOR_SOLID_AFTER_EDIT).as_millis()
+            / SEARCH_CURSOR_BLINK_HALF_PERIOD.as_millis();
+        if phases % 2 == 0 {
+            1.0
+        } else {
+            0.0
         }
     }
 
@@ -485,6 +530,8 @@ impl Editor {
             last_replaced: None,
             last_replaced_token: 0,
             previous_focus,
+            cursor_blink_epoch: Instant::now(),
+            cursor_blink_task: None,
         };
         state.show_replace_row = state.show_replace_row || show_replace_row;
         self.search_bar = Some(state);
@@ -678,13 +725,23 @@ impl Editor {
         self.replace_all_search_matches(cx);
     }
 
-    /// Focuses the replacement field when the user clicks its text area.
-    fn focus_search_field(&mut self, field: SearchField, cx: &mut Context<Self>) {
+    /// Gives the given field the caret and moves keyboard focus to the bar's
+    /// focus handle, so keystrokes land in the field instead of the document
+    /// behind the bar. Also resets the caret blink so a freshly focused field
+    /// starts solid.
+    fn focus_search_field(
+        &mut self,
+        field: SearchField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(search) = self.search_bar.as_mut() {
             search.focused_field = field;
             if field == SearchField::Replacement {
                 search.show_replace_row = true;
             }
+            search.reset_cursor_blink();
+            window.focus(&search.focus_handle);
             cx.notify();
         }
     }
@@ -692,19 +749,44 @@ impl Editor {
     pub(super) fn on_search_query_field_click(
         &mut self,
         _: &ClickEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_search_field(SearchField::Query, cx);
+        self.focus_search_field(SearchField::Query, window, cx);
     }
 
     pub(super) fn on_search_replace_field_click(
         &mut self,
         _: &ClickEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.focus_search_field(SearchField::Replacement, cx);
+        self.focus_search_field(SearchField::Replacement, window, cx);
+    }
+
+    /// Mouse-down on the query field: take the caret and keyboard focus, and
+    /// swallow the event so it never reaches the source text block underneath,
+    /// which would otherwise steal focus and swallow the next keystroke.
+    pub(super) fn on_search_query_field_mouse_down(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_search_field(SearchField::Query, window, cx);
+        cx.stop_propagation();
+    }
+
+    /// Mouse-down on the replacement field: same as the query field, but for
+    /// the replace row.
+    pub(super) fn on_search_replace_field_mouse_down(
+        &mut self,
+        _: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_search_field(SearchField::Replacement, window, cx);
+        cx.stop_propagation();
     }
 
     pub(super) fn on_search_query_key_down(
@@ -779,6 +861,7 @@ impl Editor {
                     let end = grapheme_right(search.text(field), cursor);
                     if end > cursor {
                         search.text_mut(field).replace_range(cursor..end, "");
+                        search.reset_cursor_blink();
                     }
                     if field == SearchField::Query {
                         search.last_replaced = None;
@@ -904,11 +987,64 @@ impl Editor {
         }
     }
 
+    /// Starts or stops the caret-blink repaint task for the open bar.
+    ///
+    /// The blink repaints the whole window, so it must not run for a window the
+    /// user is not looking at, and it must stop as soon as the bar loses
+    /// keyboard focus (e.g. the user clicked into the document). The task
+    /// repaints only when the on/off state flips, never on every poll.
+    fn update_search_cursor_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(search) = self.search_bar.as_mut() else {
+            return;
+        };
+        let blink_active =
+            search.focus_handle.is_focused(window) && window.is_window_active();
+        if blink_active && search.cursor_blink_task.is_none() {
+            search.cursor_blink_epoch = Instant::now();
+            search.cursor_blink_task = Some(cx.spawn(
+                async |this: WeakEntity<Editor>, cx: &mut AsyncApp| {
+                    let mut last_visible: Option<bool> = None;
+                    loop {
+                        cx.background_executor().timer(SEARCH_CURSOR_BLINK_POLL).await;
+                        let still_running = this
+                            .update(cx, |this: &mut Editor, cx: &mut Context<Editor>| {
+                                let Some(search) = this.search_bar.as_ref() else {
+                                    return false;
+                                };
+                                if search
+                                    .cursor_blink_epoch
+                                    .elapsed()
+                                    < SEARCH_CURSOR_SOLID_AFTER_EDIT
+                                {
+                                    last_visible = None;
+                                    return true;
+                                }
+                                let visible = search.cursor_opacity() > 0.5;
+                                if last_visible != Some(visible) {
+                                    last_visible = Some(visible);
+                                    cx.notify();
+                                }
+                                true
+                            })
+                            .unwrap_or(false);
+                        if !still_running {
+                            break;
+                        }
+                    }
+                },
+            ));
+        } else if !blink_active && search.cursor_blink_task.is_some() {
+            search.cursor_blink_task = None;
+        }
+    }
+
     pub(super) fn render_search_bar_overlay(
-        &self,
+        &mut self,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        self.update_search_cursor_blink(window, cx);
         let search = self.search_bar.as_ref()?;
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -1016,7 +1152,13 @@ impl Editor {
                         div()
                             .flex()
                             .items_center()
-                            .child(div().w(px(1.0)).h(px(14.0)).bg(c.cursor))
+                            .child(
+                                div()
+                                    .w(px(1.0))
+                                    .h(px(14.0))
+                                    .bg(c.cursor)
+                                    .opacity(search.cursor_opacity()),
+                            )
                             .child(
                                 div()
                                     .text_color(c.code_language_input_placeholder)
@@ -1037,7 +1179,13 @@ impl Editor {
                                 .text_color(c.code_language_input_text)
                                 .child(prefix.to_string()),
                         )
-                        .child(div().w(px(1.0)).h(px(14.0)).bg(c.cursor))
+                        .child(
+                            div()
+                                .w(px(1.0))
+                                .h(px(14.0))
+                                .bg(c.cursor)
+                                .opacity(search.cursor_opacity()),
+                        )
                         .child(
                             div()
                                 .text_color(c.code_language_input_text)
@@ -1055,6 +1203,11 @@ impl Editor {
             search.query_cursor,
         )
         .id("search-query-field")
+        .debug_selector(|| "search-query-field".to_string())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(Self::on_search_query_field_mouse_down),
+        )
         .on_click(cx.listener(Self::on_search_query_field_click));
 
         let replace_field = field(
@@ -1064,6 +1217,11 @@ impl Editor {
             search.replacement_cursor,
         )
         .id("search-replace-field")
+        .debug_selector(|| "search-replace-field".to_string())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(Self::on_search_replace_field_mouse_down),
+        )
         .on_click(cx.listener(Self::on_search_replace_field_click));
 
         let replace_row = div()
