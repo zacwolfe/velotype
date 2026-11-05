@@ -3398,5 +3398,14 @@ async fn standalone_image_block_can_toggle_wide_mode(cx: &mut TestAppContext) {
 
         block.image_wide_mode = true;
         assert!(block.is_wide_image());
+
+        // Losing the standalone image runtime must drop wide mode with it.
+        block
+            .record
+            .set_title(InlineTextTree::from_markdown("plain text"));
+        block.sync_render_cache();
+        assert!(block.image_runtime().is_none());
+        assert!(!block.image_wide_mode);
+        assert!(!block.is_wide_image());
     });
 }

@@ -3435,6 +3435,15 @@ mod tests {
                 wide_width > normal_width,
                 "expected wide mode to widen the image; normal={normal_width}, wide={wide_width}"
             );
+
+            let expected_wide_width = (1600.0
+                - theme.dimensions.editor_padding * 2.0
+                - theme.dimensions.block_padding_x * 2.0)
+                .max(160.0);
+            assert!(
+                (wide_width - expected_wide_width).abs() < 0.01,
+                "expected full content width; expected={expected_wide_width}, wide={wide_width}"
+            );
         });
     }
 }
