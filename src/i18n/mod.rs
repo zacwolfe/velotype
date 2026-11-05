@@ -81,6 +81,18 @@ pub struct I18nStrings {
     pub help_about_github_label: String,
     /// Star request shown in the About dialog.
     pub help_about_star_message: String,
+    /// Top-level Edit menu label.
+    pub menu_edit: String,
+    /// Edit menu item that opens the find bar.
+    pub menu_find: String,
+    /// Edit menu item that steps to the next match.
+    pub menu_find_next: String,
+    /// Edit menu item that steps to the previous match.
+    pub menu_find_previous: String,
+    /// Edit menu item that opens the find bar with the replace row.
+    pub menu_replace: String,
+    /// Edit menu item that replaces every match.
+    pub menu_replace_all: String,
     /// Top-level File menu label.
     pub menu_file: String,
     /// Top-level Export menu label.
@@ -434,6 +446,12 @@ struct I18nStringsDe {
     help_about_message: Option<String>,
     help_about_github_label: Option<String>,
     help_about_star_message: Option<String>,
+    menu_edit: Option<String>,
+    menu_find: Option<String>,
+    menu_find_next: Option<String>,
+    menu_find_previous: Option<String>,
+    menu_replace: Option<String>,
+    menu_replace_all: Option<String>,
     menu_file: Option<String>,
     menu_export: Option<String>,
     menu_language: Option<String>,
@@ -659,14 +677,23 @@ const I18N_STRING_KEYS: &[&str] = &[
     "help_about_message",
     "help_about_github_label",
     "help_about_star_message",
+    "menu_edit",
+    "menu_find",
+    "menu_find_next",
+    "menu_find_previous",
+    "menu_replace",
+    "menu_replace_all",
     "menu_file",
     "menu_export",
     "menu_language",
     "menu_theme",
     "menu_workspace",
-    "menu_help",
-    "menu_add_language_config",
-    "menu_add_theme_config",
+    "menu_edit",
+    "menu_find",
+    "menu_find_next",
+    "menu_find_previous",
+    "menu_replace",
+    "menu_replace_all",
     "menu_new_window",
     "menu_close_window",
     "menu_next_window",
@@ -942,18 +969,27 @@ impl I18nStringsDe {
             help_about_star_message: self
                 .help_about_star_message
                 .unwrap_or(defaults.help_about_star_message),
+            menu_edit: self.menu_edit.unwrap_or(defaults.menu_edit),
+            menu_find: self.menu_find.unwrap_or(defaults.menu_find),
+            menu_find_next: self.menu_find_next.unwrap_or(defaults.menu_find_next),
+            menu_find_previous: self
+                .menu_find_previous
+                .unwrap_or(defaults.menu_find_previous),
+            menu_replace: self.menu_replace.unwrap_or(defaults.menu_replace),
+            menu_replace_all: self.menu_replace_all.unwrap_or(defaults.menu_replace_all),
             menu_file: self.menu_file.unwrap_or(defaults.menu_file),
             menu_export: self.menu_export.unwrap_or(defaults.menu_export),
             menu_language: self.menu_language.unwrap_or(defaults.menu_language),
             menu_theme: self.menu_theme.unwrap_or(defaults.menu_theme),
             menu_workspace: self.menu_workspace.unwrap_or(defaults.menu_workspace),
-            menu_help: self.menu_help.unwrap_or(defaults.menu_help),
-            menu_add_language_config: self
-                .menu_add_language_config
-                .unwrap_or(defaults.menu_add_language_config),
-            menu_add_theme_config: self
-                .menu_add_theme_config
-                .unwrap_or(defaults.menu_add_theme_config),
+            menu_edit: self.menu_edit.unwrap_or(defaults.menu_edit),
+            menu_find: self.menu_find.unwrap_or(defaults.menu_find),
+            menu_find_next: self.menu_find_next.unwrap_or(defaults.menu_find_next),
+            menu_find_previous: self
+                .menu_find_previous
+                .unwrap_or(defaults.menu_find_previous),
+            menu_replace: self.menu_replace.unwrap_or(defaults.menu_replace),
+            menu_replace_all: self.menu_replace_all.unwrap_or(defaults.menu_replace_all),
             menu_new_window: self.menu_new_window.unwrap_or(defaults.menu_new_window),
             menu_close_window: self.menu_close_window.unwrap_or(defaults.menu_close_window),
             menu_next_window: self.menu_next_window.unwrap_or(defaults.menu_next_window),
@@ -1509,6 +1545,12 @@ impl I18nStrings {
             help_about_github_label: "GitHub".into(),
             help_about_star_message: "如果本项目对您有帮助，那不妨给本项目一颗 Star⭐，十分感谢！"
                 .into(),
+            menu_edit: "编辑".into(),
+            menu_find: "查找".into(),
+            menu_find_next: "查找下一个".into(),
+            menu_find_previous: "查找上一个".into(),
+            menu_replace: "替换…".into(),
+            menu_replace_all: "替换全部".into(),
             menu_file: "文件".into(),
             menu_export: "导出".into(),
             menu_language: "语言".into(),
@@ -1753,6 +1795,12 @@ impl I18nStrings {
             help_about_github_label: "GitHub".into(),
             help_about_star_message:
                 "If this project helps you, consider giving it a Star⭐. Thank you!".into(),
+            menu_edit: "Edit".into(),
+            menu_find: "Find".into(),
+            menu_find_next: "Find Next".into(),
+            menu_find_previous: "Find Previous".into(),
+            menu_replace: "Replace…".into(),
+            menu_replace_all: "Replace All".into(),
             menu_file: "File".into(),
             menu_export: "Export".into(),
             menu_language: "Language".into(),

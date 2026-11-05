@@ -4132,6 +4132,82 @@ async fn replace_all_rewrites_every_match_in_one_undo_step(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+async fn replace_all_status_label_clears_itself_after_a_short_delay(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().unwrap();
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+        editor.replace_all_search_matches(cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().last_replaced, Some(2));
+    });
+
+    // The count is transient: it clears on its own instead of lingering until
+    // the next keystroke.
+    cx.background_executor.advance_clock(Duration::from_secs(3));
+    cx.run_until_parked();
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().last_replaced, None);
+    });
+}
+
+#[gpui::test]
+async fn replace_all_status_label_timer_keeps_the_newest_count(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().unwrap();
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+        editor.replace_all_search_matches(cx);
+    });
+
+    // A second Replace All one second later pushes the clear deadline back; the
+    // first timer must not wipe the newer count when it fires.
+    cx.background_executor.advance_clock(Duration::from_secs(1));
+    editor.update_in(cx, |editor, _window, cx| {
+        let search = editor.search_bar.as_mut().unwrap();
+        search.query = "beta".to_string();
+        search.replacement = "gamma".to_string();
+        editor.recompute_search_matches(cx);
+        editor.replace_all_search_matches(cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().last_replaced, Some(2));
+    });
+
+    // 1.5s after the second replace: the first timer has expired but must be
+    // ignored because a newer replace bumped the token.
+    cx.background_executor
+        .advance_clock(Duration::from_millis(1500));
+    cx.run_until_parked();
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().last_replaced, Some(2));
+    });
+
+    // Past the 2s deadline of the second replace: now it clears.
+    cx.background_executor
+        .advance_clock(Duration::from_millis(1500));
+    cx.run_until_parked();
+    editor.update(cx, |editor, _cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().last_replaced, None);
+    });
+}
+
+#[gpui::test]
 async fn replace_all_expands_regex_capture_groups(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let markdown = ["name: ada lovelace", "", "name: alan turing"].join("\n");

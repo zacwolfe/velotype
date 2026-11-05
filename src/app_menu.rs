@@ -9,13 +9,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use gpui::*;
 
-use crate::{LaunchTarget, resolve_launch_target};
 use crate::components::{
-    AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf,
-    InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenFolder, OpenPreferences,
-    OpenRecentFile,
-    QuitApplication, SaveDocument, SaveDocumentAs, SelectLanguage, SelectNextWindow,
-    SelectPreviousWindow, SelectTheme, ShowAbout, ToggleWorkspace, UninstallCliTool,
+    AddLanguageConfig, AddThemeConfig, CheckForUpdates, CloseWindow, ExportHtml, ExportPdf, Find,
+    FindNext, FindPrevious, InstallCliTool, NewWindow, NoRecentFiles, OpenFile, OpenFolder,
+    OpenPreferences, OpenRecentFile, QuitApplication, Replace, ReplaceAll, SaveDocument,
+    SaveDocumentAs, SelectLanguage, SelectNextWindow, SelectPreviousWindow, SelectTheme, ShowAbout,
+    ToggleWorkspace, UninstallCliTool,
 };
 use crate::config::{
     apply_configured_language, apply_configured_theme, import_language_config_and_select,
@@ -27,6 +26,7 @@ use crate::export::ExportFormat;
 use crate::i18n::I18nManager;
 use crate::theme::ThemeManager;
 use crate::window_chrome::velotype_window_options;
+use crate::{LaunchTarget, resolve_launch_target};
 
 /// Global app-menu state for platform menu lifecycle hooks.
 #[derive(Default)]
@@ -599,6 +599,24 @@ pub(crate) fn dispatch_menu_action(action: &dyn Action, cx: &mut App) {
         let _ = with_active_editor(cx, |editor, window, cx| editor.save_document(window, cx));
     } else if action.as_any().is::<SaveDocumentAs>() {
         let _ = with_active_editor(cx, |editor, window, cx| editor.save_document_as(window, cx));
+    } else if action.as_any().is::<Find>() {
+        let _ = with_active_editor(cx, |editor, window, cx| editor.on_find(&Find, window, cx));
+    } else if action.as_any().is::<FindNext>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.on_find_next(&FindNext, window, cx)
+        });
+    } else if action.as_any().is::<FindPrevious>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.on_find_previous(&FindPrevious, window, cx)
+        });
+    } else if action.as_any().is::<Replace>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.on_replace(&Replace, window, cx)
+        });
+    } else if action.as_any().is::<ReplaceAll>() {
+        let _ = with_active_editor(cx, |editor, window, cx| {
+            editor.on_replace_all_action(&ReplaceAll, window, cx)
+        });
     } else if action.as_any().is::<ExportHtml>() {
         let _ = with_active_editor(cx, |editor, window, cx| {
             editor.export_document_via_prompt(ExportFormat::Html, window, cx)
@@ -809,6 +827,17 @@ fn build_menus(
             .collect()
     };
 
+    // Find/replace entries sit directly in the Edit menu so the search bar and
+    // its navigation are reachable without recalling a shortcut.
+    let edit_items = vec![
+        MenuItem::action(strings.menu_find.clone(), Find),
+        MenuItem::action(strings.menu_find_next.clone(), FindNext),
+        MenuItem::action(strings.menu_find_previous.clone(), FindPrevious),
+        MenuItem::separator(),
+        MenuItem::action(strings.menu_replace.clone(), Replace),
+        MenuItem::action(strings.menu_replace_all.clone(), ReplaceAll),
+    ];
+
     #[cfg(target_os = "macos")]
     let initial_menus = {
         // On macOS, the first menu is the app menu (macOS overrides its title
@@ -899,6 +928,10 @@ fn build_menus(
     ];
 
     let mut menus = initial_menus;
+    menus.push(Menu {
+        name: strings.menu_edit.into(),
+        items: edit_items,
+    });
     menus.extend([
         Menu {
             name: strings.menu_export.into(),
@@ -1020,10 +1053,7 @@ fn prompt_and_open_folder(cx: &mut App) {
 /// Folder counterpart to [`prompt_and_open_files_with_error_window`]. The
 /// chosen directory goes through the same resolution as a `velotype <dir>`
 /// launch, so the menu item and the CLI cannot drift apart.
-fn prompt_and_open_folder_with_error_window(
-    cx: &mut App,
-    error_window: Option<AnyWindowHandle>,
-) {
+fn prompt_and_open_folder_with_error_window(cx: &mut App, error_window: Option<AnyWindowHandle>) {
     let prompt_title = cx
         .global::<I18nManager>()
         .strings()
@@ -1282,6 +1312,7 @@ mod tests {
         SaveDocument, SelectLanguage, SelectTheme, ShowAbout,
     };
     // Only used by the macOS-only Window menu test.
+    use crate::components::{Find, FindNext, FindPrevious, Replace, ReplaceAll};
     #[cfg(target_os = "macos")]
     use crate::components::{SelectNextWindow, SelectPreviousWindow};
     use crate::i18n::I18nManager;
@@ -1318,37 +1349,80 @@ mod tests {
     }
 
     // On macOS the menu bar is:
-    //   [Velotype app menu, File, Export, Language, Theme, Workspace, Window, Help]
+    //   [Velotype app menu, File, Edit, Export, Language, Theme, Workspace, Window, Help]
     // On other platforms:
-    //   [File, Export, Language, Theme, Workspace, Help]
+    //   [File, Edit, Export, Language, Theme, Workspace, Help]
     // The macOS-only "Window" menu is inserted just before Help.
     #[cfg(target_os = "macos")]
+    const EDIT_IDX: usize = 2;
+    #[cfg(not(target_os = "macos"))]
+    const EDIT_IDX: usize = 1;
+
+    #[cfg(target_os = "macos")]
+    const EXPORT_IDX: usize = 3;
+    #[cfg(not(target_os = "macos"))]
     const EXPORT_IDX: usize = 2;
-    #[cfg(not(target_os = "macos"))]
-    const EXPORT_IDX: usize = 1;
 
     #[cfg(target_os = "macos")]
+    const LANGUAGE_IDX: usize = 4;
+    #[cfg(not(target_os = "macos"))]
     const LANGUAGE_IDX: usize = 3;
-    #[cfg(not(target_os = "macos"))]
-    const LANGUAGE_IDX: usize = 2;
 
     #[cfg(target_os = "macos")]
+    const THEME_IDX: usize = 5;
+    #[cfg(not(target_os = "macos"))]
     const THEME_IDX: usize = 4;
-    #[cfg(not(target_os = "macos"))]
-    const THEME_IDX: usize = 3;
 
     #[cfg(target_os = "macos")]
+    const WORKSPACE_IDX: usize = 6;
+    #[cfg(not(target_os = "macos"))]
     const WORKSPACE_IDX: usize = 5;
-    #[cfg(not(target_os = "macos"))]
-    const WORKSPACE_IDX: usize = 4;
 
     #[cfg(target_os = "macos")]
-    const WINDOW_IDX: usize = 6;
+    const WINDOW_IDX: usize = 7;
 
     #[cfg(target_os = "macos")]
-    const HELP_IDX: usize = 7;
+    const HELP_IDX: usize = 8;
     #[cfg(not(target_os = "macos"))]
-    const HELP_IDX: usize = 5;
+    const HELP_IDX: usize = 6;
+
+    #[test]
+    fn build_menus_puts_find_and_replace_in_the_edit_menu() {
+        let theme_manager = ThemeManager::default();
+        let i18n_manager = I18nManager::default();
+        let menus = build_menus(&theme_manager, &i18n_manager, &[]);
+
+        let edit = &menus[EDIT_IDX];
+        assert_eq!(edit.name.to_string(), "Edit");
+        assert_eq!(edit.items.len(), 6);
+        assert_eq!(action_name(&edit.items[0]), "Find");
+        assert_eq!(action_name(&edit.items[1]), "Find Next");
+        assert_eq!(action_name(&edit.items[2]), "Find Previous");
+        assert!(matches!(edit.items[3], MenuItem::Separator));
+        assert_eq!(action_name(&edit.items[4]), "Replace…");
+        assert_eq!(action_name(&edit.items[5]), "Replace All");
+
+        match &edit.items[0] {
+            MenuItem::Action { action, .. } => assert!(action.as_any().is::<Find>()),
+            _ => panic!("expected find action item"),
+        }
+        match &edit.items[1] {
+            MenuItem::Action { action, .. } => assert!(action.as_any().is::<FindNext>()),
+            _ => panic!("expected find next action item"),
+        }
+        match &edit.items[2] {
+            MenuItem::Action { action, .. } => assert!(action.as_any().is::<FindPrevious>()),
+            _ => panic!("expected find previous action item"),
+        }
+        match &edit.items[4] {
+            MenuItem::Action { action, .. } => assert!(action.as_any().is::<Replace>()),
+            _ => panic!("expected replace action item"),
+        }
+        match &edit.items[5] {
+            MenuItem::Action { action, .. } => assert!(action.as_any().is::<ReplaceAll>()),
+            _ => panic!("expected replace all action item"),
+        }
+    }
 
     #[test]
     fn build_menus_uses_english_fallback_by_default() {
@@ -1367,6 +1441,7 @@ mod tests {
             vec![
                 "Velotype",
                 "File",
+                "Edit",
                 "Export",
                 "Language",
                 "Theme",
@@ -1378,7 +1453,15 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             menu_names,
-            vec!["File", "Export", "Language", "Theme", "Workspace", "Help"]
+            vec![
+                "File",
+                "Edit",
+                "Export",
+                "Language",
+                "Theme",
+                "Workspace",
+                "Help"
+            ]
         );
 
         // New Window belongs with file operations on macOS and remains the
@@ -1455,6 +1538,7 @@ mod tests {
             vec![
                 "Velotype",
                 "文件",
+                "编辑",
                 "导出",
                 "语言",
                 "主题",
@@ -1466,7 +1550,7 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(
             menu_names,
-            vec!["文件", "导出", "语言", "主题", "工作区", "帮助"]
+            vec!["文件", "编辑", "导出", "语言", "主题", "工作区", "帮助"]
         );
 
         #[cfg(target_os = "macos")]
