@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    AnyWindowHandle, AppContext, ClickEvent, Entity, EntityId, KeyDownEvent, Keystroke,
-    TestAppContext, VisualTestContext,
+    AnyWindowHandle, AppContext, ClickEvent, Entity, EntityId, KeyDownEvent, Keystroke, Modifiers,
+    Point, TestAppContext, VisualTestContext,
 };
 
 use super::search::{SearchField, load_search_preferences};
@@ -5385,4 +5385,61 @@ async fn enter_in_query_steps_matches_without_moving_focus(cx: &mut TestAppConte
             assert_eq!(block.search_active_highlight, Some(0..5));
         });
     }
+}
+
+/// Regression test: in source mode a click on the query or replace field used
+/// to let the mouse-down fall through to the source text block underneath, which
+/// stole keyboard focus (so the next keystroke landed in the document instead of
+/// the field). The field must now swallow the mouse-down and keep focus in the
+/// bar.
+#[gpui::test]
+async fn clicking_a_search_field_keeps_focus_in_the_bar(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two", "", "alpha three"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    // Give the first block keyboard focus so a stray mouse-down would have a
+    // real focus to steal, and switch to source mode where the single source
+    // text block sits directly under the bar and can steal focus.
+    focus_first_block(cx, &editor);
+    editor.update_in(cx, |editor, _window, cx| {
+        editor.toggle_view_mode(cx);
+    });
+    redraw(cx);
+
+    // Open the search bar; it takes keyboard focus on open.
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+    });
+    redraw(cx);
+
+    // The query field must be laid out so we can find its on-screen bounds.
+    let bounds = cx
+        .debug_bounds("search-query-field")
+        .expect("query field should be rendered with a debug selector");
+    let center = Point {
+        x: bounds.origin.x + bounds.size.width / 2.0,
+        y: bounds.origin.y + bounds.size.height / 2.0,
+    };
+
+    // Click the middle of the query field. The mouse-down must be swallowed by
+    // the field so it never reaches the source text block underneath.
+    cx.simulate_click(center, Modifiers::default());
+    redraw(cx);
+
+    // Focus must remain in the search bar, not the block underneath, and the
+    // click must land in the query field.
+    editor.update_in(cx, |editor, window, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        assert!(
+            search.focus_handle.is_focused(window),
+            "clicking the query field must keep keyboard focus in the search bar"
+        );
+        assert_eq!(
+            search.focused_field,
+            SearchField::Query,
+            "the click must land in the query field"
+        );
+    });
 }

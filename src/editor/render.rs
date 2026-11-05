@@ -2403,7 +2403,7 @@ impl Render for Editor {
         } else {
             base
         };
-        let base = if let Some(search_bar) = self.render_search_bar_overlay(&theme, cx) {
+        let base = if let Some(search_bar) = self.render_search_bar_overlay(&theme, window, cx) {
             base.child(search_bar)
         } else {
             base
