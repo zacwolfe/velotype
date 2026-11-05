@@ -68,6 +68,8 @@ pub(super) struct SearchBarState {
     pub(super) truncated: bool,
     /// Last Replace All count, shown briefly in place of the match counter.
     pub(super) last_replaced: Option<usize>,
+    /// Token to detect whether a newer replace operation has occurred.
+    pub(super) last_replaced_token: u64,
     /// Whatever had real focus before the bar stole it, so closing the bar
     /// without ever jumping to a match restores it.
     previous_focus: Option<EntityId>,
@@ -404,6 +406,7 @@ impl Editor {
             active_index: None,
             truncated: false,
             last_replaced: None,
+            last_replaced_token: 0,
             previous_focus,
         };
         state.show_replace_row = state.show_replace_row || show_replace_row;
@@ -473,15 +476,15 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn on_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_find(&mut self, _: &Find, window: &mut Window, cx: &mut Context<Self>) {
         self.open_search_bar(window, cx);
     }
 
-    pub(super) fn on_replace(&mut self, _: &Replace, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_replace(&mut self, _: &Replace, window: &mut Window, cx: &mut Context<Self>) {
         self.open_search_bar_with_replace_row(true, window, cx);
     }
 
-    pub(super) fn on_replace_all_action(
+    pub(crate) fn on_replace_all_action(
         &mut self,
         _: &ReplaceAll,
         _window: &mut Window,
@@ -490,7 +493,7 @@ impl Editor {
         self.replace_all_search_matches(cx);
     }
 
-    pub(super) fn on_find_next(
+    pub(crate) fn on_find_next(
         &mut self,
         _: &FindNext,
         _window: &mut Window,
@@ -499,7 +502,7 @@ impl Editor {
         self.step_search_match(true, cx);
     }
 
-    pub(super) fn on_find_previous(
+    pub(crate) fn on_find_previous(
         &mut self,
         _: &FindPrevious,
         _window: &mut Window,
@@ -1147,6 +1150,24 @@ impl Editor {
         if let Some(search) = self.search_bar.as_mut() {
             search.active_index = None;
             search.last_replaced = Some(replaced);
+            // Increment token and spawn timer to clear after 2 seconds
+            search.last_replaced_token = search.last_replaced_token.wrapping_add(1);
+            let token = search.last_replaced_token;
+            cx.spawn(async move |this: WeakEntity<Editor>, cx: &mut AsyncApp| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
+                let _ = this.update(cx, |editor, cx| {
+                    if let Some(search) = editor.search_bar.as_mut()
+                        && search.last_replaced_token == token
+                        && search.last_replaced.is_some()
+                    {
+                        search.last_replaced = None;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         self.apply_search_highlights(cx);
         cx.notify();
