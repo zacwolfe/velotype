@@ -2467,11 +2467,6 @@ impl Render for Editor {
             main_content
         };
         let base = base.child(main_content.child(content_area));
-        let base = if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
-            base.child(status_bar)
-        } else {
-            base
-        };
         let base = if let Some(error) = self
             .search_bar
             .as_ref()
@@ -2482,6 +2477,11 @@ impl Render for Editor {
                 FeedbackKind::Error,
                 &theme,
             ))
+        } else {
+            base
+        };
+        let base = if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
+            base.child(status_bar)
         } else {
             base
         };
