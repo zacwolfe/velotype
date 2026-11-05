@@ -5128,6 +5128,85 @@ async fn escape_from_replace_field_restores_focus_too(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui::test]
+async fn search_field_cursor_edits_and_navigates(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = "hello world";
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown.to_string(), None));
+    redraw(cx);
+
+    let press = |key: &str| KeyDownEvent {
+        keystroke: Keystroke::parse(key).expect("valid keystroke"),
+        is_held: false,
+    };
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        // Make the starting state deterministic regardless of the saved
+        // show_replace_row preference (tests read the real config).
+        let search = editor.search_bar.as_mut().expect("search bar open");
+        search.focused_field = SearchField::Query;
+        search.query.clear();
+        search.query_cursor = 0;
+        search.replacement.clear();
+        search.replacement_cursor = 0;
+
+        // Type "abc" at the caret (end of the empty query).
+        for key in ["a->a", "b->b", "c->c"] {
+            editor.on_search_query_key_down(&press(key), window, cx);
+        }
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query, "abc");
+        assert_eq!(search.query_cursor, 3);
+
+        // home, right, then delete removes the grapheme to the right of the caret.
+        editor.on_search_query_key_down(&press("home"), window, cx);
+        editor.on_search_query_key_down(&press("right"), window, cx);
+        editor.on_search_query_key_down(&press("delete"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query, "ac");
+        assert_eq!(search.query_cursor, 1);
+
+        // backspace removes the grapheme to the left of the caret.
+        editor.on_search_query_key_down(&press("backspace"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query, "c");
+        assert_eq!(search.query_cursor, 0);
+
+        // Type "z" at the caret (start of the field).
+        editor.on_search_query_key_down(&press("z->z"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query, "zc");
+        assert_eq!(search.query_cursor, 1);
+
+        // Word jumps: alt-right to the end of the word, alt-left to its start.
+        editor.on_search_query_key_down(&press("alt-right"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query_cursor, 2);
+        editor.on_search_query_key_down(&press("alt-left"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query_cursor, 0);
+
+        // end and home.
+        editor.on_search_query_key_down(&press("end"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query_cursor, 2);
+        editor.on_search_query_key_down(&press("home"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.query_cursor, 0);
+
+        // The replacement field tracks its own cursor.
+        let search = editor.search_bar.as_mut().unwrap();
+        search.focused_field = SearchField::Replacement;
+        editor.on_search_query_key_down(&press("r->r"), window, cx);
+        editor.on_search_query_key_down(&press("r->r"), window, cx);
+        let search = editor.search_bar.as_ref().unwrap();
+        assert_eq!(search.replacement, "rr");
+        assert_eq!(search.replacement_cursor, 2);
+    });
+}
+
 /// Puts the caret in the first visible block and gives it real window focus,
 /// mirroring the state a user is in before pressing the search shortcut.
 fn focus_first_block(cx: &mut VisualTestContext, editor: &Entity<Editor>) -> EntityId {
