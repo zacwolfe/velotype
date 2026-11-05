@@ -30,6 +30,7 @@ mod context_menu;
 mod document;
 mod events;
 mod export;
+mod feedback;
 mod file_drop;
 mod file_watch;
 mod history;
