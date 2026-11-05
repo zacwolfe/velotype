@@ -14,6 +14,7 @@ use crate::components::{
     normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
     shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
+use crate::editor::search_match::SearchOptions;
 use crate::i18n::{I18nManager, language_id_for_locale_preferences};
 use crate::theme::{Theme, ThemeCatalogEntry, ThemeManager};
 use crate::window_chrome::{
@@ -160,6 +161,8 @@ pub(crate) struct AppPreferences {
     pub(crate) keybindings: BTreeMap<String, Vec<String>>,
     pub(crate) status_bar: StatusBarPreferences,
     pub(crate) workspace: WorkspacePreferences,
+    /// Find-bar options that persist across sessions.
+    pub(crate) search: SearchPreferences,
 }
 
 impl Default for AppPreferences {
@@ -178,6 +181,39 @@ impl Default for AppPreferences {
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             workspace: WorkspacePreferences::default(),
+            search: SearchPreferences::default(),
+        }
+    }
+}
+
+/// Find-bar options persisted in `config.toml` under `[search]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SearchPreferences {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
+    /// Whether the bar reopens with the replace row showing.
+    pub show_replace_row: bool,
+}
+
+impl Default for SearchPreferences {
+    fn default() -> Self {
+        Self {
+            case_sensitive: false,
+            whole_word: false,
+            regex: false,
+            show_replace_row: false,
+        }
+    }
+}
+
+impl SearchPreferences {
+    /// The matcher-facing view of these options.
+    pub(crate) fn options(&self) -> SearchOptions {
+        SearchOptions {
+            case_sensitive: self.case_sensitive,
+            whole_word: self.whole_word,
+            regex: self.regex,
         }
     }
 }
@@ -488,6 +524,7 @@ struct PreferencesFile {
     editor: EditorPreferencesFile,
     status_bar: StatusBarPreferencesFile,
     workspace: WorkspacePreferencesFile,
+    search: SearchPreferencesFile,
     keybindings: BTreeMap<String, Vec<String>>,
 }
 
@@ -548,6 +585,25 @@ struct WorkspacePreferencesFile {
     outline_open: bool,
 }
 
+#[derive(Serialize)]
+struct SearchPreferencesFile {
+    case_sensitive: bool,
+    whole_word: bool,
+    regex: bool,
+    show_replace_row: bool,
+}
+
+impl From<&SearchPreferences> for SearchPreferencesFile {
+    fn from(value: &SearchPreferences) -> Self {
+        Self {
+            case_sensitive: value.case_sensitive,
+            whole_word: value.whole_word,
+            regex: value.regex,
+            show_replace_row: value.show_replace_row,
+        }
+    }
+}
+
 impl From<&WorkspacePreferences> for WorkspacePreferencesFile {
     fn from(value: &WorkspacePreferences) -> Self {
         Self {
@@ -581,6 +637,7 @@ impl From<&AppPreferences> for PreferencesFile {
             },
             status_bar: StatusBarPreferencesFile::from(&value.status_bar),
             workspace: WorkspacePreferencesFile::from(&value.workspace),
+            search: SearchPreferencesFile::from(&value.search),
             keybindings: normalize_shortcut_config(&value.keybindings),
         }
     }
@@ -772,6 +829,28 @@ fn app_preferences_from_toml_value(
         })
         .unwrap_or_default();
 
+    let search = value
+        .get("search")
+        .map(|search| SearchPreferences {
+            case_sensitive: search
+                .get("case_sensitive")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            whole_word: search
+                .get("whole_word")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            regex: search
+                .get("regex")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            show_replace_row: search
+                .get("show_replace_row")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        })
+        .unwrap_or_default();
+
     AppPreferences {
         startup_open,
         foreground_on_launch,
@@ -786,6 +865,7 @@ fn app_preferences_from_toml_value(
         keybindings,
         status_bar,
         workspace,
+        search,
     }
 }
 
@@ -1782,11 +1862,7 @@ impl PreferencesWindow {
             .flex_col()
             .items_center()
             .gap(px(12.0))
-            .child(self.labeled_row(
-                &strings.preferences_image_insert_behavior,
-                dropdown,
-                theme,
-            ))
+            .child(self.labeled_row(&strings.preferences_image_insert_behavior, dropdown, theme))
             .child(self.switch_row(
                 &strings.preferences_reveal_image_source_on_click,
                 self.reveal_image_source_on_click,
@@ -1940,6 +2016,8 @@ impl PreferencesWindow {
             ShortcutCommand::Find => strings.preferences_shortcut_find.clone(),
             ShortcutCommand::FindNext => strings.preferences_shortcut_find_next.clone(),
             ShortcutCommand::FindPrevious => strings.preferences_shortcut_find_previous.clone(),
+            ShortcutCommand::Replace => strings.preferences_shortcut_replace.clone(),
+            ShortcutCommand::ReplaceAll => strings.preferences_shortcut_replace_all.clone(),
         }
     }
 
@@ -2487,15 +2565,15 @@ impl Render for PreferencesWindow {
                                             .flex_col()
                                             .items_center()
                                             .gap(px(20.0))
-                                            .child(self.render_startup_page(
-                                                &theme, &strings, cx,
-                                            ))
-                                            .child(self.render_foreground_page(
-                                                &theme, &strings, cx,
-                                            ))
-                                            .child(self.render_single_instance_page(
-                                                &theme, &strings, cx,
-                                            )),
+                                            .child(self.render_startup_page(&theme, &strings, cx))
+                                            .child(
+                                                self.render_foreground_page(&theme, &strings, cx),
+                                            )
+                                            .child(
+                                                self.render_single_instance_page(
+                                                    &theme, &strings, cx,
+                                                ),
+                                            ),
                                     )
                                     .into_any_element(),
                                 PreferencesNav::Theme => div()
@@ -2674,8 +2752,8 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
 #[cfg(test)]
 mod tests {
     use super::{
-        AppPreferences, EditorSettings, ImagePasteBehavior, StartupOpenPreference,
-        StatusBarPreferences, WorkspacePreferences,
+        AppPreferences, EditorSettings, ImagePasteBehavior, SearchPreferences,
+        StartupOpenPreference, StatusBarPreferences, WorkspacePreferences,
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
@@ -2805,6 +2883,7 @@ mod tests {
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             workspace: WorkspacePreferences::default(),
+            search: SearchPreferences::default(),
         };
 
         save_app_preferences_with_dirs(&preferences, &dirs)
@@ -2899,6 +2978,7 @@ mod tests {
             keybindings: BTreeMap::new(),
             status_bar: StatusBarPreferences::default(),
             workspace: WorkspacePreferences::default(),
+            search: SearchPreferences::default(),
         };
         save_app_preferences_with_dirs(&preferences, &dirs)
             .expect("preferences should save to config.toml");
@@ -3161,9 +3241,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn reveal_source_on_focus_setter_round_trips_through_the_global(
-        cx: &mut TestAppContext,
-    ) {
+    async fn reveal_source_on_focus_setter_round_trips_through_the_global(cx: &mut TestAppContext) {
         cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_source_on_focus(cx)));
 

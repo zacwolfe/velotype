@@ -260,8 +260,28 @@ pub struct I18nStrings {
     pub preferences_shortcut_find: String,
     pub preferences_shortcut_find_next: String,
     pub preferences_shortcut_find_previous: String,
+    pub preferences_shortcut_replace: String,
+    pub preferences_shortcut_replace_all: String,
     /// Placeholder text shown in the empty find bar input.
     pub search_placeholder: String,
+    /// Placeholder text shown in the empty replace input.
+    pub search_replace_placeholder: String,
+    /// Button label that replaces the active match.
+    pub search_replace_label: String,
+    /// Button label that replaces every match.
+    pub search_replace_all_label: String,
+    /// Tooltip for the match-case toggle.
+    pub search_case_sensitive_tooltip: String,
+    /// Tooltip for the whole-word toggle.
+    pub search_whole_word_tooltip: String,
+    /// Tooltip for the regular-expression toggle.
+    pub search_regex_tooltip: String,
+    /// Prefix for a regular-expression compile error in the find bar.
+    pub search_invalid_regex: String,
+    /// Counter shown after Replace All; `{count}` is substituted.
+    pub search_replaced_count: String,
+    /// Counter shown when matches were capped; `{count}` is substituted.
+    pub search_matches_truncated: String,
     /// Message shown in the find bar when the query has no matches.
     pub search_no_matches: String,
     /// Workspace drawer Files tab.
@@ -537,7 +557,18 @@ struct I18nStringsDe {
     preferences_shortcut_find: Option<String>,
     preferences_shortcut_find_next: Option<String>,
     preferences_shortcut_find_previous: Option<String>,
+    preferences_shortcut_replace: Option<String>,
+    preferences_shortcut_replace_all: Option<String>,
     search_placeholder: Option<String>,
+    search_replace_placeholder: Option<String>,
+    search_replace_label: Option<String>,
+    search_replace_all_label: Option<String>,
+    search_case_sensitive_tooltip: Option<String>,
+    search_whole_word_tooltip: Option<String>,
+    search_regex_tooltip: Option<String>,
+    search_invalid_regex: Option<String>,
+    search_replaced_count: Option<String>,
+    search_matches_truncated: Option<String>,
     search_no_matches: Option<String>,
     workspace_tab_files: Option<String>,
     workspace_tab_outline: Option<String>,
@@ -751,7 +782,18 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_shortcut_find",
     "preferences_shortcut_find_next",
     "preferences_shortcut_find_previous",
+    "preferences_shortcut_replace",
+    "preferences_shortcut_replace_all",
     "search_placeholder",
+    "search_replace_placeholder",
+    "search_replace_label",
+    "search_replace_all_label",
+    "search_case_sensitive_tooltip",
+    "search_whole_word_tooltip",
+    "search_regex_tooltip",
+    "search_invalid_regex",
+    "search_replaced_count",
+    "search_matches_truncated",
     "search_no_matches",
     "workspace_tab_files",
     "workspace_tab_outline",
@@ -919,9 +961,7 @@ impl I18nStringsDe {
                 .menu_previous_window
                 .unwrap_or(defaults.menu_previous_window),
             menu_open_file: self.menu_open_file.unwrap_or(defaults.menu_open_file),
-            menu_open_folder: self
-                .menu_open_folder
-                .unwrap_or(defaults.menu_open_folder),
+            menu_open_folder: self.menu_open_folder.unwrap_or(defaults.menu_open_folder),
             menu_open_recent_file: self
                 .menu_open_recent_file
                 .unwrap_or(defaults.menu_open_recent_file),
@@ -1229,9 +1269,42 @@ impl I18nStringsDe {
             preferences_shortcut_find_previous: self
                 .preferences_shortcut_find_previous
                 .unwrap_or(defaults.preferences_shortcut_find_previous),
+            preferences_shortcut_replace: self
+                .preferences_shortcut_replace
+                .unwrap_or(defaults.preferences_shortcut_replace),
+            preferences_shortcut_replace_all: self
+                .preferences_shortcut_replace_all
+                .unwrap_or(defaults.preferences_shortcut_replace_all),
             search_placeholder: self
                 .search_placeholder
                 .unwrap_or(defaults.search_placeholder),
+            search_replace_placeholder: self
+                .search_replace_placeholder
+                .unwrap_or(defaults.search_replace_placeholder),
+            search_replace_label: self
+                .search_replace_label
+                .unwrap_or(defaults.search_replace_label),
+            search_replace_all_label: self
+                .search_replace_all_label
+                .unwrap_or(defaults.search_replace_all_label),
+            search_case_sensitive_tooltip: self
+                .search_case_sensitive_tooltip
+                .unwrap_or(defaults.search_case_sensitive_tooltip),
+            search_whole_word_tooltip: self
+                .search_whole_word_tooltip
+                .unwrap_or(defaults.search_whole_word_tooltip),
+            search_regex_tooltip: self
+                .search_regex_tooltip
+                .unwrap_or(defaults.search_regex_tooltip),
+            search_invalid_regex: self
+                .search_invalid_regex
+                .unwrap_or(defaults.search_invalid_regex),
+            search_replaced_count: self
+                .search_replaced_count
+                .unwrap_or(defaults.search_replaced_count),
+            search_matches_truncated: self
+                .search_matches_truncated
+                .unwrap_or(defaults.search_matches_truncated),
             search_no_matches: self.search_no_matches.unwrap_or(defaults.search_no_matches),
             workspace_tab_files: self
                 .workspace_tab_files
@@ -1276,9 +1349,7 @@ impl I18nStringsDe {
             context_menu_copy_path: self
                 .context_menu_copy_path
                 .unwrap_or(defaults.context_menu_copy_path),
-            context_menu_copy: self
-                .context_menu_copy
-                .unwrap_or(defaults.context_menu_copy),
+            context_menu_copy: self.context_menu_copy.unwrap_or(defaults.context_menu_copy),
             context_menu_open_in_new_window: self
                 .context_menu_open_in_new_window
                 .unwrap_or(defaults.context_menu_open_in_new_window),
@@ -1555,7 +1626,18 @@ impl I18nStrings {
             preferences_shortcut_find: "查找".into(),
             preferences_shortcut_find_next: "查找下一个".into(),
             preferences_shortcut_find_previous: "查找上一个".into(),
+            preferences_shortcut_replace: "替换".into(),
+            preferences_shortcut_replace_all: "全部替换".into(),
             search_placeholder: "查找".into(),
+            search_replace_placeholder: "替换为".into(),
+            search_replace_label: "替换".into(),
+            search_replace_all_label: "全部替换".into(),
+            search_case_sensitive_tooltip: "区分大小写".into(),
+            search_whole_word_tooltip: "全字匹配".into(),
+            search_regex_tooltip: "使用正则表达式".into(),
+            search_invalid_regex: "正则表达式无效".into(),
+            search_replaced_count: "已替换 {count}".into(),
+            search_matches_truncated: "{count}+ 个匹配".into(),
             search_no_matches: "无匹配结果".into(),
             workspace_tab_files: "文件".into(),
             workspace_tab_outline: "大纲".into(),
@@ -1800,7 +1882,18 @@ impl I18nStrings {
             preferences_shortcut_find: "Find".into(),
             preferences_shortcut_find_next: "Find Next".into(),
             preferences_shortcut_find_previous: "Find Previous".into(),
+            preferences_shortcut_replace: "Replace".into(),
+            preferences_shortcut_replace_all: "Replace All".into(),
             search_placeholder: "Find".into(),
+            search_replace_placeholder: "Replace with".into(),
+            search_replace_label: "Replace".into(),
+            search_replace_all_label: "Replace All".into(),
+            search_case_sensitive_tooltip: "Match Case".into(),
+            search_whole_word_tooltip: "Match Whole Word".into(),
+            search_regex_tooltip: "Use Regular Expression".into(),
+            search_invalid_regex: "Invalid regular expression".into(),
+            search_replaced_count: "Replaced {count}".into(),
+            search_matches_truncated: "{count}+ matches".into(),
             search_no_matches: "No matches".into(),
             workspace_tab_files: "Files".into(),
             workspace_tab_outline: "Outline".into(),

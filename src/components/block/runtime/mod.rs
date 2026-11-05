@@ -124,6 +124,13 @@ pub struct Block {
     pub(crate) code_language_is_selecting: bool,
     pub selected_range: Range<usize>,
     pub selection_reversed: bool,
+    /// Find-bar highlights for this block, in `display_text()` coordinates.
+    /// Maintained by the editor while the search bar is open and empty
+    /// otherwise. Only meaningful while the block is unfocused, which is the
+    /// state the ranges were collected in.
+    pub(crate) search_highlights: Vec<Range<usize>>,
+    /// The subset of `search_highlights` that is the currently active match.
+    pub(crate) search_active_highlight: Option<Range<usize>>,
     pub(crate) editor_selection_range: Option<Range<usize>>,
     /// True while this block sits inside a cross-block selection that has
     /// SETTLED (the drag finished). Reveals inline Markdown delimiters, so the
@@ -241,6 +248,8 @@ impl Block {
             code_language_last_bounds: None,
             code_language_is_selecting: false,
             selected_range: 0..0,
+            search_highlights: Vec::new(),
+            search_active_highlight: None,
             selection_reversed: false,
             editor_selection_range: None,
             editor_selection_settled: false,

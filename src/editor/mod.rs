@@ -37,6 +37,7 @@ mod persistence;
 mod render;
 mod runtime_context;
 mod search;
+pub(crate) mod search_match;
 mod selection;
 mod source_mapping;
 mod status_bar;
@@ -169,6 +170,12 @@ pub struct Editor {
     context_menu: Option<ContextMenuState>,
     table_insert_dialog: Option<TableInsertDialogState>,
     search_bar: Option<SearchBarState>,
+    /// Query and replacement text remembered across find-bar sessions.
+    last_search_query: String,
+    last_search_replacement: String,
+    /// True while Replace All is applying edits. Suppresses the per-block undo
+    /// finalize so the whole batch becomes one undo entry.
+    search_replace_batch_in_progress: bool,
     context_menu_submenu_close_task: Option<Task<()>>,
     table_axis_preview: Option<TableAxisSelection>,
     table_axis_selection: Option<TableAxisSelection>,
@@ -461,6 +468,9 @@ impl Editor {
             context_menu: None,
             table_insert_dialog: None,
             search_bar: None,
+            last_search_query: String::new(),
+            last_search_replacement: String::new(),
+            search_replace_batch_in_progress: false,
             context_menu_submenu_close_task: None,
             table_axis_preview: None,
             table_axis_selection: None,

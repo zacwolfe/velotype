@@ -848,6 +848,9 @@ pub struct PrepaintState {
     source_line_number_gutter_width: Pixels,
     cursor: Option<PaintQuad>,
     selection: Vec<PaintQuad>,
+    /// Find-bar match highlights. Painted before `selection` so the active
+    /// match's real selection paint wins where they overlap.
+    search_highlights: Vec<PaintQuad>,
     code_backgrounds: Vec<PaintQuad>,
     line_height: Pixels,
     hitbox: Hitbox,
@@ -1139,12 +1142,34 @@ impl Element for BlockTextElement {
             }
         }
 
+        // Find-bar highlights: every match in this block, with the active
+        // match in its own color. Only drawn while the block is unfocused,
+        // which is when `display_text()` matches the ranges collected.
+        let mut search_highlights = Vec::new();
+        if !focused && !lines.is_empty() && !self.is_placeholder {
+            let active = input.search_active_highlight.clone();
+            let text = input.display_text();
+            for range in input.search_highlights.clone() {
+                let color = if active.as_ref() == Some(&range) {
+                    theme.colors.search_match_active
+                } else {
+                    theme.colors.search_match
+                };
+                for segment in
+                    range_segment_bounds(&lines, text_bounds, line_height, text, range, text_align)
+                {
+                    search_highlights.push(fill(segment, color));
+                }
+            }
+        }
+
         PrepaintState {
             lines,
             source_line_numbers,
             source_line_number_gutter_width,
             cursor: cursor_quad,
             selection: selection_quads,
+            search_highlights,
             code_backgrounds: code_quads,
             line_height,
             hitbox,
@@ -1200,6 +1225,11 @@ impl Element for BlockTextElement {
         // Paint code backgrounds behind text.
         for code_bg in prepaint.code_backgrounds.drain(..) {
             window.paint_quad(code_bg);
+        }
+
+        // Paint find-bar highlights behind text, before the selection.
+        for highlight in prepaint.search_highlights.drain(..) {
+            window.paint_quad(highlight);
         }
 
         for selection in prepaint.selection.drain(..) {

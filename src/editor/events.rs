@@ -1313,6 +1313,7 @@ impl Editor {
                 self.mark_dirty(cx);
                 self.request_active_block_scroll_into_view(cx);
                 self.finalize_pending_undo_capture(cx);
+                self.refresh_search_after_edit(cx);
             }
             BlockEvent::RequestOpenLink {
                 prompt_target,
@@ -1669,6 +1670,7 @@ impl Editor {
                 self.mark_dirty(cx);
                 self.request_active_block_scroll_into_view(cx);
                 self.finalize_pending_undo_capture(cx);
+                self.refresh_search_after_edit(cx);
             }
             BlockEvent::RequestNewline {
                 trailing,

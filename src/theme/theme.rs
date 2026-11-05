@@ -196,6 +196,10 @@ pub struct ThemeColors {
     pub cursor: Hsla,
     /// Text-selection highlight colour.
     pub selection: Hsla,
+    /// Find-bar highlight for every match except the active one.
+    pub search_match: Hsla,
+    /// Find-bar highlight for the active match.
+    pub search_match_active: Hsla,
     /// Semi-transparent backdrop behind the unsaved-changes dialog.
     pub dialog_backdrop: Hsla,
     /// Background of the unsaved-changes dialog.
@@ -596,6 +600,8 @@ struct ThemeColorsDe {
     scrollbar_thumb: Hsla,
     cursor: Hsla,
     selection: Hsla,
+    search_match: Option<Hsla>,
+    search_match_active: Option<Hsla>,
     dialog_backdrop: Hsla,
     dialog_surface: Hsla,
     dialog_border: Hsla,
@@ -798,6 +804,12 @@ impl<'de> Deserialize<'de> for ThemeColors {
             scrollbar_thumb: raw.scrollbar_thumb,
             cursor: raw.cursor,
             selection: raw.selection,
+            search_match: raw
+                .search_match
+                .unwrap_or_else(|| Hsla::from(rgba(0xff_d5_4f_4d))),
+            search_match_active: raw
+                .search_match_active
+                .unwrap_or_else(|| Hsla::from(rgba(0xff_96_32_cc))),
             dialog_backdrop: raw.dialog_backdrop,
             dialog_surface: raw.dialog_surface,
             dialog_border: raw.dialog_border,
@@ -1165,6 +1177,8 @@ impl Theme {
                 scrollbar_thumb: Hsla::from(rgba(0xd1d5dbd8)),
                 cursor: Hsla::from(rgba(0xf0efedff)),
                 selection: Hsla::from(rgba(0x1c3651ff)),
+                search_match: Hsla::from(rgba(0x6b5c1faa)),
+                search_match_active: Hsla::from(rgba(0xff9632cc)),
                 dialog_backdrop: Hsla::from(rgba(0x09090bcc)),
                 dialog_surface: Hsla::from(rgba(0x18181bff)),
                 dialog_border: Hsla::from(rgba(0x27272aff)),
@@ -1411,6 +1425,8 @@ impl Theme {
                 scrollbar_thumb: Hsla::from(rgba(0x64748bb8)),
                 cursor: Hsla::from(rgba(0x111827ff)),
                 selection: Hsla::from(rgba(0xbfdbfecc)),
+                search_match: Hsla::from(rgba(0xfef08acc)),
+                search_match_active: Hsla::from(rgba(0xfbbf24ff)),
                 dialog_backdrop: Hsla::from(rgba(0x0f172a66)),
                 dialog_surface: Hsla::from(rgba(0xffffffff)),
                 dialog_border: Hsla::from(rgba(0xd1d5dbff)),

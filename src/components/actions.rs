@@ -78,6 +78,8 @@ actions!(
         Find,
         FindNext,
         FindPrevious,
+        Replace,
+        ReplaceAll,
     ]
 );
 
@@ -176,6 +178,8 @@ pub(crate) enum ShortcutCommand {
     Find,
     FindNext,
     FindPrevious,
+    Replace,
+    ReplaceAll,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -601,6 +605,20 @@ const SHORTCUT_DEFINITIONS: &[ShortcutDefinition] = &[
         default_keys: &["cmd-shift-g", "ctrl-shift-g"],
         context: None,
     },
+    ShortcutDefinition {
+        command: ShortcutCommand::Replace,
+        id: "replace",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-alt-f", "ctrl-h"],
+        context: None,
+    },
+    ShortcutDefinition {
+        command: ShortcutCommand::ReplaceAll,
+        id: "replace_all",
+        category: ShortcutCategory::Edit,
+        default_keys: &["cmd-alt-enter", "ctrl-alt-enter"],
+        context: None,
+    },
 ];
 
 pub(crate) fn shortcut_definitions() -> &'static [ShortcutDefinition] {
@@ -822,6 +840,8 @@ fn key_binding_for(
         ShortcutCommand::Find => KeyBinding::new(key, Find, context),
         ShortcutCommand::FindNext => KeyBinding::new(key, FindNext, context),
         ShortcutCommand::FindPrevious => KeyBinding::new(key, FindPrevious, context),
+        ShortcutCommand::Replace => KeyBinding::new(key, Replace, context),
+        ShortcutCommand::ReplaceAll => KeyBinding::new(key, ReplaceAll, context),
     }
 }
 
