@@ -1212,8 +1212,9 @@ impl Editor {
 
 impl Editor {
     /// Replaces the active match, then leaves the bar open and moves the
-    /// active index to the next match so a second press replaces the next
-    /// occurrence.
+    /// active index to the next match in document order so a second press
+    /// replaces the next occurrence. When the replaced match was the last
+    /// one, wraps to the first; when no matches remain, clears it.
     pub(super) fn replace_active_search_match(&mut self, cx: &mut Context<Self>) {
         let Some(search) = self.search_bar.as_ref() else {
             return;
@@ -1227,6 +1228,9 @@ impl Editor {
         else {
             return;
         };
+        let old_index = search
+            .active_index
+            .expect("active match was checked above");
         let replacement = search.replacement.clone();
         let Some(entity) = self.focusable_entity_by_id(found.entity_id) else {
             return;
@@ -1248,14 +1252,27 @@ impl Editor {
         });
         self.finalize_pending_undo_capture(cx);
 
-        // `recompute_search_matches` re-resolves `active_index` from the
-        // previous match position, which lands on the next occurrence now that
-        // this one is gone.
         if let Some(search) = self.search_bar.as_mut() {
             search.last_replaced = None;
         }
         self.recompute_search_matches(cx);
-        self.seed_active_index_from_caret(cx);
+
+        // Advance deterministically from the old index instead of re-seeding
+        // from the caret: the caret sits in the replaced block, and a
+        // block-local nearest-match lookup would wrap to index 0 even when
+        // later blocks still hold matches. Every match after the replaced
+        // one shifted down by one, so the match that used to be at
+        // `old_index + 1` now sits at `old_index`.
+        if let Some(search) = self.search_bar.as_mut() {
+            let remaining = search.matches.len();
+            search.active_index = if remaining == 0 {
+                None
+            } else if old_index < remaining {
+                Some(old_index)
+            } else {
+                Some(0)
+            };
+        }
         self.apply_search_highlights(cx);
     }
 

@@ -4101,6 +4101,101 @@ async fn replace_active_match_rewrites_only_the_active_match(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+async fn replace_active_match_advances_to_next_match_in_next_block(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two", "", "alpha three"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    assert_eq!(visible.len(), 3);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().expect("search bar open");
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+        // Step to the MIDDLE match (index 1).
+        editor.on_find_next(&FindNext, window, cx);
+        editor.on_find_next(&FindNext, window, cx);
+        editor.replace_active_search_match(cx);
+    });
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.document.markdown_text(cx), "alpha one\n\nbeta two\n\nalpha three");
+        let search = editor.search_bar.as_ref().expect("search bar stays open");
+        assert_eq!(search.matches.len(), 2);
+        // The active match is the one that used to be at index 2, now shifted
+        // down to index 1 — NOT a wrap back to the first block.
+        assert_eq!(search.active_index, Some(1));
+        assert_eq!(search.matches[1].entity_id, visible[2].entity.entity_id());
+        assert_eq!(search.matches[1].range, 0..5);
+        assert_eq!(search.last_replaced, None);
+    });
+}
+
+#[gpui::test]
+async fn replace_active_match_wraps_to_first_when_replacing_last(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two", "", "alpha three"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    assert_eq!(visible.len(), 3);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().expect("search bar open");
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+        // Step to the LAST match (index 2).
+        editor.on_find_next(&FindNext, window, cx);
+        editor.on_find_next(&FindNext, window, cx);
+        editor.on_find_next(&FindNext, window, cx);
+        editor.replace_active_search_match(cx);
+    });
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.document.markdown_text(cx), "alpha one\n\nalpha two\n\nbeta three");
+        let search = editor.search_bar.as_ref().expect("search bar stays open");
+        assert_eq!(search.matches.len(), 2);
+        // The replaced match was the last one, so the active index wraps to
+        // the first match in the document.
+        assert_eq!(search.active_index, Some(0));
+        assert_eq!(search.matches[0].entity_id, visible[0].entity.entity_id());
+    });
+}
+
+#[gpui::test]
+async fn replace_active_match_clears_active_index_when_no_matches_remain(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "bravo two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().expect("search bar open");
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+        editor.on_find_next(&FindNext, window, cx);
+        editor.replace_active_search_match(cx);
+    });
+
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.document.markdown_text(cx), "beta one\n\nbravo two");
+        let search = editor.search_bar.as_ref().expect("search bar stays open");
+        assert!(search.matches.is_empty());
+        assert_eq!(search.active_index, None);
+        assert_eq!(search.last_replaced, None);
+    });
+}
+
+#[gpui::test]
 async fn replace_all_rewrites_every_match_in_one_undo_step(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     // Two matches in the first paragraph exercises back-to-front offset
