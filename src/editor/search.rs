@@ -80,7 +80,8 @@ pub(super) struct SearchBarState {
     /// Compiled form of `query` + `options`; `None` when the query is empty or
     /// the regex failed to compile.
     pub(super) matcher: Option<Matcher>,
-    /// Regex compile error text, shown in the bar and which disables replace.
+    /// Regex compile error text, shown in the feedback banner and which
+    /// disables replace.
     pub(super) matcher_error: Option<String>,
     pub(super) matches: Vec<SearchMatch>,
     pub(super) active_index: Option<usize>,
@@ -1058,8 +1059,8 @@ impl Editor {
                 .replace("{count}", &replaced.to_string())
         } else if search.query.is_empty() {
             String::new()
-        } else if let Some(error) = search.matcher_error.as_ref() {
-            format!("{}: {}", strings.search_invalid_regex, error)
+        } else if search.matcher_error.is_some() {
+            String::new()
         } else if search.matches.is_empty() {
             strings.search_no_matches.clone()
         } else if search.truncated {

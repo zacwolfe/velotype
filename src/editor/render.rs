@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use gpui::*;
 
+use super::feedback::{FeedbackKind, render_feedback_banner};
 use super::{Editor, InfoDialogKind, MountedRun, ScrollAlign};
 use crate::app_menu::dispatch_menu_action_for_editor;
 use crate::components::CalloutVariant;
@@ -2371,6 +2372,19 @@ impl Render for Editor {
         let base = base.child(main_content.child(content_area));
         let base = if let Some(status_bar) = self.render_status_bar(&theme, &strings, window, cx) {
             base.child(status_bar)
+        } else {
+            base
+        };
+        let base = if let Some(error) = self
+            .search_bar
+            .as_ref()
+            .and_then(|search| search.matcher_error.clone())
+        {
+            base.child(render_feedback_banner(
+                &format!("{}: {}", strings.search_invalid_regex, error),
+                FeedbackKind::Error,
+                &theme,
+            ))
         } else {
             base
         };
