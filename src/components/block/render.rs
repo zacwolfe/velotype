@@ -3581,13 +3581,12 @@ fn inline_word_chunks(text: &str, code: bool, has_background: bool) -> Vec<&str>
 #[cfg(test)]
 mod tests {
     use super::{
-        HtmlComputedStyle, effective_image_width, html_badge_run_end, html_node_visual_style,
-        inline_word_chunks,
+        HtmlComputedStyle, html_badge_run_end, html_node_visual_style, inline_word_chunks,
     };
     use crate::components::{Block, BlockKind, BlockRecord, InlineTextTree, parse_html_document};
     use crate::i18n::I18nManager;
     use crate::theme::{Theme, ThemeManager};
-    use gpui::{AppContext, Hsla, Rgba, TestAppContext, px};
+    use gpui::{Hsla, Rgba, TestAppContext, px};
 
     #[test]
     fn consecutive_linked_badges_share_a_row_but_blank_lines_break_it() {
