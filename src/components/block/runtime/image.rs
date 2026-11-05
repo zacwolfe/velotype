@@ -120,7 +120,6 @@ impl Block {
         if next_runtime.is_none() {
             self.image_edit_expanded = false;
             self.image_expand_requested = false;
-            self.image_wide_mode = false;
         }
         self.image_runtime = next_runtime;
     }
@@ -203,12 +202,6 @@ impl Block {
     pub(crate) fn showing_rendered_image(&self) -> bool {
         self.image_runtime.is_some() && !self.is_source_raw_mode() && !self.image_edit_expanded
     }
-
-    /// True when this standalone image block has been clicked into canvas-wide
-    /// mode, so it fills the editor content width instead of the reading column.
-
-    /// Table-cell images are sized by their cell and cannot widen the row, so
-    /// they do not participate in click-to-expand.
 
     /// Whether a click-to-edit expansion (image or inline-image title) has
     /// been consumed and is currently showing raw source instead of the

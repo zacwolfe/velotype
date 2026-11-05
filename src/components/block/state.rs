@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use gpui::{Image, Pixels, Point, SharedString};
 use uuid::Uuid;
 
+use super::runtime::ImageRuntime;
 use crate::components::markdown::html::{HtmlDocument, parse_html_document};
 use crate::components::markdown::image::parse_standalone_image;
 use crate::components::markdown::inline::InlineTextTree;
@@ -863,6 +864,9 @@ pub enum BlockEvent {
         /// Content after the replaced selection.
         trailing: InlineTextTree,
     },
+    /// A rendered image was clicked; the editor should display it enlarged to
+    /// fill the application frame.
+    RequestExpandImage { runtime: ImageRuntime },
     /// Replace the current editor-level cross-block selection with text
     /// submitted through the focused block input handler.
     RequestReplaceCrossBlockSelection {

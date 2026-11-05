@@ -242,10 +242,6 @@ pub struct Block {
     image_edit_expanded: bool,
     /// Pending request to expand the image editor.
     image_expand_requested: bool,
-    /// Per-image view preference: when true a rendered standalone image fills
-    /// the editor content width instead of the centered column. Not persisted.
-    pub(crate) image_wide_mode: bool,
-    /// Whether an HTML details block is open.
     pub(crate) html_details_open: bool,
     /// Base directory used to resolve relative image sources.
     image_base_dir: Option<PathBuf>,
@@ -358,7 +354,6 @@ impl Block {
             image_runtime: None,
             image_edit_expanded: false,
             image_expand_requested: false,
-            image_wide_mode: false,
             html_details_open: false,
             image_base_dir: None,
             resolved_image_cache: RefCell::new(HashMap::new()),
@@ -382,16 +377,6 @@ impl Block {
     /// True when this block is a table switched into wide mode by the user.
     pub(crate) fn is_wide_table(&self) -> bool {
         self.table_wide_mode && self.kind() == BlockKind::Table
-    }
-
-    /// True when this block is an image switched into wide mode by the user.
-    pub(crate) fn is_wide_image(&self) -> bool {
-        self.image_wide_mode && self.image_runtime.is_some() && !self.is_table_cell()
-    }
-
-    /// Whether this block can toggle image wide mode.
-    pub(crate) fn can_toggle_image_wide_mode(&self) -> bool {
-        self.is_wide_image() || (self.showing_rendered_image() && !self.is_table_cell())
     }
 
     /// Whether this block is editing source Markdown without rich parsing.

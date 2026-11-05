@@ -228,13 +228,9 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
 
 /// Returns the centered-column width left after quote and callout insets.
 fn container_image_width_budget(block: &Block, viewport_width: f32, d: &ThemeDimensions) -> f32 {
-    // A canvas-wide image uses the full editor content width; otherwise stay
-    // inside the narrower centered reading column.
-    let base_width = if block.is_wide_image() {
-        (viewport_width - d.editor_padding * 2.0).max(1.0)
-    } else {
-        Editor::centered_column_width(viewport_width, d)
-    };
+    // Images stay inside the centered reading column; the full-frame view of a
+    // clicked image is drawn by the editor overlay instead.
+    let base_width = Editor::centered_column_width(viewport_width, d);
     let visible_quote_guides = visible_quote_guides(block);
     let quote_inset = d.quote_padding_left * visible_quote_guides as f32;
     let callout_inset = if block.callout_depth > 0 {
@@ -548,7 +544,6 @@ impl Block {
         &self,
         runtime: &ImageRuntime,
         max_width: Length,
-        expand_width: Option<f32>,
         max_height: Pixels,
         placeholder_height: Pixels,
         theme: &Theme,
@@ -573,14 +568,7 @@ impl Block {
             // element below — the placeholder this case should show anyway.
             ImageResolvedSource::Unusable => img(Arc::new(Image::empty())),
         };
-        // A definite width lets gpui derive the height from the image aspect
-        // ratio, so a wide-mode image fills the requested width and letterboxes
-        // inside `max_height`. Otherwise it keeps its natural size clamped by
-        // `max_width`.
-        let image = match expand_width {
-            Some(width) => image.w(px(width)),
-            None => image.max_w(max_width),
-        };
+        let image = image.max_w(max_width);
         let image = image
             .max_h(max_height)
             .object_fit(ObjectFit::Contain)
@@ -1437,7 +1425,6 @@ impl Block {
                 return self.render_image_content(
                     &runtime,
                     Length::Definite(relative(1.0)),
-                    None,
                     px(d.image_root_max_height),
                     px(d.image_root_placeholder_height),
                     theme,
@@ -1900,7 +1887,6 @@ impl Block {
         let content = self.render_image_content(
             &runtime,
             Length::Definite(relative(zoom)),
-            None,
             px(theme.dimensions.image_root_max_height * zoom),
             px(theme.dimensions.image_root_placeholder_height * zoom),
             theme,
@@ -2226,7 +2212,6 @@ impl Render for Block {
                     .child(self.render_image_content(
                         runtime,
                         Length::Definite(relative(1.0)),
-                        None,
                         px(d.image_cell_max_height),
                         px(d.image_cell_placeholder_height),
                         &theme,
@@ -2339,7 +2324,6 @@ impl Render for Block {
                     .child(self.render_image_content(
                         runtime,
                         max_width.into(),
-                        self.is_wide_image().then(|| f32::from(max_width)),
                         px(d.image_root_max_height),
                         px(d.image_root_placeholder_height),
                         &theme,
@@ -2485,7 +2469,6 @@ impl Render for Block {
                             div().flex_grow(1.0).child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
-                                self.is_wide_image().then(|| f32::from(max_width)),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
@@ -2581,7 +2564,6 @@ impl Render for Block {
                                 div().flex_grow(1.0).child(self.render_image_content(
                                     runtime,
                                     max_width.into(),
-                                    self.is_wide_image().then(|| f32::from(max_width)),
                                     px(d.image_root_max_height),
                                     px(d.image_root_placeholder_height),
                                     &theme,
@@ -2644,7 +2626,6 @@ impl Render for Block {
                             div().flex_grow(1.0).child(self.render_image_content(
                                 runtime,
                                 max_width.into(),
-                                self.is_wide_image().then(|| f32::from(max_width)),
                                 px(d.image_root_max_height),
                                 px(d.image_root_placeholder_height),
                                 &theme,
@@ -3764,46 +3745,4 @@ mod tests {
         assert!(language_bounds.size.width <= px(156.0));
     }
 
-    #[gpui::test]
-    async fn wide_image_increases_effective_image_width(cx: &mut TestAppContext) {
-        let cx = cx.add_empty_window();
-        let block = cx.new(|cx| {
-            Block::with_record(
-                cx,
-                BlockRecord::new(
-                    BlockKind::Paragraph,
-                    InlineTextTree::from_markdown("![alt](img.png)"),
-                ),
-            )
-        });
-
-        let theme = Theme::default_theme();
-
-        block.update(cx, |block, _cx| {
-            if block.image_runtime().is_none() {
-                block.sync_render_cache();
-            }
-
-            let normal_width = effective_image_width(block, 1600.0, &theme.dimensions);
-            assert!(!block.is_wide_image());
-
-            block.image_wide_mode = true;
-            assert!(block.is_wide_image());
-            let wide_width = effective_image_width(block, 1600.0, &theme.dimensions);
-
-            assert!(
-                wide_width > normal_width,
-                "expected wide mode to widen the image; normal={normal_width}, wide={wide_width}"
-            );
-
-            let expected_wide_width = (1600.0
-                - theme.dimensions.editor_padding * 2.0
-                - theme.dimensions.block_padding_x * 2.0)
-                .max(160.0);
-            assert!(
-                (wide_width - expected_wide_width).abs() < 0.01,
-                "expected full content width; expected={expected_wide_width}, wide={wide_width}"
-            );
-        });
-    }
 }
