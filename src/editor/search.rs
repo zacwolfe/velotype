@@ -28,6 +28,8 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Instant;
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use gpui::{prelude::FluentBuilder, *};
 
 use super::search_match::{Matcher, MatcherError, SearchOptions};
@@ -60,7 +62,9 @@ pub(super) enum SearchField {
 pub(super) struct SearchBarState {
     pub(super) focus_handle: FocusHandle,
     pub(super) query: String,
+    pub(super) query_cursor: usize,
     pub(super) replacement: String,
+    pub(super) replacement_cursor: usize,
     pub(super) show_replace_row: bool,
     pub(super) focused_field: SearchField,
     pub(super) options: SearchOptions,
@@ -87,6 +91,34 @@ impl SearchBarState {
         self.matches.clear();
         self.active_index = None;
         self.truncated = false;
+    }
+
+    fn cursor(&self, field: SearchField) -> usize {
+        match field {
+            SearchField::Query => self.query_cursor,
+            SearchField::Replacement => self.replacement_cursor,
+        }
+    }
+
+    fn set_cursor(&mut self, field: SearchField, cursor: usize) {
+        match field {
+            SearchField::Query => self.query_cursor = cursor,
+            SearchField::Replacement => self.replacement_cursor = cursor,
+        }
+    }
+
+    fn text(&self, field: SearchField) -> &str {
+        match field {
+            SearchField::Query => &self.query,
+            SearchField::Replacement => &self.replacement,
+        }
+    }
+
+    fn text_mut(&mut self, field: SearchField) -> &mut String {
+        match field {
+            SearchField::Query => &mut self.query,
+            SearchField::Replacement => &mut self.replacement,
+        }
     }
 }
 
@@ -429,10 +461,15 @@ impl Editor {
         query = query.replace(['\n', '\r'], " ");
 
         let focus_handle = cx.focus_handle();
+        let query_cursor = query.len();
+        let replacement = std::mem::take(&mut self.last_search_replacement);
+        let replacement_cursor = replacement.len();
         let mut state = SearchBarState {
             focus_handle: focus_handle.clone(),
             query,
-            replacement: std::mem::take(&mut self.last_search_replacement),
+            query_cursor,
+            replacement,
+            replacement_cursor,
             show_replace_row: show_replace_row || preferences.show_replace_row,
             focused_field: if show_replace_row {
                 SearchField::Replacement
@@ -718,14 +755,14 @@ impl Editor {
             }
             "backspace" => {
                 if let Some(search) = self.search_bar.as_mut() {
-                    match field {
-                        SearchField::Query => {
-                            search.query.pop();
-                            search.last_replaced = None;
-                        }
-                        SearchField::Replacement => {
-                            search.replacement.pop();
-                        }
+                    let cursor = search.cursor(field);
+                    let new_cursor = grapheme_left(search.text(field), cursor);
+                    if new_cursor < cursor {
+                        search.text_mut(field).replace_range(new_cursor..cursor, "");
+                        search.set_cursor(field, new_cursor);
+                    }
+                    if field == SearchField::Query {
+                        search.last_replaced = None;
                     }
                 }
                 if field == SearchField::Query {
@@ -736,18 +773,85 @@ impl Editor {
                 cx.stop_propagation();
                 return;
             }
+            "delete" => {
+                if let Some(search) = self.search_bar.as_mut() {
+                    let cursor = search.cursor(field);
+                    let end = grapheme_right(search.text(field), cursor);
+                    if end > cursor {
+                        search.text_mut(field).replace_range(cursor..end, "");
+                    }
+                    if field == SearchField::Query {
+                        search.last_replaced = None;
+                    }
+                }
+                if field == SearchField::Query {
+                    self.recompute_search_matches(cx);
+                } else {
+                    cx.notify();
+                }
+                cx.stop_propagation();
+                return;
+            }
+            "left" => {
+                if let Some(search) = self.search_bar.as_mut() {
+                    let cursor = search.cursor(field);
+                    let new_cursor = if mods.alt {
+                        word_left(search.text(field), cursor)
+                    } else if is_shortcut_modifier {
+                        0
+                    } else {
+                        grapheme_left(search.text(field), cursor)
+                    };
+                    search.set_cursor(field, new_cursor);
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+            "right" => {
+                if let Some(search) = self.search_bar.as_mut() {
+                    let cursor = search.cursor(field);
+                    let new_cursor = if mods.alt {
+                        word_right(search.text(field), cursor)
+                    } else if is_shortcut_modifier {
+                        search.text(field).len()
+                    } else {
+                        grapheme_right(search.text(field), cursor)
+                    };
+                    search.set_cursor(field, new_cursor);
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+            "home" => {
+                if let Some(search) = self.search_bar.as_mut() {
+                    search.set_cursor(field, 0);
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+            "end" => {
+                if let Some(search) = self.search_bar.as_mut() {
+                    let len = search.text(field).len();
+                    search.set_cursor(field, len);
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
             "v" if is_shortcut_modifier => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     let sanitized: String =
                         text.chars().filter(|c| *c != '\n' && *c != '\r').collect();
                     if !sanitized.is_empty() {
                         if let Some(search) = self.search_bar.as_mut() {
-                            match field {
-                                SearchField::Query => {
-                                    search.query.push_str(&sanitized);
-                                    search.last_replaced = None;
-                                }
-                                SearchField::Replacement => search.replacement.push_str(&sanitized),
+                            let cursor = search.cursor(field);
+                            search.text_mut(field).insert_str(cursor, &sanitized);
+                            search.set_cursor(field, cursor + sanitized.len());
+                            if field == SearchField::Query {
+                                search.last_replaced = None;
                             }
                         }
                         if field == SearchField::Query {
@@ -784,12 +888,11 @@ impl Editor {
 
         if let Some(ch) = keystroke.key_char.as_deref() {
             if let Some(search) = self.search_bar.as_mut() {
-                match field {
-                    SearchField::Query => {
-                        search.query.push_str(ch);
-                        search.last_replaced = None;
-                    }
-                    SearchField::Replacement => search.replacement.push_str(ch),
+                let cursor = search.cursor(field);
+                search.text_mut(field).insert_str(cursor, ch);
+                search.set_cursor(field, cursor + ch.len());
+                if field == SearchField::Query {
+                    search.last_replaced = None;
                 }
             }
             if field == SearchField::Query {
@@ -890,7 +993,8 @@ impl Editor {
                     .child(label)
             };
 
-        let field = |placeholder: String, value: String, active: bool, has_content: bool| {
+        let field = |placeholder: String, value: String, active: bool, cursor: usize| {
+            let cursor = cursor.min(value.len());
             div()
                 .flex_1()
                 .min_w(px(220.0))
@@ -908,14 +1012,39 @@ impl Editor {
                     c.dialog_border
                 })
                 .child(if value.is_empty() {
+                    if active {
+                        div()
+                            .flex()
+                            .items_center()
+                            .child(div().w(px(1.0)).h(px(14.0)).bg(c.cursor))
+                            .child(
+                                div()
+                                    .text_color(c.code_language_input_placeholder)
+                                    .child(placeholder),
+                            )
+                    } else {
+                        div()
+                            .text_color(c.code_language_input_placeholder)
+                            .child(placeholder)
+                    }
+                } else if active {
+                    let (prefix, suffix) = value.split_at(cursor);
                     div()
-                        .text_color(c.code_language_input_placeholder)
-                        .child(placeholder)
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_color(c.code_language_input_text)
+                                .child(prefix.to_string()),
+                        )
+                        .child(div().w(px(1.0)).h(px(14.0)).bg(c.cursor))
+                        .child(
+                            div()
+                                .text_color(c.code_language_input_text)
+                                .child(suffix.to_string()),
+                        )
                 } else {
                     div().text_color(c.code_language_input_text).child(value)
-                })
-                .when(has_content, |this| {
-                    this.child(div().w(px(1.0)).h(px(14.0)).bg(c.cursor))
                 })
         };
 
@@ -923,7 +1052,7 @@ impl Editor {
             strings.search_placeholder.clone(),
             search.query.clone(),
             search.focused_field == SearchField::Query,
-            !search.query.is_empty(),
+            search.query_cursor,
         )
         .id("search-query-field")
         .on_click(cx.listener(Self::on_search_query_field_click));
@@ -932,7 +1061,7 @@ impl Editor {
             strings.search_replace_placeholder.clone(),
             search.replacement.clone(),
             search.focused_field == SearchField::Replacement,
-            !search.replacement.is_empty(),
+            search.replacement_cursor,
         )
         .id("search-replace-field")
         .on_click(cx.listener(Self::on_search_replace_field_click));
@@ -1261,6 +1390,45 @@ fn nearest_match_index(
         .or(Some(0))
 }
 
+/// Byte offset of the grapheme boundary immediately before `cursor`.
+fn grapheme_left(s: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(s.len());
+    if cursor == 0 {
+        return 0;
+    }
+    s.grapheme_indices(true)
+        .rev()
+        .find_map(|(i, _)| (i < cursor).then_some(i))
+        .unwrap_or(0)
+}
+
+/// Byte offset of the grapheme boundary immediately after `cursor`.
+fn grapheme_right(s: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(s.len());
+    s.grapheme_indices(true)
+        .find_map(|(i, _)| (i > cursor).then_some(i))
+        .unwrap_or(s.len())
+}
+
+/// Start of the word immediately before `cursor`.
+fn word_left(s: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(s.len());
+    s.unicode_word_indices()
+        .map(|(i, _)| i)
+        .filter(|&i| i < cursor)
+        .last()
+        .unwrap_or(0)
+}
+
+/// End of the word immediately after `cursor`.
+fn word_right(s: &str, cursor: usize) -> usize {
+    let cursor = cursor.min(s.len());
+    s.unicode_word_indices()
+        .map(|(i, w)| i + w.len())
+        .find(|&end| end > cursor)
+        .unwrap_or(s.len())
+}
+
 /// Search options as stored on disk, projected into the matcher's options.
 pub(super) fn load_search_preferences() -> SearchPreferences {
     read_app_preferences()
@@ -1328,11 +1496,12 @@ fn collect_positions(matches: &[SearchMatch]) -> Vec<(EntityId, Range<usize>)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlockKind, SearchMatch, SearchOptions, collect_positions, nearest_match_index,
-        searchable_kind,
+        BlockKind, SearchMatch, SearchOptions, collect_positions, grapheme_left, grapheme_right,
+        nearest_match_index, searchable_kind, word_left, word_right,
     };
     use crate::config::SearchPreferences;
     use gpui::EntityId;
+    use unicode_segmentation::UnicodeSegmentation;
 
     fn options(case_sensitive: bool, whole_word: bool, regex: bool) -> SearchOptions {
         SearchOptions {
@@ -1407,5 +1576,39 @@ mod tests {
             collect_positions(&matches),
             vec![(first, 0..1), (second, 2..3)]
         );
+    }
+
+    #[test]
+    fn grapheme_and_word_navigation() {
+        let s = "héllo wörld";
+        // Derive the expected boundaries from the string itself so the
+        // assertions stay correct for multi-byte UTF-8 without hardcoding
+        // byte indices. `grapheme_indices` yields grapheme *start* offsets;
+        // the end of the string is the final boundary a caret can rest on.
+        let mut boundaries: Vec<usize> = s.grapheme_indices(true).map(|(i, _)| i).collect();
+        boundaries.push(s.len());
+        assert_eq!(boundaries.first(), Some(&0));
+        assert_eq!(boundaries.last(), Some(&s.len()));
+        // "h" is one byte and "é" is two, so the first two steps land on 1
+        // and 3.
+        assert_eq!((boundaries[1], boundaries[2]), (1, 3));
+
+        // grapheme_right steps to the next boundary.
+        assert_eq!(grapheme_right(s, 0), boundaries[1]);
+        assert_eq!(grapheme_right(s, boundaries[1]), boundaries[2]);
+        // grapheme_left steps back across the two-byte "é".
+        assert_eq!(grapheme_left(s, boundaries[2]), boundaries[1]);
+        assert_eq!(grapheme_left(s, s.len()), boundaries[boundaries.len() - 2]);
+        // Edge and out-of-range cursors clamp instead of panicking.
+        assert_eq!(grapheme_left(s, 0), 0);
+        assert_eq!(grapheme_right(s, s.len()), s.len());
+
+        // Word jumps land on word starts and ends.
+        assert_eq!(word_left(s, s.len()), s.find("wörld").unwrap());
+        assert_eq!(word_right(s, 0), "héllo".len());
+        assert_eq!(word_left(s, 0), 0);
+        assert_eq!(word_right(s, s.len()), s.len());
+        assert_eq!(word_left(s, boundaries[1]), 0);
+        assert_eq!(word_right(s, s.find("wörld").unwrap()), s.len());
     }
 }
