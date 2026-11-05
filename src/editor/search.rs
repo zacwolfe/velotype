@@ -11,6 +11,13 @@
 //! `display_text()` is always the clean, unprojected text no matter which
 //! view mode the document is in.
 //!
+//! While the bar is open, though, stepping between matches deliberately keeps
+//! keyboard focus in the search field: only the selection, the active
+//! highlight, and an explicit scroll target move, so Enter can be pressed
+//! repeatedly without the caret jumping into the document. The block is only
+//! focused when the bar closes, or when `cmd-g` runs with the bar already
+//! closed.
+//!
 //! Editing always goes through
 //! [`Block::replace_text_in_visible_range`](crate::components::Block::replace_text_in_visible_range),
 //! never through raw string surgery on the Markdown source: that primitive is
@@ -281,6 +288,32 @@ impl Editor {
         self.focus_block(entity.entity_id());
     }
 
+    /// Marks `range` as the active match without taking keyboard focus away
+    /// from the search field: the selection and the active highlight move and
+    /// the view scrolls, but the user keeps typing (and keeps pressing Enter)
+    /// in the bar. `focus_search_match` is what `cmd-g` uses when the bar is
+    /// closed and the caret really should move.
+    fn reveal_search_match(
+        &mut self,
+        entity: &Entity<Block>,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        entity.update(cx, move |block, cx| {
+            block.selected_range = range;
+            block.selection_reversed = false;
+            block.marked_range = None;
+            block.vertical_motion_x = None;
+            block.cursor_blink_epoch = Instant::now();
+            cx.notify();
+        });
+        // Caret scrolling follows the focused block and the block is left
+        // unfocused here, so aim the scroll at the match explicitly.
+        self.pending_scroll_target = Some(entity.entity_id());
+        self.pending_scroll_active_block_into_view = true;
+        self.pending_scroll_align = super::ScrollAlign::Nearest;
+    }
+
     fn go_to_search_match(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(found) = self
             .search_bar
@@ -295,7 +328,14 @@ impl Editor {
         let Some(entity) = self.focusable_entity_by_id(found.entity_id) else {
             return;
         };
-        self.focus_search_match(&entity, found.range, cx);
+        // With the bar open focus stays in the query field, so Enter can step
+        // again; with it closed the caret moves to the match the way `cmd-f`
+        // followed by `cmd-g` has always done.
+        if self.search_bar.is_some() {
+            self.reveal_search_match(&entity, found.range, cx);
+        } else {
+            self.focus_search_match(&entity, found.range, cx);
+        }
         self.apply_search_highlights(cx);
     }
 
@@ -426,9 +466,18 @@ impl Editor {
         // Keep the typed text so reopening remembers it.
         self.last_search_query = search.query;
         self.last_search_replacement = search.replacement;
-        if search.active_index.is_none()
-            && let Some(previous) = search.previous_focus
-        {
+        // Stepping leaves focus in the bar, so closing it is where the caret
+        // finally lands on the active match. Without a jump, restore whatever
+        // had focus before the bar opened.
+        let active = search
+            .active_index
+            .and_then(|index| search.matches.get(index))
+            .cloned();
+        if let Some(found) = active {
+            if let Some(entity) = self.focusable_entity_by_id(found.entity_id) {
+                self.focus_search_match(&entity, found.range, cx);
+            }
+        } else if let Some(previous) = search.previous_focus {
             self.focus_block(previous);
         }
         self.clear_search_highlights(cx);

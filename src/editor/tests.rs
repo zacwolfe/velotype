@@ -3935,16 +3935,15 @@ async fn find_next_and_previous_cycle_through_matches_with_wraparound(cx: &mut T
         editor.on_find_next(&FindNext, window, cx);
     });
     editor.update(cx, |editor, cx| {
-        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
-        assert_eq!(visible[0].entity.read(cx).selected_range, 0..5);
         assert_eq!(editor.search_bar.as_ref().unwrap().active_index, Some(0));
+        assert_eq!(visible[0].entity.read(cx).selected_range, 0..5);
     });
 
     editor.update_in(cx, |editor, window, cx| {
         editor.on_find_next(&FindNext, window, cx);
     });
     editor.update(cx, |editor, cx| {
-        assert_eq!(editor.active_entity_id, Some(visible[1].entity.entity_id()));
+        assert_eq!(editor.search_bar.as_ref().unwrap().active_index, Some(1));
         assert_eq!(visible[1].entity.read(cx).selected_range, 0..5);
     });
 
@@ -3953,16 +3952,18 @@ async fn find_next_and_previous_cycle_through_matches_with_wraparound(cx: &mut T
         editor.on_find_next(&FindNext, window, cx);
         editor.on_find_next(&FindNext, window, cx);
     });
-    editor.update(cx, |editor, _cx| {
-        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().active_index, Some(0));
+        assert_eq!(visible[0].entity.read(cx).selected_range, 0..5);
     });
 
     // Stepping backward from the first match wraps to the last.
     editor.update_in(cx, |editor, window, cx| {
         editor.on_find_previous(&FindPrevious, window, cx);
     });
-    editor.update(cx, |editor, _cx| {
-        assert_eq!(editor.active_entity_id, Some(visible[2].entity.entity_id()));
+    editor.update(cx, |editor, cx| {
+        assert_eq!(editor.search_bar.as_ref().unwrap().active_index, Some(2));
+        assert_eq!(visible[2].entity.read(cx).selected_range, 0..5);
     });
 }
 
@@ -3989,20 +3990,29 @@ async fn closing_search_bar_restores_focus_only_when_no_jump_happened(cx: &mut T
         assert_eq!(editor.active_entity_id, Some(first_block_id));
     });
 
-    // Jumping to a match and then closing should leave focus at the match
-    // instead of snapping back to where it was before the bar opened.
+    // Stepping to the second match keeps focus in the bar, so closing is what
+    // has to move the caret there instead of snapping back to where it was
+    // before the bar opened.
     editor.update_in(cx, |editor, window, cx| {
         editor.on_find(&Find, window, cx);
         editor.search_bar.as_mut().unwrap().query = "alpha".to_string();
         editor.recompute_search_matches(cx);
         editor.on_find_next(&FindNext, window, cx);
+        editor.on_find_next(&FindNext, window, cx);
     });
     editor.update(cx, |editor, cx| {
         editor.dismiss_contextual_overlays(cx);
     });
-    editor.update(cx, |editor, _cx| {
+    redraw(cx);
+    editor.update_in(cx, |editor, window, cx| {
         assert!(editor.search_bar.is_none());
-        assert_eq!(editor.active_entity_id, Some(visible[0].entity.entity_id()));
+        assert_eq!(editor.active_entity_id, Some(visible[1].entity.entity_id()));
+        let block = visible[1].entity.read(cx);
+        assert_eq!(block.selected_range, 0..5);
+        assert!(
+            block.focus_handle.is_focused(window),
+            "closing the bar should hand keyboard focus to the active match"
+        );
     });
 }
 
@@ -5133,4 +5143,72 @@ fn focus_first_block(cx: &mut VisualTestContext, editor: &Entity<Editor>) -> Ent
     });
     redraw(cx);
     first_block_id
+}
+
+#[gpui::test]
+async fn enter_in_query_steps_matches_without_moving_focus(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two", "", "alpha three"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    let origin_block_id = focus_first_block(cx, &editor);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().expect("search bar open").query = "alpha".to_string();
+        editor.recompute_search_matches(cx);
+        assert!(
+            editor
+                .search_bar
+                .as_ref()
+                .expect("search bar open")
+                .focus_handle
+                .is_focused(window),
+            "opening the bar focuses the query field"
+        );
+    });
+    redraw(cx);
+
+    let event = KeyDownEvent {
+        keystroke: Keystroke::parse("enter").expect("valid enter keystroke"),
+        is_held: false,
+    };
+
+    // Each Enter steps to the next match (wrapping at the end) while the query
+    // field keeps the keyboard, so the next Enter steps again instead of
+    // typing into a block.
+    for expected in [0usize, 1, 2, 0] {
+        editor.update_in(cx, |editor, window, cx| {
+            editor.on_search_query_key_down(&event, window, cx);
+            assert_eq!(
+                editor.search_bar.as_ref().expect("bar stays open").active_index,
+                Some(expected)
+            );
+            assert!(
+                editor
+                    .search_bar
+                    .as_ref()
+                    .expect("bar stays open")
+                    .focus_handle
+                    .is_focused(window),
+                "Enter must leave keyboard focus in the search field"
+            );
+            assert_eq!(
+                editor.active_entity_id,
+                Some(origin_block_id),
+                "stepping must not steal the editor's active block"
+            );
+        });
+        redraw(cx);
+        editor.update(cx, |editor, cx| {
+            let found = editor.search_bar.as_ref().expect("bar stays open").matches[expected]
+                .clone();
+            assert_eq!(found.entity_id, visible[expected].entity.entity_id());
+            let block = visible[expected].entity.read(cx);
+            assert_eq!(block.selected_range, 0..5);
+            assert_eq!(block.search_active_highlight, Some(0..5));
+        });
+    }
 }
