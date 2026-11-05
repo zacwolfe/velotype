@@ -878,9 +878,10 @@ pub(crate) fn init_with_keybindings(cx: &mut App, config: &BTreeMap<String, Vec<
 #[cfg(test)]
 mod tests {
     use super::{
-        ShortcutCommand, normalize_shortcut_config, resolved_shortcut_keys, shortcut_conflict_for,
+        ShortcutCategory, ShortcutCommand, normalize_shortcut_config, resolved_shortcut_keys,
+        shortcut_conflict_for, shortcut_definitions,
     };
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[test]
     fn custom_shortcut_replaces_command_defaults() {
@@ -1137,5 +1138,54 @@ mod tests {
         .expect("copy should conflict with cut");
 
         assert_eq!(conflict.id, "cut");
+    }
+
+    /// The find/replace commands are registered globally (no `context`), so a
+    /// duplicated default key would silently shadow whichever command was
+    /// bound first. The plan asks for a test that guards that registration.
+    #[test]
+    fn shortcut_definitions_include_replace_commands() {
+        let definitions = shortcut_definitions();
+        let commands = [
+            ShortcutCommand::Find,
+            ShortcutCommand::FindNext,
+            ShortcutCommand::FindPrevious,
+            ShortcutCommand::Replace,
+            ShortcutCommand::ReplaceAll,
+        ];
+
+        let mut seen_keys: BTreeMap<&str, ShortcutCommand> = BTreeMap::new();
+        for command in commands {
+            let definition = definitions
+                .iter()
+                .find(|definition| definition.command == command)
+                .unwrap_or_else(|| panic!("{command:?} has no shortcut definition"));
+
+            assert!(
+                !definition.default_keys.is_empty(),
+                "{command:?} should ship at least one default key"
+            );
+            assert!(
+                definition.category == ShortcutCategory::Edit,
+                "{command:?} should live in the Edit category"
+            );
+            assert!(
+                definition.context.is_none(),
+                "{command:?} should be global so it works outside block focus"
+            );
+
+            for key in definition.default_keys {
+                if let Some(previous) = seen_keys.insert(key, command) {
+                    panic!("{key} is bound to both {previous:?} and {command:?}");
+                }
+            }
+        }
+
+        let ids: BTreeSet<&str> = definitions.iter().map(|definition| definition.id).collect();
+        assert_eq!(
+            ids.len(),
+            definitions.len(),
+            "shortcut definition ids must be unique"
+        );
     }
 }

@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    AnyWindowHandle, AppContext, ClickEvent, KeyDownEvent, Keystroke, TestAppContext,
-    VisualTestContext,
+    AnyWindowHandle, AppContext, ClickEvent, Entity, EntityId, KeyDownEvent, Keystroke,
+    TestAppContext, VisualTestContext,
 };
 
+use super::search::{SearchField, load_search_preferences};
 use super::{Editor, MountedRun, ViewMode};
 use crate::components::{
     BlockKind, CloseWindow, Find, FindNext, FindPrevious, FocusNext, ImageReferenceDefinitions,
@@ -4987,5 +4988,244 @@ async fn view_mode_switch_suppression_does_not_outlive_the_switch(cx: &mut TestA
             bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(),
             "caret should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
         );
+    });
+}
+
+#[gpui::test]
+async fn find_shortcut_reveals_replace_row_via_replace_action(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "alpha one".to_string(), None));
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        // Find alone must not force the replace row open; the persisted
+        // preference is allowed to keep it visible.
+        assert_eq!(
+            search.show_replace_row,
+            load_search_preferences().show_replace_row,
+            "Find should not reveal the replace row on its own"
+        );
+        assert_eq!(search.focused_field, SearchField::Query);
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        assert!(
+            search.show_replace_row,
+            "Replace must reveal the replace row"
+        );
+        assert_eq!(search.focused_field, SearchField::Replacement);
+    });
+}
+
+#[gpui::test]
+async fn escape_closes_bar_and_restores_previous_block_focus(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    // Give a real block the caret first: closing the bar has to hand focus back
+    // to whatever owned it before the bar opened.
+    let first_block_id = focus_first_block(cx, &editor);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+    });
+    redraw(cx);
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.search_bar.is_some(), "Find should open the bar");
+    });
+
+    let event = KeyDownEvent {
+        keystroke: Keystroke::parse("escape").expect("valid escape keystroke"),
+        is_held: false,
+    };
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_search_query_key_down(&event, window, cx);
+    });
+    for _ in 0..2 {
+        redraw(cx);
+    }
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(editor.search_bar.is_none(), "Escape should close the bar");
+        assert_eq!(editor.active_entity_id, Some(first_block_id));
+        let block = editor
+            .focusable_entity_by_id(first_block_id)
+            .expect("first block still mounted");
+        assert!(
+            block.read(cx).focus_handle.is_focused(window),
+            "Escape should return focus to the block that owned it"
+        );
+    });
+}
+
+#[gpui::test]
+async fn escape_from_replace_field_restores_focus_too(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let first_block_id = focus_first_block(cx, &editor);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        assert_eq!(
+            editor
+                .search_bar
+                .as_ref()
+                .expect("search bar open")
+                .focused_field,
+            SearchField::Replacement,
+            "Replace should focus the replacement field"
+        );
+    });
+    redraw(cx);
+
+    let event = KeyDownEvent {
+        keystroke: Keystroke::parse("escape").expect("valid escape keystroke"),
+        is_held: false,
+    };
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_search_query_key_down(&event, window, cx);
+    });
+    for _ in 0..2 {
+        redraw(cx);
+    }
+
+    editor.update_in(cx, |editor, window, cx| {
+        assert!(editor.search_bar.is_none(), "Escape should close the bar");
+        assert_eq!(editor.active_entity_id, Some(first_block_id));
+        let block = editor
+            .focusable_entity_by_id(first_block_id)
+            .expect("first block still mounted");
+        assert!(
+            block.read(cx).focus_handle.is_focused(window),
+            "Escape from the replace field should return focus to the block"
+        );
+    });
+}
+
+/// Puts the caret in the first visible block and gives it real window focus,
+/// mirroring the state a user is in before pressing the search shortcut.
+fn focus_first_block(cx: &mut VisualTestContext, editor: &Entity<Editor>) -> EntityId {
+    let first_block_id = editor.update_in(cx, |editor, window, cx| {
+        let first = editor.document.visible_blocks().to_vec()[0].entity.clone();
+        first.update(cx, |block, cx| {
+            block.selected_range = 0..0;
+            cx.notify();
+        });
+        first.read(cx).focus_handle.focus(window);
+        editor.active_entity_id = Some(first.entity_id());
+        first.entity_id()
+    });
+    redraw(cx);
+    first_block_id
+}
+
+#[gpui::test]
+async fn find_shortcut_reveals_replace_row_via_replace_action(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(cx, "alpha one".to_string(), None)
+    });
+    redraw(cx);
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+    });
+    editor.update(cx, |editor, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        assert!(!search.show_replace_row, "Find alone leaves the row hidden");
+        assert_eq!(search.focused_field, SearchField::Query);
+    });
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, _cx| {
+        let search = editor.search_bar.as_ref().expect("search bar open");
+        assert!(search.show_replace_row, "Replace must reveal the replace row");
+        assert_eq!(search.focused_field, SearchField::Replacement);
+    });
+}
+
+#[gpui::test]
+async fn escape_closes_bar_and_restores_previous_block_focus(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    let first_block_id = visible[0].entity.entity_id();
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_find(&Find, window, cx);
+        editor.search_bar.as_mut().expect("search bar open").query = "alpha".to_string();
+        editor.recompute_search_matches(cx);
+    });
+    redraw(cx);
+
+    let event = KeyDownEvent {
+        keystroke: Keystroke::parse("escape").expect("valid escape keystroke"),
+        is_held: false,
+    };
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_search_query_key_down(&event, window, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.search_bar.is_none(), "Escape should close the bar");
+        assert_eq!(editor.active_entity_id, Some(first_block_id));
+    });
+}
+
+#[gpui::test]
+async fn escape_from_replace_field_restores_focus_too(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = ["alpha one", "", "alpha two"].join("\n");
+    let (editor, cx) = cx.add_window_view(|_window, cx| Editor::from_markdown(cx, markdown, None));
+    redraw(cx);
+
+    let visible = editor.update(cx, |editor, _cx| editor.document.visible_blocks().to_vec());
+    let first_block_id = visible[0].entity.entity_id();
+
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_replace(&Replace, window, cx);
+        let search = editor.search_bar.as_mut().expect("search bar open");
+        search.query = "alpha".to_string();
+        search.replacement = "beta".to_string();
+        editor.recompute_search_matches(cx);
+    });
+    redraw(cx);
+
+    let event = KeyDownEvent {
+        keystroke: Keystroke::parse("escape").expect("valid escape keystroke"),
+        is_held: false,
+    };
+    editor.update_in(cx, |editor, window, cx| {
+        editor.on_search_query_key_down(&event, window, cx);
+    });
+    redraw(cx);
+
+    editor.update(cx, |editor, _cx| {
+        assert!(editor.search_bar.is_none(), "Escape should close the bar");
+        assert_eq!(editor.active_entity_id, Some(first_block_id));
     });
 }

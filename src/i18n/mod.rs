@@ -688,12 +688,9 @@ const I18N_STRING_KEYS: &[&str] = &[
     "menu_language",
     "menu_theme",
     "menu_workspace",
-    "menu_edit",
-    "menu_find",
-    "menu_find_next",
-    "menu_find_previous",
-    "menu_replace",
-    "menu_replace_all",
+    "menu_help",
+    "menu_add_language_config",
+    "menu_add_theme_config",
     "menu_new_window",
     "menu_close_window",
     "menu_next_window",
@@ -977,19 +974,18 @@ impl I18nStringsDe {
                 .unwrap_or(defaults.menu_find_previous),
             menu_replace: self.menu_replace.unwrap_or(defaults.menu_replace),
             menu_replace_all: self.menu_replace_all.unwrap_or(defaults.menu_replace_all),
+            menu_help: self.menu_help.unwrap_or(defaults.menu_help),
+            menu_add_language_config: self
+                .menu_add_language_config
+                .unwrap_or(defaults.menu_add_language_config),
+            menu_add_theme_config: self
+                .menu_add_theme_config
+                .unwrap_or(defaults.menu_add_theme_config),
             menu_file: self.menu_file.unwrap_or(defaults.menu_file),
             menu_export: self.menu_export.unwrap_or(defaults.menu_export),
             menu_language: self.menu_language.unwrap_or(defaults.menu_language),
             menu_theme: self.menu_theme.unwrap_or(defaults.menu_theme),
             menu_workspace: self.menu_workspace.unwrap_or(defaults.menu_workspace),
-            menu_edit: self.menu_edit.unwrap_or(defaults.menu_edit),
-            menu_find: self.menu_find.unwrap_or(defaults.menu_find),
-            menu_find_next: self.menu_find_next.unwrap_or(defaults.menu_find_next),
-            menu_find_previous: self
-                .menu_find_previous
-                .unwrap_or(defaults.menu_find_previous),
-            menu_replace: self.menu_replace.unwrap_or(defaults.menu_replace),
-            menu_replace_all: self.menu_replace_all.unwrap_or(defaults.menu_replace_all),
             menu_new_window: self.menu_new_window.unwrap_or(defaults.menu_new_window),
             menu_close_window: self.menu_close_window.unwrap_or(defaults.menu_close_window),
             menu_next_window: self.menu_next_window.unwrap_or(defaults.menu_next_window),
@@ -2624,5 +2620,69 @@ mod tests {
             pack.strings.help_about_star_message,
             "If this project helps you, consider giving it a Star⭐. Thank you!"
         );
+    }
+
+    /// The find bar renders from these labels; an empty string there leaves an
+    /// unlabelled control. The `De` struct forces each field to exist, but not
+    /// to be non-empty, so this guards the built-in defaults.
+    #[test]
+    fn i18n_strings_include_all_search_labels() {
+        fn assert_search_labels(language: &str, strings: &I18nStrings) {
+            let labels = [
+                ("menu_find", strings.menu_find.as_str()),
+                ("menu_find_next", strings.menu_find_next.as_str()),
+                ("menu_find_previous", strings.menu_find_previous.as_str()),
+                ("menu_replace", strings.menu_replace.as_str()),
+                ("menu_replace_all", strings.menu_replace_all.as_str()),
+                ("search_placeholder", strings.search_placeholder.as_str()),
+                (
+                    "search_replace_placeholder",
+                    strings.search_replace_placeholder.as_str(),
+                ),
+                (
+                    "search_replace_label",
+                    strings.search_replace_label.as_str(),
+                ),
+                (
+                    "search_replace_all_label",
+                    strings.search_replace_all_label.as_str(),
+                ),
+                (
+                    "search_case_sensitive_tooltip",
+                    strings.search_case_sensitive_tooltip.as_str(),
+                ),
+                (
+                    "search_whole_word_tooltip",
+                    strings.search_whole_word_tooltip.as_str(),
+                ),
+                (
+                    "search_regex_tooltip",
+                    strings.search_regex_tooltip.as_str(),
+                ),
+                (
+                    "search_invalid_regex",
+                    strings.search_invalid_regex.as_str(),
+                ),
+                (
+                    "search_replaced_count",
+                    strings.search_replaced_count.as_str(),
+                ),
+                (
+                    "search_matches_truncated",
+                    strings.search_matches_truncated.as_str(),
+                ),
+                ("search_no_matches", strings.search_no_matches.as_str()),
+            ];
+
+            for (field, value) in labels {
+                assert!(!value.is_empty(), "{language}: {field} should not be empty");
+            }
+        }
+
+        assert_search_labels("zh-CN", &I18nStrings::zh_cn());
+        assert_search_labels("en-US", &I18nStrings::en_us());
+        // Partial packs (e.g. French) leave untranslated fields out entirely and
+        // inherit the English defaults above when merged, so there is nothing
+        // extra to assert for them here.
     }
 }
