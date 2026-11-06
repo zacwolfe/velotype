@@ -392,6 +392,7 @@ impl EditorSettings {
     /// Opt-in: when true, focusing (clicking or keyboard-selecting) a rich
     /// block reveals its inline Markdown delimiters for editing. Defaults to
     /// `false` so focused blocks stay rendered.
+    #[allow(dead_code)]
     pub fn set_reveal_source_on_focus(cx: &mut App, reveal_source_on_focus: bool) {
         let show_table_headers = Self::show_table_headers(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
@@ -425,6 +426,7 @@ impl EditorSettings {
     /// Opt-in: when true, clicking a rendered image expands it to its raw
     /// Markdown source for editing. Defaults to `false` so clicking an image
     /// leaves it rendered.
+    #[allow(dead_code)]
     pub fn set_reveal_image_source_on_click(cx: &mut App, reveal_image_source_on_click: bool) {
         let show_table_headers = Self::show_table_headers(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
