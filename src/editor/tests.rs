@@ -1034,6 +1034,39 @@ async fn quit_dispatched_from_focused_window_runs_close_check(cx: &mut TestAppCo
     });
 }
 
+/// Regression test for the cmd-Q *keystroke* path. `cx.dispatch_action` and
+/// `dispatch_menu_action` route the action straight to the handler, bypassing
+/// the keymap; this test instead feeds a real `cmd-q` keystroke through
+/// `window.dispatch_keystroke`, which runs the same keymap-matching + action
+/// dispatch that a physical cmd-Q on macOS goes through. If the `cmd-q` ->
+/// `QuitApplication` binding is missing or shadowed, the keystroke never
+/// reaches the quit handler and the dirty window never shows its dialog.
+#[gpui::test]
+async fn cmd_q_keystroke_triggers_quit_close_check(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+
+    let (editor, cx) =
+        cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".to_string(), None));
+    let window = activate_visual_window(cx);
+
+    editor.update(cx, |editor, cx| editor.mark_dirty(cx));
+    editor.read_with(cx, |editor, _cx| {
+        assert!(!editor.show_unsaved_changes_dialog);
+    });
+
+    cx.dispatch_keystroke(window, Keystroke::parse("cmd-q").unwrap());
+    cx.run_until_parked();
+
+    // The cmd-q keystroke reached the quit handler: a dirty window surfaces
+    // the unsaved-changes dialog instead of the keystroke being dropped.
+    editor.read_with(cx, |editor, _cx| {
+        assert!(
+            editor.show_unsaved_changes_dialog,
+            "cmd-q keystroke should trigger the quit close-check"
+        );
+    });
+}
+
 #[gpui::test]
 async fn windows_fallback_close_window_dispatch_closes_target_editor_window(
     cx: &mut TestAppContext,
