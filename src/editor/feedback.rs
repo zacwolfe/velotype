@@ -12,6 +12,9 @@ use crate::theme::Theme;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FeedbackKind {
     Error,
+    /// Kept for the reusable API even though only `Error` is constructed
+    /// today.
+    #[allow(dead_code)]
     Info,
 }
 
