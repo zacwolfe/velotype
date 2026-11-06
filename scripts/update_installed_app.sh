@@ -29,6 +29,17 @@ mkdir -p "$TARGET_DIR"
 rm -rf "$TARGET_DIR/$APP_NAME"
 cp -R "$PROJECT_ROOT/dist/$APP_NAME" "$TARGET_DIR/"
 
+# If a copy also lives in ~/Applications (and that isn't where we just wrote),
+# refresh it too. A stale second copy is the same LaunchServices ambiguity the
+# cleanup below guards against. Only touch it when it already exists — never
+# create it. Must run before the dist/ intermediate is deleted.
+USER_APPS_DIR="$HOME/Applications"
+if [ "$TARGET_DIR" != "$USER_APPS_DIR" ] && [ -e "$USER_APPS_DIR/$APP_NAME" ]; then
+    echo "==> Refreshing $USER_APPS_DIR/$APP_NAME"
+    rm -rf "$USER_APPS_DIR/$APP_NAME"
+    cp -R "$PROJECT_ROOT/dist/$APP_NAME" "$USER_APPS_DIR/"
+fi
+
 # Drop the build intermediate. It is a fully valid bundle carrying the same
 # CFBundleIdentifier as the installed copy, so leaving it behind registers a
 # second launchable Velotype with LaunchServices — and Finder's "Open With"
