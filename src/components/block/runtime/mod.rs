@@ -137,7 +137,9 @@ pub struct Block {
     pub(crate) code_language_last_bounds: Option<Bounds<Pixels>>,
     /// Whether a pointer drag is selecting language text.
     pub(crate) code_language_is_selecting: bool,
-    /// Ordered UTF-8 selection in the current display text.
+    /// True while the pointer hovers a rendered code block, revealing the
+    /// copy-code button in the block's top-right corner.
+    pub(crate) code_block_hovered: bool,
     pub selected_range: Range<usize>,
     /// Whether the active body selection endpoint is its start.
     pub selection_reversed: bool,
@@ -312,6 +314,7 @@ impl Block {
             code_language_last_layout: None,
             code_language_last_bounds: None,
             code_language_is_selecting: false,
+            code_block_hovered: false,
             selected_range: 0..0,
             search_highlights: Vec::new(),
             search_active_highlight: None,
