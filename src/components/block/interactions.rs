@@ -1811,6 +1811,8 @@ impl Block {
 mod tests {
     use super::Block;
     use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
+    use crate::i18n::I18nManager;
+    use crate::theme::ThemeManager;
     use gpui::{AppContext, TestAppContext};
     use std::fs;
 
@@ -1847,6 +1849,55 @@ mod tests {
             assert!(!block.table_append_column_zone_hovered);
             assert!(block.table_append_column_button_hovered);
             assert!(block.table_append_column_close_task.is_none());
+        });
+    }
+
+    #[gpui::test]
+    async fn copy_button_stays_visible_while_hovering_button(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            I18nManager::init(cx);
+            ThemeManager::init(cx);
+        });
+        let (block, cx) = cx.add_window_view(|_window, cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::with_plain_text(
+                    BlockKind::CodeBlock { language: None },
+                    "fn main() {}",
+                ),
+            )
+        });
+
+        cx.update(|window, cx| {
+            block.update(cx, |block, cx| {
+                // Hovering the code block reveals the copy button.
+                block.on_code_block_hover(&true, window, cx);
+                assert!(block.code_block_hovered);
+                assert!(!block.code_block_button_hovered);
+                assert!(block.code_block_hovered || block.code_block_button_hovered);
+
+                // The pointer moves onto the button: the button blocks the
+                // container's hover hitbox, so the container hover drops, but
+                // the button's own hover keeps it visible (no flicker).
+                block.on_code_block_hover(&false, window, cx);
+                block.on_code_block_button_hover(&true, window, cx);
+                assert!(!block.code_block_hovered);
+                assert!(block.code_block_button_hovered);
+                assert!(
+                    block.code_block_hovered || block.code_block_button_hovered,
+                    "copy button must stay visible while the pointer is on it"
+                );
+
+                // The pointer leaves the button: both hovers are gone, so the
+                // button unmounts.
+                block.on_code_block_button_hover(&false, window, cx);
+                assert!(!block.code_block_hovered);
+                assert!(!block.code_block_button_hovered);
+                assert!(
+                    !(block.code_block_hovered || block.code_block_button_hovered),
+                    "copy button must unmount once the pointer leaves"
+                );
+            });
         });
     }
 
