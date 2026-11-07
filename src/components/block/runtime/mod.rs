@@ -130,6 +130,10 @@ pub struct Block {
     /// the block and blocks the container's hover hitbox; OR-ing the two keeps
     /// the button visible while the pointer is over it (no flicker).
     pub(crate) code_block_button_hovered: bool,
+    /// True for ~1.5s after the copy button copies the code, showing a small
+    /// "copied!" toast next to the button. Cleared by `code_block_copy_flash_task`.
+    pub(crate) code_block_copied: bool,
+    pub(crate) code_block_copy_flash_task: Option<Task<()>>,
     pub selected_range: Range<usize>,
     pub selection_reversed: bool,
     /// Find-bar highlights for this block, in `display_text()` coordinates.
@@ -257,6 +261,8 @@ impl Block {
             code_language_is_selecting: false,
             code_block_hovered: false,
             code_block_button_hovered: false,
+            code_block_copied: false,
+            code_block_copy_flash_task: None,
             selected_range: 0..0,
             search_highlights: Vec::new(),
             search_active_highlight: None,

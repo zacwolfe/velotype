@@ -2546,6 +2546,32 @@ impl Render for Block {
                     None
                 };
 
+                // Short "copied!" toast shown next to the copy button after a
+                // successful copy. Gated on `code_block_copied` (not hover) so
+                // it persists for its ~1.5s duration even if the pointer moves
+                // away. Positioned to the LEFT of the 24x24 button (right:36
+                // leaves a 6px gap between the toast and the button).
+                let copied_toast = if self.code_block_copied {
+                    Some(
+                        div()
+                            .id(ElementId::Name(
+                                format!("code-copied-toast-{}", self.record.id).into(),
+                            ))
+                            .absolute()
+                            .top(px(6.0))
+                            .right(px(36.0))
+                            .px(px(8.0))
+                            .py(px(4.0))
+                            .rounded(px(6.0))
+                            .bg(c.dialog_surface)
+                            .text_size(px(11.0))
+                            .text_color(c.code_text)
+                            .child(SharedString::from("copied!")),
+                    )
+                } else {
+                    None
+                };
+
                 if show_language_input {
                     let input_height = d.code_language_input_height
                         + d.code_language_input_padding_y * 2.0
@@ -2616,6 +2642,9 @@ impl Render for Block {
                     if let Some(btn) = copy_button {
                         container = container.child(btn);
                     }
+                    if let Some(toast) = copied_toast {
+                        container = container.child(toast);
+                    }
                     container = container.on_hover(move |hovered, window, app| {
                         let _ = entity.update(app, |block, cx| {
                             block.on_code_block_hover(hovered, window, cx);
@@ -2633,6 +2662,9 @@ impl Render for Block {
                         .child(code_panel);
                     if let Some(btn) = copy_button {
                         container = container.child(btn);
+                    }
+                    if let Some(toast) = copied_toast {
+                        container = container.child(toast);
                     }
                     container = container.on_hover(move |hovered, window, app| {
                         let _ = entity.update(app, |block, cx| {

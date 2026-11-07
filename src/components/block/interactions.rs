@@ -1190,7 +1190,8 @@ impl Block {
     }
 
     /// Copies the full fenced code content (no backtick fence markers) to the
-    /// clipboard via the hover-revealed copy button on a rendered code block.
+    /// clipboard via the hover-revealed copy button on a rendered code block,
+    /// then flashes a short "copied!" toast next to the button.
     pub(crate) fn on_copy_code_block(
         &mut self,
         _: &ClickEvent,
@@ -1199,6 +1200,26 @@ impl Block {
     ) {
         cx.write_to_clipboard(ClipboardItem::new_string(
             self.display_text().to_string(),
+        ));
+        self.code_block_copied = true;
+        self.schedule_code_copy_flash(cx);
+    }
+
+    /// Shows the "copied!" toast for ~1.5s, then hides it. Re-copying replaces
+    /// the pending task, which restarts the timer (the dropped task is
+    /// cancelled).
+    fn schedule_code_copy_flash(&mut self, cx: &mut Context<Self>) {
+        self.code_block_copy_flash_task = Some(cx.spawn(
+            async |this: WeakEntity<Block>, cx: &mut AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(1500))
+                    .await;
+                let _ = this.update(cx, |block, cx| {
+                    block.code_block_copy_flash_task = None;
+                    block.code_block_copied = false;
+                    cx.notify();
+                });
+            },
         ));
     }
 
@@ -1813,8 +1834,9 @@ mod tests {
     use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
-    use gpui::{AppContext, Modifiers, TestAppContext, point, px};
+    use gpui::{AppContext, ClickEvent, Modifiers, TestAppContext, point, px};
     use std::fs;
+    use std::time::Duration;
 
     fn temp_image_path(name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -1994,6 +2016,64 @@ mod tests {
             assert!(
                 block.code_block_hovered || block.code_block_button_hovered,
                 "the button must stay visible (no flicker) while hovered"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn copied_toast_shows_on_copy_and_auto_hides(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            I18nManager::init(cx);
+            ThemeManager::init(cx);
+        });
+        let (block, cx) = cx.add_window_view(|_window, cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::with_plain_text(
+                    BlockKind::CodeBlock { language: None },
+                    "fn main() {}",
+                ),
+            )
+        });
+
+        // Before any copy, the toast is hidden and no timer is pending.
+        block.read_with(cx, |block, _cx| {
+            assert!(!block.code_block_copied);
+            assert!(block.code_block_copy_flash_task.is_none());
+        });
+
+        // Clicking the copy button copies the code and flashes the toast.
+        cx.update(|window, cx| {
+            block.update(cx, |block, cx| {
+                block.on_copy_code_block(&ClickEvent::default(), window, cx);
+            });
+        });
+
+        block.read_with(cx, |block, _cx| {
+            assert!(
+                block.code_block_copied,
+                "copying should show the 'copied!' toast immediately"
+            );
+            assert!(
+                block.code_block_copy_flash_task.is_some(),
+                "copying should schedule the auto-hide timer"
+            );
+        });
+
+        // After the ~1.5s flash duration the toast hides itself and the timer
+        // is cleared.
+        cx.background_executor
+            .advance_clock(Duration::from_millis(1500));
+        cx.run_until_parked();
+
+        block.read_with(cx, |block, _cx| {
+            assert!(
+                !block.code_block_copied,
+                "the 'copied!' toast should auto-hide after the flash duration"
+            );
+            assert!(
+                block.code_block_copy_flash_task.is_none(),
+                "the auto-hide timer should be cleared once it fires"
             );
         });
     }
