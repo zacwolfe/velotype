@@ -70,6 +70,9 @@ impl AssetSource for VelotypeAssets {
             "icon/workspace/markdown.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/workspace/markdown.svg"
             )))),
+            "icon/copy.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/icon/copy.svg"
+            )))),
             "icon/titlebar/chrome-close.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/icon/titlebar/chrome-close.svg"
             )))),

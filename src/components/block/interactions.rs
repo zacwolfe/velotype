@@ -1189,6 +1189,34 @@ impl Block {
         }
     }
 
+    /// Copies the full fenced code content (no backtick fence markers) to the
+    /// clipboard via the hover-revealed copy button on a rendered code block.
+    pub(crate) fn on_copy_code_block(
+        &mut self,
+        _: &ClickEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            self.display_text().to_string(),
+        ));
+    }
+
+    /// Tracks pointer hover over a rendered code block so the copy button can
+    /// be revealed on hover. Only re-renders when the hover state actually
+    /// changes.
+    pub(crate) fn on_code_block_hover(
+        &mut self,
+        hovered: &bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.code_block_hovered != *hovered {
+            self.code_block_hovered = *hovered;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn on_code_language_cut(
         &mut self,
         _: &Cut,

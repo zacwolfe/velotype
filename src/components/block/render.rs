@@ -2507,11 +2507,50 @@ impl Render for Block {
                             .child(BlockTextElement::new(cx.entity(), is_placeholder)),
                     );
 
+                // Hover-revealed copy button for the fenced code content. Only
+                // rendered while the pointer hovers the block; positioned at the
+                // top-right and occluding so it never interferes with text
+                // selection in the panel behind it.
+                let copy_button = if self.code_block_hovered {
+                    Some(
+                        div()
+                            .id(ElementId::Name(
+                                format!("code-copy-{}", self.record.id).into(),
+                            ))
+                            .absolute()
+                            .top(px(6.0))
+                            .right(px(6.0))
+                            .size(px(24.0))
+                            .rounded(px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(hsla(0.0, 0.0, 0.0, 0.0))
+                            .hover(|this| this.bg(c.table_append_button_hover))
+                            .cursor_pointer()
+                            .occlude()
+                            .on_click(cx.listener(Self::on_copy_code_block))
+                            .child(
+                                svg()
+                                    .path("icon/copy.svg")
+                                    .size(px(14.0))
+                                    .text_color(c.code_text)
+                                    .into_any_element(),
+                            ),
+                    )
+                } else {
+                    None
+                };
+
                 if show_language_input {
                     let input_height = d.code_language_input_height
                         + d.code_language_input_padding_y * 2.0
                         + d.code_language_input_border_width * 2.0;
-                    div()
+                    let entity = cx.entity();
+                    let mut container = div()
+                        .id(ElementId::Name(
+                            format!("code-block-wrap-{}", self.record.id).into(),
+                        ))
                         .w_full()
                         .relative()
                         .pb(px(input_height + d.code_language_input_gap))
@@ -2569,10 +2608,34 @@ impl Render for Block {
                                     cx.entity(),
                                     language_placeholder,
                                 )),
-                        )
-                        .into_any_element()
+                        );
+                    if let Some(btn) = copy_button {
+                        container = container.child(btn);
+                    }
+                    container = container.on_hover(move |hovered, window, app| {
+                        let _ = entity.update(app, |block, cx| {
+                            block.on_code_block_hover(hovered, window, cx);
+                        });
+                    });
+                    container.into_any_element()
                 } else {
-                    code_panel.into_any_element()
+                    let entity = cx.entity();
+                    let mut container = div()
+                        .id(ElementId::Name(
+                            format!("code-block-wrap-{}", self.record.id).into(),
+                        ))
+                        .w_full()
+                        .relative()
+                        .child(code_panel);
+                    if let Some(btn) = copy_button {
+                        container = container.child(btn);
+                    }
+                    container = container.on_hover(move |hovered, window, app| {
+                        let _ = entity.update(app, |block, cx| {
+                            block.on_code_block_hover(hovered, window, cx);
+                        });
+                    });
+                    container.into_any_element()
                 }
             }
             BlockKind::Table => {

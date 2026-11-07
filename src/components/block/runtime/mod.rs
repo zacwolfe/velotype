@@ -122,6 +122,9 @@ pub struct Block {
     pub(crate) code_language_last_layout: Option<ShapedLine>,
     pub(crate) code_language_last_bounds: Option<Bounds<Pixels>>,
     pub(crate) code_language_is_selecting: bool,
+    /// True while the pointer hovers a rendered code block, revealing the
+    /// copy-code button in the block's top-right corner.
+    pub(crate) code_block_hovered: bool,
     pub selected_range: Range<usize>,
     pub selection_reversed: bool,
     /// Find-bar highlights for this block, in `display_text()` coordinates.
@@ -247,6 +250,7 @@ impl Block {
             code_language_last_layout: None,
             code_language_last_bounds: None,
             code_language_is_selecting: false,
+            code_block_hovered: false,
             selected_range: 0..0,
             search_highlights: Vec::new(),
             search_active_highlight: None,
