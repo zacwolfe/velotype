@@ -1813,7 +1813,7 @@ mod tests {
     use crate::components::{BlockKind, BlockRecord, InlineTextTree, PastedImageSource};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, Modifiers, TestAppContext, point, px};
     use std::fs;
 
     fn temp_image_path(name: &str) -> std::path::PathBuf {
@@ -1898,6 +1898,103 @@ mod tests {
                     "copy button must unmount once the pointer leaves"
                 );
             });
+        });
+    }
+
+    #[gpui::test]
+    async fn copy_button_hover_is_delivered_by_gpui_hit_test(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            I18nManager::init(cx);
+            ThemeManager::init(cx);
+        });
+        let (block, cx) = cx.add_window_view(|_window, cx| {
+            Block::with_record(
+                cx,
+                BlockRecord::with_plain_text(
+                    BlockKind::CodeBlock { language: None },
+                    "fn main() {}",
+                ),
+            )
+        });
+
+        // The copy button is docked at top:6 / right:6 with a 24x24 size inside
+        // the code-block container. `last_bounds` is the source text region,
+        // which is inset from the container edges by the theme's code-block
+        // padding, so read that padding to map text bounds back to the
+        // container edges the button is anchored to.
+        let (pad_x, pad_y) = cx.read(|cx| {
+            let theme = cx.global::<ThemeManager>().current_arc();
+            (
+                theme.dimensions.code_block_padding_x,
+                theme.dimensions.code_block_padding_y,
+            )
+        });
+
+        // First draw: the block renders with the button hidden (the block is
+        // not hovered yet). This also populates `last_bounds` from the text
+        // layout and registers the container's hover handler.
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        cx.run_until_parked();
+
+        // Move the pointer onto the code text (on the container, away from the
+        // top-right button corner). gpui's real hit-test hovers the container,
+        // which reveals the copy button.
+        let text_point = block.read_with(cx, |block, _cx| {
+            let bounds = block.last_bounds.expect("code text should render");
+            point(
+                px(f32::from(bounds.origin.x) + 2.0),
+                px(f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0),
+            )
+        });
+        cx.simulate_mouse_move(text_point, None, Modifiers::default());
+        cx.run_until_parked();
+
+        block.read_with(cx, |block, _cx| {
+            assert!(
+                block.code_block_hovered,
+                "gpui hit-test should hover the code container over the text"
+            );
+        });
+
+        // Redraw so the now-visible button is in the element tree with a real
+        // hitbox.
+        cx.update(|window, cx| {
+            window.draw(cx).clear();
+        });
+        cx.run_until_parked();
+
+        // The button spans [container.right()-30, container.right()-6] x
+        // [container.top()+6, container.top()+30], so its center is
+        // (container.right()-18, container.top()+18). Map that back through
+        // the text bounds and the theme padding.
+        let button_center = block.read_with(cx, |block, _cx| {
+            let bounds = block.last_bounds.expect("code text should render");
+            point(
+                px(f32::from(bounds.right()) + pad_x - 18.0),
+                px(f32::from(bounds.top()) - pad_y + 18.0),
+            )
+        });
+
+        // Move the pointer onto the button. Its `block_mouse_except_scroll`
+        // drops the container hover while the button's own `on_hover` fires.
+        cx.simulate_mouse_move(button_center, None, Modifiers::default());
+        cx.run_until_parked();
+
+        block.read_with(cx, |block, _cx| {
+            assert!(
+                block.code_block_button_hovered,
+                "gpui hit-test should deliver on_hover(true) to the button"
+            );
+            assert!(
+                !block.code_block_hovered,
+                "the button's block_mouse_except_scroll should drop the container hover"
+            );
+            assert!(
+                block.code_block_hovered || block.code_block_button_hovered,
+                "the button must stay visible (no flicker) while hovered"
+            );
         });
     }
 
