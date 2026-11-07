@@ -1217,6 +1217,24 @@ impl Block {
         }
     }
 
+    /// Tracks pointer hover over the copy-code button itself. The button sits
+    /// on top of the block and (via `block_mouse_except_scroll`) blocks the
+    /// container's hover hitbox, so hovering it would otherwise drop
+    /// `code_block_hovered` and unmount the button. Keeping a separate flag
+    /// that is OR-ed into the button's visibility keeps it steady under the
+    /// pointer. Only re-renders when the hover state actually changes.
+    pub(crate) fn on_code_block_button_hover(
+        &mut self,
+        hovered: &bool,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.code_block_button_hovered != *hovered {
+            self.code_block_button_hovered = *hovered;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn on_code_language_cut(
         &mut self,
         _: &Cut,

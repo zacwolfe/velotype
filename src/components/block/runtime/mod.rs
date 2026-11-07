@@ -125,6 +125,11 @@ pub struct Block {
     /// True while the pointer hovers a rendered code block, revealing the
     /// copy-code button in the block's top-right corner.
     pub(crate) code_block_hovered: bool,
+    /// True while the pointer hovers the copy-code button itself. Kept
+    /// separate from `code_block_hovered` because the button sits on top of
+    /// the block and blocks the container's hover hitbox; OR-ing the two keeps
+    /// the button visible while the pointer is over it (no flicker).
+    pub(crate) code_block_button_hovered: bool,
     pub selected_range: Range<usize>,
     pub selection_reversed: bool,
     /// Find-bar highlights for this block, in `display_text()` coordinates.
@@ -251,6 +256,7 @@ impl Block {
             code_language_last_bounds: None,
             code_language_is_selecting: false,
             code_block_hovered: false,
+            code_block_button_hovered: false,
             selected_range: 0..0,
             search_highlights: Vec::new(),
             search_active_highlight: None,

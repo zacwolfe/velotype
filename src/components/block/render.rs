@@ -2507,11 +2507,14 @@ impl Render for Block {
                             .child(BlockTextElement::new(cx.entity(), is_placeholder)),
                     );
 
-                // Hover-revealed copy button for the fenced code content. Only
-                // rendered while the pointer hovers the block; positioned at the
-                // top-right and occluding so it never interferes with text
-                // selection in the panel behind it.
-                let copy_button = if self.code_block_hovered {
+                // Hover-revealed copy button for the fenced code content.
+                // Rendered while the pointer hovers the block OR the button
+                // itself (the two flags are OR-ed because the button sits on
+                // top of the block and blocks the container's hover hitbox);
+                // positioned at the top-right and blocking mouse (except
+                // scroll) so it never interferes with text selection in the
+                // panel behind it while staying steady under the pointer.
+                let copy_button = if self.code_block_hovered || self.code_block_button_hovered {
                     Some(
                         div()
                             .id(ElementId::Name(
@@ -2528,7 +2531,8 @@ impl Render for Block {
                             .bg(hsla(0.0, 0.0, 0.0, 0.0))
                             .hover(|this| this.bg(c.table_append_button_hover))
                             .cursor_pointer()
-                            .occlude()
+                            .block_mouse_except_scroll()
+                            .on_hover(cx.listener(Self::on_code_block_button_hover))
                             .on_click(cx.listener(Self::on_copy_code_block))
                             .child(
                                 svg()
