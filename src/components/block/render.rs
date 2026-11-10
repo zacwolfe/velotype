@@ -676,6 +676,14 @@ impl Block {
         }
     }
 
+    /// Whether a focused rendered "widget" block (math, mermaid) should swap
+    /// its rendered visual for raw Markdown source. The reveal is opt-in via
+    /// `reveal_source_on_focus` (default off): a focused block stays rendered
+    /// unless the user enables the preference.
+    pub(crate) fn reveals_raw_source_when_focused(&self, focused: bool, cx: &App) -> bool {
+        focused && crate::config::EditorSettings::reveal_source_on_focus(cx)
+    }
+
     /// Renders Mermaid as SVG, scrolling wide output and showing source on error.
     fn render_mermaid_content(&self, theme: &Theme, window: &Window) -> AnyElement {
         let c = &theme.colors;
@@ -3550,7 +3558,7 @@ impl Render for Block {
                     self.last_layout = None;
                     self.last_bounds = None;
                 }
-                let child = if focused {
+                let child = if self.reveals_raw_source_when_focused(focused, cx) {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
                     self.render_mermaid_content(&theme, window)
