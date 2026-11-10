@@ -329,6 +329,11 @@ impl Editor {
     pub(crate) fn toggle_view_mode(&mut self, cx: &mut Context<Self>) {
         self.end_block_pointer_selection_sessions(cx);
         let selection_snapshot = self.capture_source_selection_snapshot(cx);
+        // The viewport anchor is a SOURCE line (plus its clip): the two modes
+        // share the canonical Markdown text but not their pixel layout, so a raw
+        // scroll offset cannot survive the relayout. Capture it before the roots
+        // swap.
+        let viewport_anchor = self.top_of_viewport_anchor(cx);
         self.clear_cross_block_selection(cx);
         self.rendered_select_all_cycle = None;
         match self.view_mode {
@@ -354,13 +359,19 @@ impl Editor {
         }
 
         self.apply_selection_snapshot_in_current_mode(&selection_snapshot, cx);
-        // Deliberately no scroll-into-view here. The caret is restored in the
-        // new mode, but chasing it yanked the viewport to wherever the cursor
-        // happened to sit, which is jarring when the user only wanted to change
-        // how the document is presented. The suppression is scoped to exactly
-        // this restore: the caret-follow poll in `follow_caret_movement` takes
-        // the restored position as its new baseline and keeps scrolling normally
-        // for every subsequent caret move.
+        // Any scroll queued for the OLD tree is stale now (its entity ids and
+        // pixel positions no longer exist). Drop it so the viewport restore
+        // below is the only pass that moves the view.
+        self.pending_scroll_active_block_into_view = false;
+        self.pending_scroll_target = None;
+        self.pending_scroll_recheck_after_layout = false;
+        // Keep the same text under the top of the frame rather than chasing the
+        // restored caret. `viewport_anchor` is applied once the new mode's
+        // blocks have been measured.
+        self.restore_viewport_anchor(viewport_anchor, cx);
+        // The suppression is scoped to exactly this restore: the caret-follow
+        // poll in `follow_caret_movement` takes the restored position as its new
+        // baseline and keeps scrolling normally for every subsequent caret move.
         self.suppress_caret_scroll_follow = true;
         self.last_scroll_viewport_size = None;
         self.pending_window_title_refresh = true;

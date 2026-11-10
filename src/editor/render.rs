@@ -643,7 +643,7 @@ impl Editor {
     /// retry once the target block has been laid out. `cx.notify()` is swallowed
     /// when called from within `render`, so without this the retry would wait
     /// for the next external notify (e.g. the cursor blink, ~0.5s later).
-    fn schedule_scroll_recheck(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn schedule_scroll_recheck(&mut self, cx: &mut Context<Self>) {
         self.scroll_recheck_task = Some(cx.spawn(async move |this: WeakEntity<Self>, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(16))
@@ -1710,6 +1710,7 @@ impl Render for Editor {
         self.apply_pending_focus(window, cx);
         self.follow_caret_movement(window, cx);
         self.apply_pending_scroll_into_view(window, cx);
+        self.apply_pending_viewport_restore(cx);
         self.refresh_selection_snapshot_if_stale(cx);
         self.sync_pending_save(window, cx);
         self.sync_pending_save_as(window, cx);

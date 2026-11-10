@@ -1053,7 +1053,7 @@ impl Editor {
 
     /// Applies an absolute vertical scroll offset, clamped to the scrollable
     /// range. Offsets run from 0 at the top to `-max_offset` at the bottom.
-    fn set_vertical_scroll_offset(&mut self, target_y: Pixels, cx: &mut Context<Self>) {
+    pub(super) fn set_vertical_scroll_offset(&mut self, target_y: Pixels, cx: &mut Context<Self>) {
         let max_offset_y = self.scroll_handle.max_offset().height.max(px(0.0));
         let mut offset = self.scroll_handle.offset();
         offset.y = target_y.min(px(0.0)).max(-max_offset_y);

@@ -4815,25 +4815,32 @@ async fn switching_view_mode_does_not_scroll_to_the_caret(cx: &mut TestAppContex
     });
     redraw(cx);
 
-    let before = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    let before_anchor = editor.update(cx, |editor, cx| editor.top_of_viewport_source_offset(cx));
+    assert_eq!(
+        before_anchor, 0,
+        "test starts with the viewport at the very top of the document"
+    );
 
     editor.update(cx, |editor, cx| {
         editor.toggle_view_mode(cx);
         assert!(matches!(editor.view_mode, ViewMode::Source));
-        assert!(
-            !editor.pending_scroll_active_block_into_view,
-            "a mode switch must not request a scroll-into-view"
-        );
     });
     for _ in 0..6 {
         redraw(cx);
     }
 
-    let after = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
-    assert!(
-        (f32::from(after) - f32::from(before)).abs() < 1.0,
-        "view-mode switch scrolled the viewport from {before:?} to {after:?}"
-    );
+    editor.update(cx, |editor, cx| {
+        let after_anchor = editor.top_of_viewport_source_offset(cx);
+        assert_eq!(
+            after_anchor, before_anchor,
+            "the same source text must sit at the top of the viewport after the switch"
+        );
+        let after = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(after).abs() < 1.0,
+            "a switch that started at the top must keep the viewport at the top, got {after:?}"
+        );
+    });
 }
 
 #[gpui::test]
@@ -5080,7 +5087,12 @@ async fn view_mode_switch_suppression_does_not_outlive_the_switch(cx: &mut TestA
     });
     redraw(cx);
 
-    let before_switch = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
+    let anchor_before_switch =
+        editor.update(cx, |editor, cx| editor.top_of_viewport_source_offset(cx));
+    assert_eq!(
+        anchor_before_switch, 0,
+        "test starts with the viewport at the very top of the document"
+    );
 
     editor.update(cx, |editor, cx| {
         editor.toggle_view_mode(cx);
@@ -5090,12 +5102,20 @@ async fn view_mode_switch_suppression_does_not_outlive_the_switch(cx: &mut TestA
         redraw(cx);
     }
 
-    let after_switch = editor.update(cx, |editor, _cx| editor.scroll_handle.offset().y);
-    assert!(
-        (f32::from(after_switch) - f32::from(before_switch)).abs() < 1.0,
-        "view-mode switch itself must not scroll (before {before_switch:?}, \
-         after {after_switch:?})"
-    );
+    let after_switch = editor.update(cx, |editor, cx| {
+        let anchor = editor.top_of_viewport_source_offset(cx);
+        assert_eq!(
+            anchor, anchor_before_switch,
+            "the source text at the top of the viewport must be preserved by the switch"
+        );
+        let offset = editor.scroll_handle.offset().y;
+        assert!(
+            f32::from(offset).abs() < 1.0,
+            "a switch that started at the top must keep the viewport at the top, \
+             got {offset:?}"
+        );
+        offset
+    });
 
     // The suppression must be one-shot: a caret move AFTER the switch should
     // scroll normally, not stay silently disabled.
@@ -5127,6 +5147,271 @@ async fn view_mode_switch_suppression_does_not_outlive_the_switch(cx: &mut TestA
             "caret should be visible after scrolling, at {bounds:?} in viewport {viewport:?}"
         );
     });
+}
+
+#[gpui::test]
+async fn view_mode_switch_preserves_top_of_viewport_anchor(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    // Long enough that the rendered and source layouts have very different
+    // heights, so a stale raw scroll offset shows the wrong part of the text.
+    let markdown = (0..200)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    // Scroll a mounted block that sits below the fold up to the viewport top.
+    let target_id = editor.update(cx, |editor, cx| {
+        let viewport = editor.scroll_handle.bounds();
+        let target = editor
+            .document
+            .visible_blocks()
+            .iter()
+            .find(|visible| {
+                visible
+                    .entity
+                    .read(cx)
+                    .last_bounds
+                    .is_some_and(|bounds| {
+                        bounds.top() > viewport.top() + viewport.size.height * 0.5
+                            && bounds.top() < viewport.top() + viewport.size.height
+                    })
+            })
+            .map(|visible| visible.entity.clone())
+            .expect("a mounted block below the fold");
+        let bounds = target.read(cx).last_bounds.expect("target is mounted");
+        let current_y = editor.scroll_handle.offset().y;
+        editor.scroll_handle.set_offset(gpui::point(
+            gpui::px(0.0),
+            current_y + (viewport.top() - bounds.top()),
+        ));
+        target.entity_id()
+    });
+    for _ in 0..4 {
+        redraw(cx);
+    }
+
+    let target_source_start = editor.update(cx, |editor, cx| {
+        editor
+            .build_source_target_mappings(cx)
+            .into_iter()
+            .find(|mapping| mapping.entity.entity_id() == target_id)
+            .expect("target block has a source mapping")
+            .full_source_range
+            .start
+    });
+
+    let rendered_anchor =
+        editor.update(cx, |editor, cx| editor.top_of_viewport_source_offset(cx));
+    assert_eq!(
+        rendered_anchor, target_source_start,
+        "precondition: the target paragraph starts at the viewport top"
+    );
+
+    // Rendered -> Source.
+    editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+    for _ in 0..8 {
+        redraw(cx);
+    }
+    let source_anchor = editor.update(cx, |editor, cx| {
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+        editor.top_of_viewport_source_offset(cx)
+    });
+    assert_eq!(
+        source_anchor, target_source_start,
+        "source mode must keep the same paragraph at the top of the viewport"
+    );
+
+    // Source -> Rendered round trip.
+    editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+    for _ in 0..10 {
+        redraw(cx);
+    }
+    let round_trip_anchor =
+        editor.update(cx, |editor, cx| editor.top_of_viewport_source_offset(cx));
+    assert!(matches!(
+        editor.update(cx, |editor, _cx| editor.view_mode),
+        ViewMode::Rendered
+    ));
+    assert_eq!(
+        round_trip_anchor, target_source_start,
+        "the round trip must land on the same paragraph again"
+    );
+}
+
+#[gpui::test]
+async fn outline_jump_then_view_mode_switch_keeps_the_heading_at_the_top(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    // Same fixture as `outline_jump_puts_the_heading_near_the_top_of_the_viewport`:
+    // long bodies under each heading so the jump parks a heading far down the
+    // document near the top of the viewport.
+    let mut markdown = String::new();
+    for section in 0..12 {
+        markdown.push_str(&format!("## Section {section}\n\n"));
+        for line in 0..25 {
+            markdown.push_str(&format!("body line {line} of section {section}\n\n"));
+        }
+    }
+    let markdown = markdown;
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.clone();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    let heading_line = markdown
+        .lines()
+        .position(|line| line.starts_with("## Section 9"))
+        .expect("fixture heading");
+    let heading_source_start: usize = markdown
+        .split_inclusive('\n')
+        .take(heading_line)
+        .map(str::len)
+        .sum();
+
+    // Screen-space distance from the viewport top to the chosen heading, in
+    // each mode's own layout. The heading must stay put across the switch; a
+    // stale-bounds anchor instead sent the viewport to another part of the
+    // document entirely.
+    let heading_distance_from_top_rendered = |editor: &Editor, cx: &gpui::App| -> f32 {
+        let heading_entity = editor
+            .build_source_target_mappings(cx)
+            .into_iter()
+            .find(|mapping| mapping.full_source_range.start == heading_source_start)
+            .map(|mapping| mapping.entity)
+            .expect("heading block");
+        let bounds = heading_entity
+            .read(cx)
+            .last_bounds
+            .expect("heading block mounted");
+        f32::from(bounds.top() - editor.scroll_handle.bounds().top())
+    };
+    let heading_distance_from_top_source = |editor: &Editor, cx: &gpui::App| -> f32 {
+        let block = editor
+            .document
+            .first_root()
+            .expect("source block")
+            .read(cx);
+        let bounds = block.last_bounds.expect("source block mounted");
+        let lines = block.last_layout.as_ref().expect("source layout");
+        let line_top = lines
+            .iter()
+            .take(heading_line)
+            .fold(gpui::px(0.0), |height, line| {
+                height + line.size(block.last_line_height).height
+            });
+        f32::from(bounds.top() + line_top - editor.scroll_handle.bounds().top())
+    };
+    let viewport_height = |editor: &Editor| f32::from(editor.scroll_handle.bounds().size.height);
+    let assert_near_top = |distance: f32, viewport_height: f32, context: &str| {
+        assert!(
+            distance >= 0.0 && distance < viewport_height * 0.25,
+            "{context}: heading sat {distance}px below the viewport top \
+             (viewport {viewport_height}px)"
+        );
+    };
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(heading_line, cx));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+
+    // Precondition: the jump put the heading near the top of the viewport.
+    let after_jump = editor.update(cx, |editor, cx| {
+        let distance = heading_distance_from_top_rendered(&*editor, cx);
+        assert_near_top(distance, viewport_height(&*editor), "after jump");
+        distance
+    });
+
+    // Rendered -> Source.
+    editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+    for _ in 0..10 {
+        redraw(cx);
+    }
+    let after_rendered_to_source = editor.update(cx, |editor, cx| {
+        assert!(matches!(editor.view_mode, ViewMode::Source));
+        let distance = heading_distance_from_top_source(&*editor, cx);
+        assert_near_top(distance, viewport_height(&*editor), "rendered->source");
+        assert!(
+            (distance - after_jump).abs() < 60.0,
+            "heading moved {distance}px from the viewport top after rendered->source \
+             (was {after_jump}px)"
+        );
+        distance
+    });
+
+    // Source -> Rendered: the round trip must put the same heading back near
+    // the top of the viewport.
+    editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+    for _ in 0..10 {
+        redraw(cx);
+    }
+    editor.update(cx, |editor, cx| {
+        assert!(matches!(editor.view_mode, ViewMode::Rendered));
+        let distance = heading_distance_from_top_rendered(&*editor, cx);
+        assert_near_top(distance, viewport_height(&*editor), "source->rendered");
+        assert!(
+            (distance - after_rendered_to_source).abs() < 60.0,
+            "heading moved {distance}px from the viewport top after source->rendered \
+             (was {after_rendered_to_source}px)"
+        );
+    });
+}
+
+#[gpui::test]
+async fn view_mode_switch_at_top_does_not_move_the_viewport(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let markdown = (0..150)
+        .map(|index| format!("paragraph number {index}\n"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (editor, cx) =
+        cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None));
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    let offset_before = editor.update(cx, |editor, cx| {
+        assert_eq!(editor.top_of_viewport_source_offset(cx), 0);
+        editor.scroll_handle.offset().y
+    });
+    assert!(
+        f32::from(offset_before).abs() < 1.0,
+        "test starts at the very top, got {offset_before:?}"
+    );
+
+    for view_mode in [ViewMode::Source, ViewMode::Rendered] {
+        editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+        for _ in 0..8 {
+            redraw(cx);
+        }
+        editor.update(cx, |editor, cx| {
+            assert!(
+                editor.view_mode == view_mode,
+                "unexpected view mode after the switch"
+            );
+            let offset = editor.scroll_handle.offset().y;
+            assert!(
+                f32::from(offset).abs() < 0.5,
+                "a switch at the document top must not move the viewport, got {offset:?}"
+            );
+            assert_eq!(
+                editor.top_of_viewport_source_offset(cx),
+                0,
+                "the document head must stay at the top of the viewport"
+            );
+        });
+    }
 }
 
 #[gpui::test]
