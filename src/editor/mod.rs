@@ -512,6 +512,10 @@ impl Editor {
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
     /// Maximum gap between select-all presses in the rendered selection-upgrade cycle.
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
+    
+    pub(crate) fn open_file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
+    }
 
     /// Normalizes line endings and creates a rendered editor with subscribed block entities.
     /// Empty input receives a paragraph; tables, references, focus, and history are initialized.
