@@ -5369,6 +5369,124 @@ async fn outline_jump_then_view_mode_switch_keeps_the_heading_at_the_top(
 }
 
 #[gpui::test]
+async fn outline_jump_then_repeated_view_mode_switches_keep_the_heading_at_the_top(
+    cx: &mut TestAppContext,
+) {
+    init_editor_test_app(cx);
+    // Same fixture as `outline_jump_then_view_mode_switch_keeps_the_heading_at_the_top`:
+    // long bodies under each heading so the jump parks a heading far down the
+    // document near the top of the viewport.
+    let mut markdown = String::new();
+    for section in 0..12 {
+        markdown.push_str(&format!("## Section {section}\n\n"));
+        for line in 0..25 {
+            markdown.push_str(&format!("body line {line} of section {section}\n\n"));
+        }
+    }
+    let (editor, cx) = cx.add_window_view({
+        let markdown = markdown.clone();
+        move |_window, cx| Editor::from_markdown(cx, markdown.clone(), None)
+    });
+    for _ in 0..3 {
+        redraw(cx);
+    }
+
+    let heading_line = markdown
+        .lines()
+        .position(|line| line.starts_with("## Section 9"))
+        .expect("fixture heading");
+    let heading_source_start: usize = markdown
+        .split_inclusive('\n')
+        .take(heading_line)
+        .map(str::len)
+        .sum();
+
+    // Screen-space distance from the viewport top to the chosen heading, in
+    // each mode's own layout. The heading must stay put across EVERY switch.
+    let heading_distance_from_top_rendered = |editor: &Editor, cx: &gpui::App| -> f32 {
+        let heading_entity = editor
+            .build_source_target_mappings(cx)
+            .into_iter()
+            .find(|mapping| mapping.full_source_range.start == heading_source_start)
+            .map(|mapping| mapping.entity)
+            .expect("heading block");
+        let bounds = heading_entity
+            .read(cx)
+            .last_bounds
+            .expect("heading block mounted");
+        f32::from(bounds.top() - editor.scroll_handle.bounds().top())
+    };
+    let heading_distance_from_top_source = |editor: &Editor, cx: &gpui::App| -> f32 {
+        let block = editor
+            .document
+            .first_root()
+            .expect("source block")
+            .read(cx);
+        let bounds = block.last_bounds.expect("source block mounted");
+        let lines = block.last_layout.as_ref().expect("source layout");
+        let line_top = lines
+            .iter()
+            .take(heading_line)
+            .fold(gpui::px(0.0), |height, line| {
+                height + line.size(block.last_line_height).height
+            });
+        f32::from(bounds.top() + line_top - editor.scroll_handle.bounds().top())
+    };
+    let viewport_height = |editor: &Editor| f32::from(editor.scroll_handle.bounds().size.height);
+    let assert_near_top = |distance: f32, viewport_height: f32, context: &str| {
+        assert!(
+            distance >= 0.0 && distance < viewport_height * 0.25,
+            "{context}: heading sat {distance}px below the viewport top \
+             (viewport {viewport_height}px)"
+        );
+    };
+
+    editor.update(cx, |editor, cx| {
+        assert!(editor.jump_to_outline_heading(heading_line, cx));
+    });
+    for _ in 0..8 {
+        redraw(cx);
+    }
+    let after_jump = editor.update(cx, |editor, cx| {
+        let distance = heading_distance_from_top_rendered(&*editor, cx);
+        assert_near_top(distance, viewport_height(&*editor), "after jump");
+        distance
+    });
+
+    // Toggle back and forth several times. Every restore must get a fresh
+    // convergence budget: `pending_viewport_restore_passes` is only reset in
+    // `from_markdown`, so once it reaches 4, later restores force-settle after
+    // a single pass and the estimated heights of the blocks above the target
+    // leave the heading far from the top (the Source->Rendered return trip).
+    let mut expected = ViewMode::Source;
+    for switch in 1..=6 {
+        editor.update(cx, |editor, cx| editor.toggle_view_mode(cx));
+        for _ in 0..10 {
+            redraw(cx);
+        }
+        let context = format!("switch {switch}");
+        if expected == ViewMode::Source {
+            editor.update(cx, |editor, cx| {
+                assert!(matches!(editor.view_mode, ViewMode::Source));
+                let distance = heading_distance_from_top_source(&*editor, cx);
+                assert_near_top(distance, viewport_height(&*editor), &context);
+            });
+        } else {
+            editor.update(cx, |editor, cx| {
+                assert!(matches!(editor.view_mode, ViewMode::Rendered));
+                let distance = heading_distance_from_top_rendered(&*editor, cx);
+                assert_near_top(distance, viewport_height(&*editor), &context);
+            });
+        }
+        expected = match expected {
+            ViewMode::Source => ViewMode::Rendered,
+            ViewMode::Rendered => ViewMode::Source,
+        };
+    }
+    let _ = after_jump;
+}
+
+#[gpui::test]
 async fn view_mode_switch_at_top_does_not_move_the_viewport(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
     let markdown = (0..150)

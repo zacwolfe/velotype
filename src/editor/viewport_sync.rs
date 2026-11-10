@@ -262,6 +262,11 @@ impl Editor {
         anchor: ViewportAnchor,
         cx: &mut Context<Self>,
     ) {
+        // A fresh restore gets a fresh convergence budget. Without this reset
+        // the counter only ever grows, so after four switches every later
+        // restore force-settles on its first pass and rendered-mode estimated
+        // heights above the target leave the anchor short of where it was.
+        self.pending_viewport_restore_passes = 0;
         self.pending_viewport_restore = Some(anchor);
         self.schedule_scroll_recheck(cx);
         cx.notify();
