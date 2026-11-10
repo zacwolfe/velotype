@@ -455,6 +455,26 @@ async fn mermaid_block_uses_raw_text_editing(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn mermaid_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mut TestAppContext) {
+    let markdown = "```mermaid\nflowchart LR\nA --> B\n```";
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::mermaid(markdown)));
+
+    // The opt-in setting defaults off: a focused mermaid block stays rendered.
+    block.update(cx, |block, cx| {
+        assert!(!block.reveals_raw_source_when_focused(false, cx));
+        assert!(!block.reveals_raw_source_when_focused(true, cx));
+    });
+
+    cx.update(|cx| crate::config::EditorSettings::set_reveal_source_on_focus(cx, true));
+
+    // Enabled: a focused mermaid block reveals raw source; unfocused stays rendered.
+    block.update(cx, |block, cx| {
+        assert!(!block.reveals_raw_source_when_focused(false, cx));
+        assert!(block.reveals_raw_source_when_focused(true, cx));
+    });
+}
+
+#[gpui::test]
 async fn enter_inside_projected_inline_code_inserts_hard_line_without_splitting(
     cx: &mut TestAppContext,
 ) {
