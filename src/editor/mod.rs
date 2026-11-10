@@ -399,6 +399,12 @@ impl Editor {
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
 
+    /// On-disk path backing this editor window, if any. Untitled/scratch buffers
+    /// (no backing file) return `None`.
+    pub(crate) fn open_file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
+    }
+
     pub fn from_markdown(
         cx: &mut Context<Self>,
         markdown: String,

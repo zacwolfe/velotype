@@ -80,6 +80,37 @@ pub(crate) fn open_editor_window(
     handle
 }
 
+/// Brings an already-open editor window for `path` to the foreground, returning
+/// `true` when one was found so the caller skips opening a duplicate.
+///
+/// Paths are compared canonically so a symlinked or differently-normalized
+/// path still matches the window already showing that document.
+fn activate_existing_window_for_file(cx: &mut App, path: &Path) -> bool {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    for window in cx.windows() {
+        let Some(handle) = window.downcast::<Editor>() else {
+            continue;
+        };
+        let already_open = handle
+            .update(cx, |editor, _window, _cx| {
+                editor
+                    .open_file_path()
+                    .map(|open| {
+                        std::fs::canonicalize(open).unwrap_or_else(|_| open.to_path_buf()) == target
+                    })
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if already_open {
+            let _ = handle.update(cx, |_editor, window, _cx| {
+                window.activate_window();
+            });
+            return true;
+        }
+    }
+    false
+}
+
 /// Handles a Finder/single-instance open request, which may name a file or a
 /// directory — the same resolution the CLI applies, so both paths behave
 /// identically.
@@ -89,6 +120,11 @@ pub(crate) fn open_file_in_new_window(cx: &mut App, path: &Path) -> anyhow::Resu
             path: file_path,
             from_directory,
         } => {
+            // If this document is already open, focus its window instead of opening a
+            // duplicate (single-instance / Finder / open-recent behavior).
+            if activate_existing_window_for_file(cx, &file_path) {
+                return Ok(());
+            }
             let markdown = std::fs::read_to_string(&file_path)
                 .with_context(|| format!("failed to read '{}'", file_path.display()))?;
             let handle = open_editor_window(cx, markdown, Some(file_path.clone()));
@@ -1317,7 +1353,7 @@ mod tests {
     use crate::components::{SelectNextWindow, SelectPreviousWindow};
     use crate::i18n::I18nManager;
     use crate::theme::ThemeManager;
-    use gpui::MenuItem;
+    use gpui::{MenuItem, TestAppContext};
     use std::path::PathBuf;
 
     fn action_name(item: &MenuItem) -> &str {
@@ -1827,5 +1863,41 @@ mod tests {
             }
             _ => panic!("expected about action item"),
         }
+    }
+
+    #[gpui::test]
+    async fn activate_existing_window_for_file_focuses_already_open_document(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            I18nManager::init(cx);
+            ThemeManager::init(cx);
+            crate::components::init(cx);
+        });
+
+        // A path need not exist on disk: both windows share the same literal
+        // path, so canonicalization falls back to an identical equal value.
+        let path = std::env::temp_dir().join("velotype-activate-existing-missing.md");
+
+        let first_window =
+            cx.update(|cx| super::open_editor_window(cx, "doc".to_string(), Some(path.clone())));
+        cx.run_until_parked();
+        let second_window = cx.update(|cx| super::open_editor_window(cx, "other".to_string(), None));
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 2);
+        let active = cx.update(|cx| cx.active_window().expect("window should be active"));
+        assert_eq!(active.window_id(), second_window.window_id());
+
+        assert!(cx.update(|cx| super::activate_existing_window_for_file(cx, &path)));
+        let active = cx.update(|cx| cx.active_window().expect("window should be active"));
+        assert_eq!(active.window_id(), first_window.window_id());
+        assert_ne!(active.window_id(), second_window.window_id());
+
+        // A path no window is showing does not activate anything.
+        let other_path = std::env::temp_dir().join("velotype-activate-existing-other.md");
+        assert!(!cx.update(|cx| super::activate_existing_window_for_file(cx, &other_path)));
+        let still_active = cx.update(|cx| cx.active_window().expect("window should be active"));
+        assert_eq!(still_active.window_id(), first_window.window_id());
     }
 }
