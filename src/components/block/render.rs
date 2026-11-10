@@ -3229,7 +3229,7 @@ impl Render for Block {
                     self.last_layout = None;
                     self.last_bounds = None;
                 }
-                let child = if focused {
+                let child = if self.reveals_raw_source_when_focused(focused, cx) {
                     BlockTextElement::new(cx.entity(), is_placeholder).into_any_element()
                 } else {
                     self.render_math_content(&theme)
