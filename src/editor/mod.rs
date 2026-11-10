@@ -48,6 +48,7 @@ mod table_edit;
 mod tests;
 mod tree;
 mod update;
+mod viewport_sync;
 mod window_state;
 mod workspace;
 
@@ -100,7 +101,14 @@ pub struct Editor {
     pending_scroll_target: Option<EntityId>,
     /// Requests another caret scroll after a layout pass.
     pending_scroll_recheck_after_layout: bool,
-    /// Save request deferred until a render pass has a window.
+    /// Anchor that should sit at the top of the viewport once the current view
+    /// mode's layout has been measured. Set by a view-mode switch, which has to
+    /// change the viewport anchor because pixel offsets do not survive the
+    /// relayout.
+    pending_viewport_restore: Option<self::viewport_sync::ViewportAnchor>,
+    /// How many times the queued viewport restore has scrolled while waiting
+    /// for rendered-mode heights above the target to be measured.
+    pending_viewport_restore_passes: u8,
     /// Focused target plus its caret/selection range as of the last frame, so
     /// the viewport can follow the caret however it moved. Caret motion inside a
     /// single block emits no editor-level event — and in source mode the whole
@@ -111,6 +119,7 @@ pub struct Editor {
     /// the user left it, so the next observed caret becomes the baseline instead
     /// of a scroll target. See `Editor::follow_caret_movement`.
     suppress_caret_scroll_follow: bool,
+    /// Save request deferred until a render pass has a window.
     pending_save: bool,
     /// Save As request deferred until a render pass has a window.
     pending_save_as: bool,
@@ -545,6 +554,8 @@ impl Editor {
             pending_scroll_align: ScrollAlign::Nearest,
             pending_scroll_target: None,
             pending_scroll_recheck_after_layout: true,
+            pending_viewport_restore: None,
+            pending_viewport_restore_passes: 0,
             last_caret_position: None,
             suppress_caret_scroll_follow: false,
             pending_save: false,
