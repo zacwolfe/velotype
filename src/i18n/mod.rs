@@ -406,6 +406,8 @@ pub struct I18nStrings {
     pub preferences_reveal_source_on_focus: String,
     /// Label for the reveal-image-source-on-click toggle.
     pub preferences_reveal_image_source_on_click: String,
+    /// Label for the reveal-diagram-source-on-double-click toggle.
+    pub preferences_reveal_diagram_source_on_double_click: String,
     /// Label for the show-table-headers toggle.
     pub preferences_show_table_headers: String,
     /// Label for the edit-tables-as-markdown toggle.
@@ -641,6 +643,7 @@ struct I18nStringsDe {
     preferences_nav_editor: Option<String>,
     preferences_reveal_source_on_focus: Option<String>,
     preferences_reveal_image_source_on_click: Option<String>,
+    preferences_reveal_diagram_source_on_double_click: Option<String>,
     preferences_show_table_headers: Option<String>,
     preferences_edit_tables_as_markdown: Option<String>,
 }
@@ -872,6 +875,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_nav_editor",
     "preferences_reveal_source_on_focus",
     "preferences_reveal_image_source_on_click",
+    "preferences_reveal_diagram_source_on_double_click",
     "preferences_show_table_headers",
     "preferences_edit_tables_as_markdown",
 ];
@@ -1481,6 +1485,9 @@ impl I18nStringsDe {
             preferences_reveal_image_source_on_click: self
                 .preferences_reveal_image_source_on_click
                 .unwrap_or(defaults.preferences_reveal_image_source_on_click),
+            preferences_reveal_diagram_source_on_double_click: self
+                .preferences_reveal_diagram_source_on_double_click
+                .unwrap_or(defaults.preferences_reveal_diagram_source_on_double_click),
             preferences_show_table_headers: self
                 .preferences_show_table_headers
                 .unwrap_or(defaults.preferences_show_table_headers),
@@ -1741,6 +1748,7 @@ impl I18nStrings {
         strings.preferences_nav_editor = "编辑器".into();
         strings.preferences_reveal_source_on_focus = "聚焦时显示 Markdown 源代码".into();
         strings.preferences_reveal_image_source_on_click = "点击时显示图像源代码".into();
+        strings.preferences_reveal_diagram_source_on_double_click = "双击显示 Markdown 源代码".into();
         strings.preferences_show_table_headers = "显示表头".into();
         strings.preferences_edit_tables_as_markdown = "以 Markdown 编辑表格".into();
         strings
@@ -1994,6 +2002,8 @@ impl I18nStrings {
             preferences_nav_editor: "Editor".into(),
             preferences_reveal_source_on_focus: "Reveal Markdown source on focus".into(),
             preferences_reveal_image_source_on_click: "Reveal image source on click".into(),
+            preferences_reveal_diagram_source_on_double_click:
+                "Reveal Markdown source on double-click".into(),
             preferences_show_table_headers: "Show table headers".into(),
             preferences_edit_tables_as_markdown: "Edit tables as Markdown".into(),
         }

@@ -2925,7 +2925,7 @@ async fn typing_identifiers_with_underscores_stays_literal(cx: &mut TestAppConte
     // inline projection. The projection is opt-in (`reveal_source_on_focus`,
     // default off), so enable it explicitly to keep this normalization under
     // test independent of the default.
-    cx.update(|cx| crate::config::EditorSettings::init(cx, true, false, true, false));
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, false, true, false, false));
     let (editor, cx) =
         cx.add_window_view(|_window, cx| Editor::from_markdown(cx, String::new(), None));
     redraw(cx);
@@ -3721,7 +3721,7 @@ async fn focusing_table_cell_with_markdown_editing_enabled_switches_to_raw_markd
     cx: &mut TestAppContext,
 ) {
     init_editor_test_app(cx);
-    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false));
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false, false));
     let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
     let (editor, cx) =
         cx.add_window_view(move |_window, cx| Editor::from_markdown(cx, markdown, None));
@@ -3765,7 +3765,7 @@ async fn focusing_table_cell_with_markdown_editing_enabled_switches_to_raw_markd
 #[gpui::test]
 async fn column_operation_does_not_switch_table_to_raw_markdown(cx: &mut TestAppContext) {
     init_editor_test_app(cx);
-    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false));
+    cx.update(|cx| crate::config::EditorSettings::init(cx, true, true, false, false, false));
     let markdown = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n");
     let editor = cx.new(|cx| Editor::from_markdown(cx, markdown, None));
 

@@ -208,6 +208,7 @@
     "preferences_nav_editor": "",
     "preferences_reveal_source_on_focus": "",
     "preferences_reveal_image_source_on_click": "",
+    "preferences_reveal_diagram_source_on_double_click": "",
     "preferences_show_table_headers": "",
     "preferences_edit_tables_as_markdown": "",
   }

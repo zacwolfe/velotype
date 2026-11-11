@@ -562,6 +562,7 @@ fn main() {
             preferences.edit_tables_as_markdown,
             preferences.reveal_source_on_focus,
             preferences.reveal_image_source_on_click,
+            preferences.reveal_diagram_source_on_double_click,
         );
         net::install_http_client(cx);
         init_editor(cx, &preferences.keybindings);
