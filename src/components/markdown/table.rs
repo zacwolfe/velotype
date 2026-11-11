@@ -712,8 +712,10 @@ fn widths_from_dash_counts(dash_counts: &[usize]) -> Option<Vec<f32>> {
 }
 
 pub(crate) fn serialize_table_cell_markdown(tree: &InlineTextTree) -> String {
+    // `serialize_markdown` already emits GFM-escaped literal text (backslash,
+    // emphasis markers, code backticks), so only the pipe needs escaping here:
+    // a bare `|` would otherwise split the cell.
     tree.serialize_markdown()
-        .replace('\\', "\\\\")
         .replace('|', "\\|")
         .replace('\n', " ")
 }
@@ -1431,6 +1433,37 @@ mod tests {
         let widths = parsed.widths.expect("non-uniform dashes should parse to Some");
         assert_close(widths[0], 0.25);
         assert_close(widths[1], 0.75);
+    }
+
+    #[test]
+    fn special_characters_round_trip_without_double_escaping() {
+        // Regression: `serialize_table_cell_markdown` used to double-escape
+        // every backslash, so a literal `*` cell serialized as `2 \\* 3`,
+        // which re-parses with a visible backslash and corrupts the table.
+        let table = TableData {
+            header: vec![
+                InlineTextTree::plain("Expr".to_string()),
+                InlineTextTree::plain("Path".to_string()),
+                InlineTextTree::plain("Ratio".to_string()),
+            ],
+            rows: vec![vec![
+                InlineTextTree::plain("2 * 3".to_string()),
+                InlineTextTree::plain("C:\\temp\\file".to_string()),
+                InlineTextTree::plain("a | b".to_string()),
+            ]],
+            alignments: vec![TableColumnAlignment::Default; 3],
+            widths: None,
+        };
+        let lines = serialize_table_markdown_lines(&table);
+
+        // The serializer must escape each special character exactly once.
+        assert_eq!(lines[2], "| 2 \\* 3 | C:\\\\temp\\\\file | a \\| b |");
+
+        let parsed = parse_root_table_region(&lines).expect("table should parse");
+        let cells = &parsed.rows[0];
+        assert_eq!(cells[0].visible_text(), "2 * 3");
+        assert_eq!(cells[1].visible_text(), "C:\\temp\\file");
+        assert_eq!(cells[2].visible_text(), "a | b");
     }
 
     #[test]
