@@ -602,6 +602,28 @@ impl Block {
         focused && crate::config::EditorSettings::reveal_source_on_focus(cx)
     }
 
+    /// Whether the block renders as raw Markdown text in source-raw mode.
+    /// Raw-only blocks (comment, raw markdown) always render raw. Widget
+    /// blocks (HTML, math, mermaid) render raw only while focused; math and
+    /// mermaid additionally require the opt-in `reveal_source_on_focus` setting
+    /// (default off), while HTML keeps its existing focus-reveals-raw behavior.
+    pub(crate) fn renders_raw_source_in_source_mode(&self, focused: bool, cx: &App) -> bool {
+        if !self.is_source_raw_mode() {
+            return false;
+        }
+        let renders_widget = matches!(
+            self.kind(),
+            BlockKind::HtmlBlock | BlockKind::MathBlock | BlockKind::MermaidBlock
+        );
+        let focused_reveals_raw = match self.kind() {
+            BlockKind::MathBlock | BlockKind::MermaidBlock => {
+                self.reveals_raw_source_when_focused(focused, cx)
+            }
+            _ => focused,
+        };
+        focused_reveals_raw || !renders_widget
+    }
+
     fn render_mermaid_content(&self, theme: &Theme, window: &Window) -> AnyElement {
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -1956,14 +1978,12 @@ impl Render for Block {
                 .into_any_element();
         }
 
-        // Source-mode rendering: raw text with no formatting.
-        if self.is_source_raw_mode()
-            && (focused
-                || !matches!(
-                    self.kind(),
-                    BlockKind::HtmlBlock | BlockKind::MathBlock | BlockKind::MermaidBlock
-                ))
-        {
+        // Source-mode rendering: raw text with no formatting. Widget blocks
+        // (HTML, math, mermaid) render their visual while unfocused and reveal
+        // raw source while focused; math and mermaid honor the opt-in
+        // `reveal_source_on_focus` setting (default off), while HTML keeps its
+        // existing focus-reveals-raw behavior.
+        if self.renders_raw_source_in_source_mode(focused, cx) {
             if blink_active && self.cursor_blink_task.is_none() {
                 self.start_cursor_blink(cx);
             } else if !blink_active && self.cursor_blink_task.is_some() {
