@@ -200,6 +200,10 @@ pub(crate) struct AppPreferences {
     /// Markdown source for editing. Defaults to `false` so clicking an image
     /// leaves it rendered.
     pub(crate) reveal_image_source_on_click: bool,
+    /// Opt-in: when true, double-clicking a rendered diagram (math or Mermaid)
+    /// block expands it to its raw Markdown source for editing. Defaults to
+    /// `false` so diagrams stay rendered on double-click.
+    pub(crate) reveal_diagram_source_on_double_click: bool,
     pub(crate) image_paste_behavior: ImagePasteBehavior,
     /// Last chosen local policy used when a PicGo upload fails.
     pub(crate) image_paste_fallback: ImagePasteBehavior,
@@ -231,6 +235,7 @@ impl Default for AppPreferences {
             edit_tables_as_markdown: false,
             reveal_source_on_focus: false,
             reveal_image_source_on_click: false,
+            reveal_diagram_source_on_double_click: false,
             image_paste_behavior: ImagePasteBehavior::None,
             image_paste_fallback: ImagePasteBehavior::None,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
@@ -300,6 +305,7 @@ pub struct EditorSettings {
     /// Status bar flags mirrored from persisted preferences.
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
+    reveal_diagram_source_on_double_click: bool,
     status_bar_settings: StatusBarSettings,
     workspace: WorkspacePreferences,
 }
@@ -314,6 +320,7 @@ impl EditorSettings {
         edit_tables_as_markdown: bool,
         reveal_source_on_focus: bool,
         reveal_image_source_on_click: bool,
+        reveal_diagram_source_on_double_click: bool,
     ) {
         let preferences = read_app_preferences().ok();
         let status_bar = preferences
@@ -329,6 +336,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click,
             &status_bar,
             &workspace,
         );
@@ -340,6 +348,7 @@ impl EditorSettings {
         edit_tables_as_markdown: bool,
         reveal_source_on_focus: bool,
         reveal_image_source_on_click: bool,
+        reveal_diagram_source_on_double_click: bool,
         status_bar: &StatusBarPreferences,
         workspace: &WorkspacePreferences,
     ) {
@@ -348,6 +357,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click,
             status_bar_settings: StatusBarSettings {
                 status_bar_enabled: status_bar.enabled,
                 status_bar_show_word_count: status_bar.show_word_count,
@@ -371,6 +381,8 @@ impl EditorSettings {
     pub fn set_show_table_headers(cx: &mut App, show_table_headers: bool) {
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
+        let reveal_diagram_source_on_double_click =
+            Self::reveal_diagram_source_on_double_click(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
@@ -380,6 +392,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click,
             &status_bar,
             &workspace,
         );
@@ -422,10 +435,21 @@ impl EditorSettings {
             .unwrap_or(false)
     }
 
+    /// Opt-in: when true, double-clicking a rendered diagram (math or Mermaid)
+    /// block expands it to its raw Markdown source for editing. Defaults to
+    /// `false` so diagrams stay rendered on double-click.
+    pub fn reveal_diagram_source_on_double_click(cx: &App) -> bool {
+        cx.try_global::<Self>()
+            .map(|settings| settings.reveal_diagram_source_on_double_click)
+            .unwrap_or(false)
+    }
+
     pub fn set_edit_tables_as_markdown(cx: &mut App, edit_tables_as_markdown: bool) {
         let show_table_headers = Self::show_table_headers(cx);
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
+        let reveal_diagram_source_on_double_click =
+            Self::reveal_diagram_source_on_double_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
         Self::set_global(
@@ -434,6 +458,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click,
             &status_bar,
             &workspace,
         );
@@ -471,6 +496,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             Self::reveal_image_source_on_click(cx),
+            Self::reveal_diagram_source_on_double_click(cx),
             &status_bar,
             &workspace,
         );
@@ -505,6 +531,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             Self::reveal_source_on_focus(cx),
             reveal_image_source_on_click,
+            Self::reveal_diagram_source_on_double_click(cx),
             &status_bar,
             &workspace,
         );
@@ -524,6 +551,49 @@ impl EditorSettings {
         }
     }
 
+    /// Opt-in: when true, double-clicking a rendered diagram (math or Mermaid)
+    /// block expands it to its raw Markdown source for editing. Defaults to
+    /// `false` so diagrams stay rendered on double-click.
+    #[allow(dead_code)]
+    pub fn set_reveal_diagram_source_on_double_click(
+        cx: &mut App,
+        reveal_diagram_source_on_double_click: bool,
+    ) {
+        let show_table_headers = Self::show_table_headers(cx);
+        let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
+        let status_bar = Self::status_bar_preferences(cx);
+        let workspace = Self::workspace_preferences(cx);
+        Self::set_global(
+            cx,
+            show_table_headers,
+            edit_tables_as_markdown,
+            Self::reveal_source_on_focus(cx),
+            Self::reveal_image_source_on_click(cx),
+            reveal_diagram_source_on_double_click,
+            &status_bar,
+            &workspace,
+        );
+
+        if cfg!(test) {
+            return;
+        }
+
+        match read_app_preferences() {
+            Ok(mut preferences) => {
+                preferences.reveal_diagram_source_on_double_click =
+                    reveal_diagram_source_on_double_click;
+                if let Err(err) = save_app_preferences(&preferences) {
+                    eprintln!(
+                        "failed to save reveal-diagram-source-on-double-click preference: {err}"
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!("failed to read reveal-diagram-source-on-double-click preference: {err}")
+            }
+        }
+    }
+
     /// Sidebar section state. Defaults to both sections open when the global
     /// has not been installed (e.g. in unit tests), so tests never depend on
     /// the developer's own config file.
@@ -538,6 +608,8 @@ impl EditorSettings {
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
+        let reveal_diagram_source_on_double_click =
+            Self::reveal_diagram_source_on_double_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         Self::set_global(
             cx,
@@ -545,6 +617,7 @@ impl EditorSettings {
             edit_tables_as_markdown,
             reveal_source_on_focus,
             reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click,
             &status_bar,
             &workspace,
         );
@@ -653,6 +726,7 @@ struct EditorPreferencesFile {
     /// Serialized clipboard image storage policy.
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
+    reveal_diagram_source_on_double_click: bool,
     image_paste_behavior: String,
     /// Persisted local fallback policy for PicGo failures.
     image_paste_fallback: String,
@@ -762,6 +836,8 @@ impl From<&AppPreferences> for PreferencesFile {
                 edit_tables_as_markdown: value.edit_tables_as_markdown,
                 reveal_source_on_focus: value.reveal_source_on_focus,
                 reveal_image_source_on_click: value.reveal_image_source_on_click,
+                reveal_diagram_source_on_double_click:
+                    value.reveal_diagram_source_on_double_click,
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
                 image_paste_fallback: value.image_paste_fallback.local_only().as_str().into(),
                 picgo_server_url: value.picgo_server_url.clone(),
@@ -884,6 +960,11 @@ fn app_preferences_from_toml_value(
     let reveal_image_source_on_click = value
         .get("editor")
         .and_then(|editor| editor.get("reveal_image_source_on_click"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let reveal_diagram_source_on_double_click = value
+        .get("editor")
+        .and_then(|editor| editor.get("reveal_diagram_source_on_double_click"))
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let image_paste_behavior = value
@@ -1032,6 +1113,7 @@ fn app_preferences_from_toml_value(
         edit_tables_as_markdown,
         reveal_source_on_focus,
         reveal_image_source_on_click,
+        reveal_diagram_source_on_double_click,
         image_paste_behavior,
         image_paste_fallback,
         picgo_server_url,
@@ -1191,6 +1273,7 @@ pub(crate) fn save_preferences_from_window(
     edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
+    reveal_diagram_source_on_double_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1209,6 +1292,7 @@ pub(crate) fn save_preferences_from_window(
         edit_tables_as_markdown,
         reveal_source_on_focus,
         reveal_image_source_on_click,
+        reveal_diagram_source_on_double_click,
         keybindings,
         status_bar,
         fonts,
@@ -1230,6 +1314,7 @@ fn save_preferences_from_window_with_dirs(
     edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
+    reveal_diagram_source_on_double_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1249,6 +1334,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.edit_tables_as_markdown = edit_tables_as_markdown;
     preferences.reveal_source_on_focus = reveal_source_on_focus;
     preferences.reveal_image_source_on_click = reveal_image_source_on_click;
+    preferences.reveal_diagram_source_on_double_click =
+        reveal_diagram_source_on_double_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -1332,6 +1419,7 @@ pub(crate) struct PreferencesWindow {
     edit_tables_as_markdown: bool,
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
+    reveal_diagram_source_on_double_click: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     /// Startup policy at the last successful save.
     saved_startup_open: StartupOpenPreference,
@@ -1354,6 +1442,7 @@ pub(crate) struct PreferencesWindow {
     saved_edit_tables_as_markdown: bool,
     saved_reveal_source_on_focus: bool,
     saved_reveal_image_source_on_click: bool,
+    saved_reveal_diagram_source_on_double_click: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
     /// Theme catalog snapshot captured when this window opens.
     theme_options: Vec<ThemeCatalogEntry>,
@@ -1515,6 +1604,8 @@ impl PreferencesWindow {
             edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             reveal_source_on_focus: preferences.reveal_source_on_focus,
             reveal_image_source_on_click: preferences.reveal_image_source_on_click,
+            reveal_diagram_source_on_double_click:
+                preferences.reveal_diagram_source_on_double_click,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
@@ -1534,6 +1625,8 @@ impl PreferencesWindow {
             saved_edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
+            saved_reveal_diagram_source_on_double_click:
+                preferences.reveal_diagram_source_on_double_click,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -1625,6 +1718,8 @@ impl PreferencesWindow {
             || self.edit_tables_as_markdown != self.saved_edit_tables_as_markdown
             || self.reveal_source_on_focus != self.saved_reveal_source_on_focus
             || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
+            || self.reveal_diagram_source_on_double_click
+                != self.saved_reveal_diagram_source_on_double_click
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -1931,6 +2026,7 @@ impl PreferencesWindow {
             self.edit_tables_as_markdown,
             self.reveal_source_on_focus,
             self.reveal_image_source_on_click,
+            self.reveal_diagram_source_on_double_click,
             self.keybindings.clone(),
             &StatusBarPreferences {
                 enabled: self.status_bar_enabled,
@@ -1995,6 +2091,8 @@ impl PreferencesWindow {
             settings.edit_tables_as_markdown = preferences.edit_tables_as_markdown;
             settings.reveal_source_on_focus = preferences.reveal_source_on_focus;
             settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
+            settings.reveal_diagram_source_on_double_click =
+                preferences.reveal_diagram_source_on_double_click;
         });
         FontSettings::update(cx, preferences.fonts.clone())
             .expect("saved font stacks were validated");
@@ -2021,6 +2119,8 @@ impl PreferencesWindow {
         self.saved_edit_tables_as_markdown = self.edit_tables_as_markdown;
         self.saved_reveal_source_on_focus = self.reveal_source_on_focus;
         self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
+        self.saved_reveal_diagram_source_on_double_click =
+            self.reveal_diagram_source_on_double_click;
         cx.notify();
     }
 
@@ -2551,6 +2651,7 @@ impl PreferencesWindow {
                 ));
             }
         }
+<<<<<<< HEAD
         let mut content = div().w_full().flex().flex_col().gap(px(14.0));
         if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
             let status = match self.picgo_status {
@@ -2589,6 +2690,17 @@ impl PreferencesWindow {
                         self.reveal_image_source_on_click,
                         |this, _, _, cx| {
                             this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
+                            cx.notify();
+                        },
+                        theme,
+                        cx,
+                    ))
+                    .child(self.switch_row(
+                        &strings.preferences_reveal_diagram_source_on_double_click,
+                        self.reveal_diagram_source_on_double_click,
+                        |this, _, _, cx| {
+                            this.reveal_diagram_source_on_double_click = !this
+                                .reveal_diagram_source_on_double_click;
                             cx.notify();
                         },
                         theme,
@@ -3639,7 +3751,7 @@ mod tests {
             I18nManager::init_with_language_id(cx, "en-US");
             ThemeManager::init_with_theme_id(cx, "velotype");
             crate::components::init(cx);
-            EditorSettings::init(cx, true, false, false, false);
+            EditorSettings::init(cx, true, false, false, false, false);
         });
     }
 
@@ -3843,6 +3955,7 @@ mod tests {
             edit_tables_as_markdown: true,
             reveal_source_on_focus: true,
             reveal_image_source_on_click: true,
+            reveal_diagram_source_on_double_click: true,
             image_paste_behavior: ImagePasteBehavior::CopyToAssetsFolder,
             image_paste_fallback: ImagePasteBehavior::CopyToAssetsFolder,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
@@ -3872,6 +3985,7 @@ mod tests {
         assert!(text.contains("edit_tables_as_markdown = true"));
         assert!(text.contains("reveal_source_on_focus = true"));
         assert!(text.contains("reveal_image_source_on_click = true"));
+        assert!(text.contains("reveal_diagram_source_on_double_click = true"));
         assert!(text.contains("single_instance = false"));
         assert!(text.contains("image_paste_behavior = \"copy_to_assets_folder\""));
         assert!(text.contains("[fonts]"));
@@ -3948,6 +4062,7 @@ mod tests {
             edit_tables_as_markdown: false,
             reveal_source_on_focus: false,
             reveal_image_source_on_click: false,
+            reveal_diagram_source_on_double_click: false,
             image_paste_behavior: ImagePasteBehavior::None,
             image_paste_fallback: ImagePasteBehavior::None,
             picgo_server_url: DEFAULT_PICGO_SERVER_URL.into(),
@@ -3974,6 +4089,7 @@ mod tests {
             true,
             true,
             false,
+            false,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &FontPreferences::default(),
@@ -3995,6 +4111,7 @@ mod tests {
         );
         assert!(saved.reveal_source_on_focus);
         assert!(!saved.reveal_image_source_on_click);
+        assert!(!saved.reveal_diagram_source_on_double_click);
         assert!(!saved.show_table_headers);
         assert!(saved.edit_tables_as_markdown);
         let _ = std::fs::remove_dir_all(root);
@@ -4294,7 +4411,7 @@ mod tests {
     async fn edit_tables_as_markdown_setter_round_trips_through_the_global(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::edit_tables_as_markdown(cx)));
 
         cx.update(|cx| EditorSettings::set_edit_tables_as_markdown(cx, true));
@@ -4314,7 +4431,7 @@ mod tests {
 
     #[gpui::test]
     async fn reveal_source_on_focus_setter_round_trips_through_the_global(cx: &mut TestAppContext) {
-        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_source_on_focus(cx)));
 
         cx.update(|cx| EditorSettings::set_reveal_source_on_focus(cx, true));
@@ -4338,7 +4455,7 @@ mod tests {
     async fn reveal_image_source_on_click_setter_round_trips_through_the_global(
         cx: &mut TestAppContext,
     ) {
-        cx.update(|cx| EditorSettings::init(cx, true, false, false, false));
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx)));
 
         cx.update(|cx| EditorSettings::set_reveal_image_source_on_click(cx, true));
@@ -4346,5 +4463,34 @@ mod tests {
 
         cx.update(|cx| EditorSettings::set_reveal_image_source_on_click(cx, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_image_source_on_click(cx)));
+    }
+
+    #[gpui::test]
+    async fn reveal_diagram_source_on_double_click_defaults_to_false_with_no_global(
+        cx: &mut TestAppContext,
+    ) {
+        // No `EditorSettings::init` call: the getter must not depend on the
+        // developer's own config.toml, so tests never observe their config.
+        let enabled =
+            cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx));
+        assert!(!enabled);
+    }
+
+    #[gpui::test]
+    async fn reveal_diagram_source_on_double_click_setter_round_trips_through_the_global(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| EditorSettings::init(cx, true, false, false, false, false));
+        assert!(!cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
+
+        cx.update(
+            |cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, true),
+        );
+        assert!(cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
+
+        cx.update(
+            |cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, false),
+        );
+        assert!(!cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
     }
 }
