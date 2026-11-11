@@ -507,6 +507,141 @@ async fn math_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mut T
 }
 
 #[gpui::test]
+async fn diagram_blocks_start_unrevealed_and_stay_rendered(cx: &mut TestAppContext) {
+    let mermaid = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::mermaid("```mermaid\nflowchart LR\nA --> B\n```"),
+        )
+    });
+    let math = cx.new(|cx| Block::with_record(cx, BlockRecord::math("$$n^2$$")));
+
+    for block in [&mermaid, &math] {
+        // A fresh diagram block is never revealed; with both opt-in settings
+        // off (the defaults), even a focused block stays rendered.
+        block.update(cx, |block, cx| {
+            assert!(!block.diagram_source_revealed);
+            assert!(!block.reveals_raw_source_when_focused(false, cx));
+            assert!(!block.reveals_raw_source_when_focused(true, cx));
+            assert!(!block.renders_raw_source_in_source_mode(true, cx));
+        });
+    }
+}
+
+#[gpui::test]
+async fn revealed_diagram_stays_raw_while_unfocused(cx: &mut TestAppContext) {
+    let mermaid = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::mermaid("```mermaid\nflowchart LR\nA --> B\n```"),
+        )
+    });
+    let math = cx.new(|cx| Block::with_record(cx, BlockRecord::math("$$n^2$$")));
+
+    for block in [&mermaid, &math] {
+        // A user-toggled reveal outlives focus: the raw Markdown source stays
+        // visible even when the block is not focused.
+        block.update(cx, |block, cx| {
+            block.diagram_source_revealed = true;
+            assert!(block.reveals_raw_source_when_focused(false, cx));
+            assert!(block.reveals_raw_source_when_focused(true, cx));
+            assert!(block.renders_raw_source_in_source_mode(false, cx));
+        });
+    }
+}
+
+#[gpui::test]
+async fn double_click_on_diagram_without_pref_keeps_rendered_and_focuses(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let math = cx.new(|cx| Block::with_record(cx, BlockRecord::math("$$n^2$$")));
+
+    let seen: Rc<RefCell<Vec<BlockEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    cx.update(|_window, cx| {
+        cx.subscribe(&math, move |_block, event: &BlockEvent, _cx| {
+            sink.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+
+    // With the double-click preference off (default), a double click does not
+    // toggle the reveal; it falls through to the normal mouse-down path.
+    cx.update(|window, cx| {
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 2,
+            first_mouse: false,
+        };
+        math.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+    });
+
+    math.read_with(cx, |block, _cx| {
+        assert!(!block.diagram_source_revealed);
+        assert!(!block.reveals_raw_source_when_focused(false, _cx));
+    });
+    // The fall-through path requested focus for the block.
+    assert!(
+        seen.borrow()
+            .iter()
+            .any(|event| matches!(event, BlockEvent::RequestFocus))
+    );
+}
+
+#[gpui::test]
+async fn double_click_toggles_diagram_source_reveal_when_pref_enabled(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let mermaid = cx.new(|cx| {
+        Block::with_record(
+            cx,
+            BlockRecord::mermaid("```mermaid\nflowchart LR\nA --> B\n```"),
+        )
+    });
+    let math = cx.new(|cx| Block::with_record(cx, BlockRecord::math("$$n^2$$")));
+
+    // The preference is opt-in and defaults off.
+    assert!(!cx.update(|_window, cx| {
+        crate::config::EditorSettings::reveal_diagram_source_on_double_click(cx)
+    }));
+
+    for block in [&mermaid, &math] {
+        cx.update(|_window, cx| {
+            crate::config::EditorSettings::set_reveal_diagram_source_on_double_click(cx, true)
+        });
+
+        let double_click = || MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 2,
+            first_mouse: false,
+        };
+
+        // First double-click reveals the raw Markdown source.
+        cx.update(|window, cx| {
+            let event = double_click();
+            block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+        });
+        block.read_with(cx, |block, _cx| {
+            assert!(block.diagram_source_revealed);
+            // The reveal holds even while the block is unfocused.
+            assert!(block.reveals_raw_source_when_focused(false, _cx));
+        });
+
+        // A second double-click toggles back to the rendered diagram.
+        cx.update(|window, cx| {
+            let event = double_click();
+            block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+        });
+        block.read_with(cx, |block, _cx| {
+            assert!(!block.diagram_source_revealed);
+            assert!(!block.reveals_raw_source_when_focused(false, _cx));
+        });
+    }
+}
+
+#[gpui::test]
 async fn html_block_focus_reveals_raw_source_regardless_of_setting(cx: &mut TestAppContext) {
     let block = cx.new(|cx| Block::with_record(cx, BlockRecord::html("<details>...</details>")));
 

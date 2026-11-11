@@ -1479,6 +1479,24 @@ impl Block {
             return;
         }
 
+        // Double-clicking a rendered math/mermaid diagram toggles its raw
+        // Markdown source when the user opted into
+        // `reveal_diagram_source_on_double_click` (default off). Claimed
+        // before word selection so the gesture reveals instead of selecting.
+        if event.click_count >= 2
+            && matches!(self.kind(), BlockKind::MathBlock | BlockKind::MermaidBlock)
+            && crate::config::EditorSettings::reveal_diagram_source_on_double_click(cx)
+        {
+            self.diagram_source_revealed = !self.diagram_source_revealed;
+            self.is_selecting = false;
+            if !was_focused {
+                cx.emit(BlockEvent::RequestFocus);
+            }
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+
         // Double-click selects the word under the pointer, the standard
         // text-editor gesture. Links and footnote references keep their existing
         // double-click meaning (open / jump to definition), so no word is

@@ -209,6 +209,10 @@ pub struct Block {
     image_edit_expanded: bool,
     image_expand_requested: bool,
     pub(crate) html_details_open: bool,
+    /// When true, a rendered math/mermaid block shows its raw Markdown source
+    /// instead of the diagram. Toggled by double-clicking while the opt-in
+    /// `reveal_diagram_source_on_double_click` setting is enabled; not persisted.
+    pub(crate) diagram_source_revealed: bool,
     image_base_dir: Option<PathBuf>,
     /// Memoized [`resolve_image_source`] results, see
     /// [`Self::resolve_image_source_cached`].
@@ -315,6 +319,7 @@ impl Block {
             image_edit_expanded: false,
             image_expand_requested: false,
             html_details_open: false,
+            diagram_source_revealed: false,
             image_base_dir: None,
             resolved_image_cache: RefCell::new(HashMap::new()),
             image_reference_definitions: Arc::default(),

@@ -594,12 +594,15 @@ impl Block {
         }
     }
 
-    /// Whether a focused rendered "widget" block (math, mermaid) should swap
-    /// its rendered visual for raw Markdown source. The reveal is opt-in via
-    /// `reveal_source_on_focus` (default off): a focused block stays rendered
-    /// unless the user enables the preference.
+    /// Whether a rendered "widget" block (math, mermaid) should swap its
+    /// rendered visual for raw Markdown source. Two opt-in paths reveal the
+    /// source: focusing the block while `reveal_source_on_focus` is enabled
+    /// (default off), or the user-toggled `diagram_source_revealed` state set
+    /// by double-clicking when `reveal_diagram_source_on_double_click` is on.
+    /// A revealed block stays raw until toggled back, even while unfocused.
     pub(crate) fn reveals_raw_source_when_focused(&self, focused: bool, cx: &App) -> bool {
-        focused && crate::config::EditorSettings::reveal_source_on_focus(cx)
+        self.diagram_source_revealed
+            || (focused && crate::config::EditorSettings::reveal_source_on_focus(cx))
     }
 
     /// Whether the block renders as raw Markdown text in source-raw mode.
