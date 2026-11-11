@@ -568,6 +568,10 @@ async fn mermaid_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mu
     block.update(cx, |block, cx| {
         assert!(!block.reveals_raw_source_when_focused(false, cx));
         assert!(!block.reveals_raw_source_when_focused(true, cx));
+        // Unfocused blocks always render the diagram regardless of the setting.
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        // Focused blocks render the diagram while the setting is off.
+        assert!(!block.renders_raw_source_in_source_mode(true, cx));
     });
 
     cx.update(|cx| crate::config::EditorSettings::set_reveal_source_on_focus(cx, true));
@@ -576,6 +580,8 @@ async fn mermaid_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mu
     block.update(cx, |block, cx| {
         assert!(!block.reveals_raw_source_when_focused(false, cx));
         assert!(block.reveals_raw_source_when_focused(true, cx));
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        assert!(block.renders_raw_source_in_source_mode(true, cx));
     });
 }
 
@@ -588,6 +594,10 @@ async fn math_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mut T
     block.update(cx, |block, cx| {
         assert!(!block.reveals_raw_source_when_focused(false, cx));
         assert!(!block.reveals_raw_source_when_focused(true, cx));
+        // Unfocused blocks always render the formula regardless of the setting.
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        // Focused blocks render the formula while the setting is off.
+        assert!(!block.renders_raw_source_in_source_mode(true, cx));
     });
 
     cx.update(|cx| crate::config::EditorSettings::set_reveal_source_on_focus(cx, true));
@@ -596,6 +606,28 @@ async fn math_block_reveals_source_on_focus_only_when_setting_enabled(cx: &mut T
     block.update(cx, |block, cx| {
         assert!(!block.reveals_raw_source_when_focused(false, cx));
         assert!(block.reveals_raw_source_when_focused(true, cx));
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        assert!(block.renders_raw_source_in_source_mode(true, cx));
+    });
+}
+
+#[gpui::test]
+async fn html_block_focus_reveals_raw_source_regardless_of_setting(cx: &mut TestAppContext) {
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::html("<details>...</details>")));
+
+    // HTML keeps its pre-existing behavior: a focused block reveals raw source
+    // whether or not `reveal_source_on_focus` is set; unfocused renders the
+    // HTML widget.
+    block.update(cx, |block, cx| {
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        assert!(block.renders_raw_source_in_source_mode(true, cx));
+    });
+
+    cx.update(|cx| crate::config::EditorSettings::set_reveal_source_on_focus(cx, true));
+
+    block.update(cx, |block, cx| {
+        assert!(!block.renders_raw_source_in_source_mode(false, cx));
+        assert!(block.renders_raw_source_in_source_mode(true, cx));
     });
 }
 
