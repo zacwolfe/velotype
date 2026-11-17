@@ -141,7 +141,7 @@ impl Editor {
             .start;
         let max_content = mapping.content_to_source.len().saturating_sub(1);
         mapping.full_source_range.start
-            + mapping.content_to_source[markdown_offset.min(max_content)]
+            + mapping.content_to_source[markdown_offset.min(max_content)] as usize
     }
 
     /// Canonical Markdown byte offset of the text currently at the top of the

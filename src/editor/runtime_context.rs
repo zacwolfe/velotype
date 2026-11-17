@@ -106,6 +106,19 @@ impl Editor {
         base_dir: Option<&Path>,
         cx: &mut Context<Self>,
     ) {
+        // Blocks keep their own image runtime in sync when their content
+        // changes, so a block whose document-scoped context already matches
+        // needs no work here. Skipping the update also skips the `cx.notify()`
+        // that would otherwise dirty the view for every block in the document
+        // on every rebuild.
+        if block.read(cx).runtime_context_matches(
+            base_dir,
+            &self.image_reference_definitions,
+            &self.link_reference_definitions,
+            &self.footnote_registry,
+        ) {
+            return;
+        }
         let next_base_dir = base_dir.map(Path::to_path_buf);
         let image_reference_definitions = self.image_reference_definitions.clone();
         let link_reference_definitions = self.link_reference_definitions.clone();
@@ -204,18 +217,31 @@ impl Editor {
             }
         }
 
-        self.footnote_registry = Arc::new(FootnoteRegistry {
+        let next_registry = FootnoteRegistry {
             bindings,
             block_occurrences,
-        });
+        };
+        // Content-equal registries are interchangeable, so keep the existing
+        // allocation. Blocks hold the registry by `Arc`, and pointer identity
+        // lets `sync_runtime_context_for_block` skip them without a deep
+        // comparison of every block's context.
+        if next_registry != *self.footnote_registry {
+            self.footnote_registry = Arc::new(next_registry);
+        }
     }
 
     /// Reparses document references and distributes their context to blocks and table cells.
     pub(super) fn rebuild_image_runtimes(&mut self, cx: &mut Context<Self>) {
         let base_dir = self.image_base_dir();
         let markdown = self.document.markdown_text(cx);
-        self.image_reference_definitions = Arc::new(parse_image_reference_definitions(&markdown));
-        self.link_reference_definitions = Arc::new(parse_link_reference_definitions(&markdown));
+        let image_reference_definitions = parse_image_reference_definitions(&markdown);
+        if image_reference_definitions != *self.image_reference_definitions {
+            self.image_reference_definitions = Arc::new(image_reference_definitions);
+        }
+        let link_reference_definitions = parse_link_reference_definitions(&markdown);
+        if link_reference_definitions != *self.link_reference_definitions {
+            self.link_reference_definitions = Arc::new(link_reference_definitions);
+        }
         self.rebuild_footnote_registry(cx);
         let visible = self.document.visible_blocks().to_vec();
         for visible_block in visible {

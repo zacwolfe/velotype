@@ -131,7 +131,7 @@ async fn projected_unicode_footnote_maps_only_to_source_boundaries(cx: &mut Test
             let markdown = block.record.title.serialize_markdown();
             for offset in 0..=block.display_text().len() {
                 let clean = block.current_to_clean_offset(offset);
-                assert!(block.render_cache.visible_text().is_char_boundary(clean));
+                assert!(block.render_cache().visible_text().is_char_boundary(clean));
                 let source_range = block.current_range_to_markdown_range(offset..offset);
                 assert!(markdown.get(source_range).is_some());
             }

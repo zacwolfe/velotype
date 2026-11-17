@@ -484,9 +484,9 @@ pub(super) struct SourceTargetMapping {
     /// Absolute canonical-source byte span, including the block's Markdown prefixes.
     full_source_range: std::ops::Range<usize>,
     /// Content-byte cursor positions mapped to block-relative source positions.
-    content_to_source: Vec<usize>,
+    content_to_source: Vec<u32>,
     /// Block-relative source positions mapped back to content-byte positions.
-    source_to_content: Vec<usize>,
+    source_to_content: Vec<u32>,
 }
 
 /// The two editing views the editor can present.

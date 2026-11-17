@@ -4,6 +4,21 @@ use std::ops::Range;
 
 use super::*;
 
+/// Narrow a byte offset into the compact `u32` mapping vectors.
+///
+/// Both mapping tables store offsets as `u32` to halve their footprint. A
+/// document whose expanded text or content exceeds `u32::MAX` bytes cannot be
+/// represented, so the bound is asserted in debug builds and the cast stays a
+/// no-op in release builds for every document that fits the mapping.
+#[inline]
+fn map_offset(offset: usize) -> u32 {
+    debug_assert!(
+        offset <= u32::MAX as usize,
+        "source mapping offset {offset} exceeds u32::MAX"
+    );
+    offset as u32
+}
+
 impl Editor {
     /// Returns canonical rendered Markdown or the source editor's raw text.
     pub(super) fn current_document_source(&self, cx: &App) -> String {
@@ -32,7 +47,7 @@ impl Editor {
         content: &str,
         first_prefix: &str,
         continuation_prefix: &str,
-    ) -> (String, Vec<usize>, Vec<usize>) {
+    ) -> (String, Vec<u32>, Vec<u32>) {
         let mut full = String::new();
         let mut content_to_source = vec![0; content.len() + 1];
         let mut source_to_content = vec![0];
@@ -42,29 +57,29 @@ impl Editor {
 
         let mut content_offset = 0usize;
         while content_offset < content.len() {
-            content_to_source[content_offset] = full.len();
+            content_to_source[content_offset] = map_offset(full.len());
             let ch = content[content_offset..]
                 .chars()
                 .next()
                 .expect("content offset should stay on char boundaries");
             let start = full.len();
             full.push(ch);
-            source_to_content.resize(full.len() + 1, content_offset);
+            source_to_content.resize(full.len() + 1, map_offset(content_offset));
             for index in start..=full.len() {
-                source_to_content[index] = content_offset;
+                source_to_content[index] = map_offset(content_offset);
             }
             content_offset += ch.len_utf8();
             if ch == '\n' {
                 let prefix_start = full.len();
                 full.push_str(continuation_prefix);
-                source_to_content.resize(full.len() + 1, content_offset);
+                source_to_content.resize(full.len() + 1, map_offset(content_offset));
                 for index in prefix_start..=full.len() {
-                    source_to_content[index] = content_offset;
+                    source_to_content[index] = map_offset(content_offset);
                 }
             }
         }
-        content_to_source[content.len()] = full.len();
-        source_to_content[full.len()] = content.len();
+        content_to_source[content.len()] = map_offset(full.len());
+        source_to_content[full.len()] = map_offset(content.len());
 
         (full, content_to_source, source_to_content)
     }
@@ -74,7 +89,7 @@ impl Editor {
         content: &str,
         indentation: &str,
         language: Option<&SharedString>,
-    ) -> (String, Vec<usize>, Vec<usize>) {
+    ) -> (String, Vec<u32>, Vec<u32>) {
         let fence = self::persistence::safe_code_fence_with_info(
             content,
             language.map(|language| language.as_ref()),
@@ -99,35 +114,35 @@ impl Editor {
 
         let mut content_offset = 0usize;
         while content_offset < content.len() {
-            content_to_source[content_offset] = full.len();
+            content_to_source[content_offset] = map_offset(full.len());
             let ch = content[content_offset..]
                 .chars()
                 .next()
                 .expect("content offset should stay on char boundaries");
             let start = full.len();
             full.push(ch);
-            source_to_content.resize(full.len() + 1, content_offset);
+            source_to_content.resize(full.len() + 1, map_offset(content_offset));
             for index in start..=full.len() {
-                source_to_content[index] = content_offset;
+                source_to_content[index] = map_offset(content_offset);
             }
             content_offset += ch.len_utf8();
             if ch == '\n' {
                 let line_prefix_start = full.len();
                 full.push_str(indentation);
-                source_to_content.resize(full.len() + 1, content_offset);
+                source_to_content.resize(full.len() + 1, map_offset(content_offset));
                 for index in line_prefix_start..=full.len() {
-                    source_to_content[index] = content_offset;
+                    source_to_content[index] = map_offset(content_offset);
                 }
             }
         }
-        content_to_source[content.len()] = full.len();
-        source_to_content[full.len()] = content.len();
+        content_to_source[content.len()] = map_offset(full.len());
+        source_to_content[full.len()] = map_offset(content.len());
 
         full.push('\n');
-        source_to_content.resize(full.len() + 1, content.len());
+        source_to_content.resize(full.len() + 1, map_offset(content.len()));
         full.push_str(&fence);
-        source_to_content.resize(full.len() + 1, content.len());
-        source_to_content[full.len()] = content.len();
+        source_to_content.resize(full.len() + 1, map_offset(content.len()));
+        source_to_content[full.len()] = map_offset(content.len());
 
         (full, content_to_source, source_to_content)
     }
@@ -183,15 +198,15 @@ impl Editor {
         let mut source_to_content = vec![0; full_text.len() + 1];
         let id_start = 2usize;
         for offset in 0..=footnote_id.len() {
-            content_to_source[offset] = id_start + offset;
+            content_to_source[offset] = map_offset(id_start + offset);
         }
         for source_offset in 0..=full_text.len() {
             source_to_content[source_offset] = if source_offset <= id_start {
                 0
             } else if source_offset >= id_start + footnote_id.len() {
-                footnote_id.len()
+                map_offset(footnote_id.len())
             } else {
-                source_offset - id_start
+                map_offset(source_offset - id_start)
             };
         }
 
@@ -291,10 +306,10 @@ impl Editor {
     /// Wraps existing text and offset maps in one prefix per quote depth.
     pub(super) fn wrap_source_mapping_with_quotes(
         mut full_text: String,
-        mut content_to_source: Vec<usize>,
-        mut source_to_content: Vec<usize>,
+        mut content_to_source: Vec<u32>,
+        mut source_to_content: Vec<u32>,
         quote_depth: usize,
-    ) -> (String, Vec<usize>, Vec<usize>) {
+    ) -> (String, Vec<u32>, Vec<u32>) {
         for _ in 0..quote_depth {
             let (wrapped_text, inner_to_wrapped, wrapped_to_inner) =
                 Self::build_prefixed_content_mapping(&full_text, "> ", "> ");
@@ -303,11 +318,11 @@ impl Editor {
 
             let wrapped_content_to_source = content_to_source
                 .iter()
-                .map(|offset| inner_to_wrapped[(*offset).min(max_inner_to_wrapped)])
+                .map(|offset| inner_to_wrapped[(*offset as usize).min(max_inner_to_wrapped)])
                 .collect::<Vec<_>>();
             let wrapped_source_to_content = wrapped_to_inner
                 .iter()
-                .map(|offset| source_to_content[(*offset).min(max_source_to_content)])
+                .map(|offset| source_to_content[(*offset as usize).min(max_source_to_content)])
                 .collect::<Vec<_>>();
 
             full_text = wrapped_text;
@@ -353,8 +368,8 @@ impl Editor {
                 mappings.push(SourceTargetMapping {
                     entity: cell.clone(),
                     full_source_range: start..start + len,
-                    content_to_source: (0..=len).collect(),
-                    source_to_content: (0..=len).collect(),
+                    content_to_source: (0..=len as u32).collect(),
+                    source_to_content: (0..=len as u32).collect(),
                 });
                 line_cursor += len + 3;
             }
@@ -384,8 +399,8 @@ impl Editor {
                 mappings.push(SourceTargetMapping {
                     entity: cell.clone(),
                     full_source_range: start..start + len,
-                    content_to_source: (0..=len).collect(),
-                    source_to_content: (0..=len).collect(),
+                    content_to_source: (0..=len as u32).collect(),
+                    source_to_content: (0..=len as u32).collect(),
                 });
                 line_cursor += len + 3;
             }
@@ -462,8 +477,8 @@ impl Editor {
                 } else {
                     Self::wrap_source_mapping_with_quotes(
                         line.clone(),
-                        (0..=line.len()).collect(),
-                        (0..=line.len()).collect(),
+                        (0..=line.len() as u32).collect(),
+                        (0..=line.len() as u32).collect(),
                         quote_depth,
                     )
                     .0
@@ -557,8 +572,8 @@ impl Editor {
                     mappings.push(SourceTargetMapping {
                         entity: block.clone(),
                         full_source_range: absolute_start..absolute_start + full_text.len(),
-                        content_to_source: vec![full_text.len()],
-                        source_to_content: vec![0; full_text.len() + 1],
+                        content_to_source: vec![full_text.len() as u32],
+                        source_to_content: vec![0u32; full_text.len() + 1],
                     });
                     full_text.len()
                 } else {

@@ -440,6 +440,23 @@ impl Block {
     }
 
     /// Updates image, link, and footnote context, refreshing affected caches.
+
+    /// True when this block already runs with exactly this document-scoped
+    /// runtime context. Lets the editor skip the update/notify cycle for
+    /// blocks whose context did not change.
+    pub(crate) fn runtime_context_matches(
+        &self,
+        base_dir: Option<&Path>,
+        image_reference_definitions: &Arc<ImageReferenceDefinitions>,
+        link_reference_definitions: &Arc<LinkReferenceDefinitions>,
+        footnote_registry: &Arc<FootnoteRegistry>,
+    ) -> bool {
+        self.image_base_dir.as_deref() == base_dir
+            && Arc::ptr_eq(&self.image_reference_definitions, image_reference_definitions)
+            && Arc::ptr_eq(&self.link_reference_definitions, link_reference_definitions)
+            && Arc::ptr_eq(&self.footnote_registry, footnote_registry)
+    }
+
     pub(crate) fn set_runtime_context(
         &mut self,
         base_dir: Option<PathBuf>,
@@ -1168,7 +1185,7 @@ impl Block {
     /// Maps and scalar-normalizes a clean visible-text range into display space.
     pub(crate) fn clean_to_current_range(&self, range: Range<usize>) -> Range<usize> {
         let range =
-            crate::text_offsets::normalize_utf8_range(self.render_cache.visible_text(), range);
+            crate::text_offsets::normalize_utf8_range(self.render_cache().visible_text(), range);
         if range.is_empty() {
             let offset = self.clean_to_current_cursor_offset(range.start);
             let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
@@ -1186,7 +1203,7 @@ impl Block {
     pub(crate) fn current_to_clean_range(&self, range: Range<usize>) -> Range<usize> {
         let range = crate::text_offsets::normalize_utf8_range(self.display_text(), range);
         crate::text_offsets::normalize_utf8_range(
-            self.render_cache.visible_text(),
+            self.render_cache().visible_text(),
             self.current_to_clean_offset(range.start)..self.current_to_clean_offset(range.end),
         )
     }
@@ -1195,7 +1212,7 @@ impl Block {
     pub(crate) fn current_to_clean_offset(&self, offset: usize) -> usize {
         let offset = crate::text_offsets::floor_char_boundary(self.display_text(), offset);
         crate::text_offsets::floor_char_boundary(
-            self.render_cache.visible_text(),
+            self.render_cache().visible_text(),
             self.unexpand_offset(offset),
         )
     }
