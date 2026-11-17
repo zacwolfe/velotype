@@ -1,5 +1,6 @@
 //! Editable block runtime and block-local state transitions.
 
+use std::cell::OnceCell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
@@ -115,7 +116,7 @@ impl EventEmitter<BlockEvent> for Block {}
 pub struct Block {
     /// Persistent block kind, title, and identity.
     pub record: BlockRecord,
-    pub(crate) render_cache: Option<InlineRenderCache>,
+    pub(crate) render_cache: OnceCell<InlineRenderCache>,
     code_highlight: Option<CodeHighlightResult>,
     /// Child block entities in document order.
     pub children: Vec<Entity<Block>>,
@@ -308,23 +309,21 @@ pub(crate) enum CollapsedCaretAffinity {
 }
 
 impl Block {
-    pub(crate) fn render_cache(&mut self, cx: &mut Context<Self>) -> &InlineRenderCache {
-        if self.render_cache.is_none() {
-            self.render_cache = Some(self.record.title.render_cache());
-        }
-        self.render_cache.as_ref().unwrap()
+    pub(crate) fn render_cache(&self) -> &InlineRenderCache {
+        self.render_cache
+            .get_or_init(|| self.record.title.render_cache())
     }
 
     pub(crate) fn cache_mut(&mut self) -> Option<&mut InlineRenderCache> {
-        self.render_cache.as_mut()
+        self.render_cache.get_mut()
     }
+
 
     pub fn with_record(cx: &mut Context<Self>, record: BlockRecord) -> Self {
         let edit_mode = EditMode::for_kind(&record.kind);
-        let render_cache = record.title.render_cache();
         let mut block = Self {
             record,
-            render_cache: Some(render_cache),
+            render_cache: OnceCell::new(),
             code_highlight: None,
             children: Vec::new(),
             focus_handle: cx.focus_handle(),
@@ -512,7 +511,7 @@ impl Block {
 
     /// Refreshes the shared display copy only when visible text changed.
     fn refresh_cached_display_text(&mut self) {
-        let current = self.current_cache().map(|c| c.visible_text().to_string()).unwrap_or_else(|| self.record.title.visible_text());
+        let current = self.peek_cache().map(|c| c.visible_text().to_string()).unwrap_or_else(|| self.record.title.visible_text());
         if self.cached_display_text.as_ref() != current {
             self.cached_display_text = SharedString::from(current.to_string());
         }
@@ -673,7 +672,9 @@ impl Block {
         let collapsed_affinity = self.current_collapsed_caret_affinity();
         let keep_projection =
             self.projection.is_some() && self.edit_mode.supports_inline_projection();
-        self.render_cache = Some(self.record.title.render_cache());
+        if self.render_cache.get().is_some() {
+            self.render_cache = OnceCell::from(self.record.title.render_cache());
+        }
         self.sync_code_highlight();
         self.sync_image_runtime();
         self.projection = None;
@@ -910,11 +911,20 @@ impl Block {
         );
     }
 
-    pub(crate) fn current_cache(&self) -> Option<&InlineRenderCache> {
+    pub(crate) fn peek_cache(&self) -> Option<&InlineRenderCache> {
         self.projection
             .as_ref()
             .map(|projection| &projection.cache)
-            .or(self.render_cache.as_ref())
+            .or(self.render_cache.get())
+    }
+
+    pub(crate) fn current_cache(&self) -> Option<&InlineRenderCache> {
+        Some(
+            self.projection
+                .as_ref()
+                .map(|projection| &projection.cache)
+                .unwrap_or_else(|| self.render_cache()),
+        )
     }
 
     /// Rebuilds touched inline syntax while focused, preserving link selections.

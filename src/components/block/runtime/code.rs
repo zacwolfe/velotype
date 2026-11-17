@@ -21,7 +21,7 @@ impl Block {
         self.code_highlight = match &self.record.kind {
             BlockKind::CodeBlock { language } => highlight_code_block(
                 language.as_deref().map(|value| &**value),
-                self.render_cache.as_ref().map(|c| c.visible_text()).unwrap_or_default(),
+                self.render_cache().visible_text(),
             ),
             _ => None,
         };
