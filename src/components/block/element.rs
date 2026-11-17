@@ -872,7 +872,7 @@ impl Element for CodeLanguageInputElement {
         }
 
         self.input.update(cx, |input, _cx| {
-            input.code_language_last_layout = Some(line);
+            input.code_language_last_layout = Some(Box::new(line));
             input.code_language_last_bounds = Some(bounds);
         });
     }

@@ -130,8 +130,11 @@ pub struct Block {
     pub(crate) code_language_selection_reversed: bool,
     /// UTF-8 IME composition range in the code-language label.
     pub(crate) code_language_marked_range: Option<Range<usize>>,
-    /// Last shaped line used to hit-test the language label.
-    pub(crate) code_language_last_layout: Option<ShapedLine>,
+    /// Last shaped line for a code block's inline editor. Boxed because
+    /// `ShapedLine` is ~3 KB (runs + glyphs vectors live behind it), and every
+    /// block in the document would otherwise pay that inline. Only code blocks
+    /// with a focused inline editor ever populate it.
+    pub(crate) code_language_last_layout: Option<Box<ShapedLine>>,
     /// Last painted bounds of the language label.
     pub(crate) code_language_last_bounds: Option<Bounds<Pixels>>,
     /// Whether a pointer drag is selecting language text.
@@ -1063,7 +1066,8 @@ impl Block {
             &self.record.title.fragments,
             clean_selected,
             clean_marked,
-        );
+        )
+        .map(Box::new);
         self.refresh_cached_display_text();
     }
 
