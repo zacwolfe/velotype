@@ -330,7 +330,7 @@ async fn inline_math_focus_stays_rendered_rich_and_keeps_links(cx: &mut TestAppC
         assert!(block.record.title.has_mixed_inline_visuals());
         assert!(block.record.title.has_inline_links());
         assert!(
-            block.inline_spans().iter().any(|span| span.link.is_some()),
+            block.inline_spans().iter().any(|span| span.link().is_some()),
             "link must stay styled while editing the math in the same block"
         );
         assert_eq!(
@@ -366,7 +366,7 @@ async fn inline_html_image_in_a_heading_renders_rich_and_keeps_the_link(cx: &mut
         let image_span = block
             .inline_spans()
             .iter()
-            .find_map(|span| span.image.clone())
+            .find_map(|span| span.image().clone())
             .expect("inline image span reaches the renderer");
         assert_eq!(image_span.src, "anvil.svg");
         assert_eq!(image_span.alt, "Smithy");

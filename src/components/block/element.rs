@@ -105,9 +105,9 @@ fn build_text_runs(
             .filter(|span| span.range.start <= start && start < span.range.end);
 
         let inline_style = active_span.map(|s| s.style).unwrap_or_default();
-        let html_style = active_span.and_then(|s| s.html_style);
-        let is_link = active_span.map(|s| s.link.is_some()).unwrap_or(false);
-        let is_footnote = active_span.map(|s| s.footnote.is_some()).unwrap_or(false);
+        let html_style = active_span.and_then(|s| s.html_style());
+        let is_link = active_span.map(|s| s.link().is_some()).unwrap_or(false);
+        let is_footnote = active_span.map(|s| s.footnote().is_some()).unwrap_or(false);
         let is_marked = marked_range
             .map(|range| start < range.end && range.start < end)
             .unwrap_or(false);
@@ -571,7 +571,7 @@ pub(crate) fn link_at_position<'a>(
     let align = input.text_align();
 
     for span in input.inline_spans() {
-        let Some(link) = span.link.as_ref() else {
+        let Some(link) = span.link() else {
             continue;
         };
         if span.range.is_empty() {
@@ -611,7 +611,7 @@ pub(crate) fn footnote_at_position<'a>(
     let align = input.text_align();
 
     for span in input.inline_spans() {
-        let Some(footnote) = span.footnote.as_ref() else {
+        let Some(footnote) = span.footnote() else {
             continue;
         };
         if span.range.is_empty() {
@@ -1469,7 +1469,7 @@ mod tests {
             let span = block
                 .inline_spans()
                 .iter()
-                .find(|span| span.link.is_some())
+                .find(|span| span.link().is_some())
                 .expect("link span should exist");
             let layout = &lines[0];
             let start = layout
@@ -1513,7 +1513,7 @@ mod tests {
             let span = block
                 .inline_spans()
                 .iter()
-                .find(|span| span.link.is_some())
+                .find(|span| span.link().is_some())
                 .expect("link span should exist");
             let layout = &lines[0];
             let start = layout
@@ -1586,7 +1586,7 @@ mod tests {
             let span = block
                 .inline_spans()
                 .iter()
-                .find(|span| span.link.is_some())
+                .find(|span| span.link().is_some())
                 .expect("link span should exist");
             let layout = &lines[0];
             let origin_x = super::aligned_line_left(layout, bounds, block.text_align());
@@ -1710,7 +1710,7 @@ mod tests {
             let span = block
                 .inline_spans()
                 .iter()
-                .find(|span| span.link.is_some())
+                .find(|span| span.link().is_some())
                 .expect("link span should exist");
             let segments = super::range_segment_bounds(
                 &lines,

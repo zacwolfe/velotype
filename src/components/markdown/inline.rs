@@ -357,12 +357,7 @@ pub struct TextCursor {
 /// A visible-text range with its associated [`InlineStyle`], used by
 /// the render cache to build styled text runs for the text system.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InlineSpan {
-    /// UTF-8 byte range in the flattened visible text.
-    pub range: Range<usize>,
-    /// Markdown and semantic HTML formatting.
-    pub style: InlineStyle,
-    /// CSS-derived inline formatting.
+pub struct InlineSpanExtras {
     pub html_style: Option<HtmlInlineStyle>,
     /// Link targets available for hit testing.
     pub link: Option<InlineLinkHit>,
@@ -371,6 +366,21 @@ pub struct InlineSpan {
     /// Inline math metadata for rendering.
     pub math: Option<InlineMath>,
     pub image: Option<InlineImage>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineSpan {
+    pub range: Range<usize>,
+    pub style: InlineStyle,
+    pub extras: Option<Box<InlineSpanExtras>>,
+}
+
+impl InlineSpan {
+    pub fn html_style(&self) -> Option<&HtmlInlineStyle> { self.extras.as_ref().and_then(|e| e.html_style.as_ref()) }
+    pub fn link(&self) -> Option<&InlineLinkHit> { self.extras.as_ref().and_then(|e| e.link.as_ref()) }
+    pub fn footnote(&self) -> Option<&InlineFootnoteHit> { self.extras.as_ref().and_then(|e| e.footnote.as_ref()) }
+    pub fn math(&self) -> Option<&InlineMath> { self.extras.as_ref().and_then(|e| e.math.as_ref()) }
+    pub fn image(&self) -> Option<&InlineImage> { self.extras.as_ref().and_then(|e| e.image.as_ref()) }
 }
 
 /// Fragment attributes inherited by inserted text at a caret position.
@@ -467,17 +477,29 @@ impl InlineRenderCache {
             visible_text.push_str(&fragment.text);
             let fragment_len = fragment.text.len();
             if fragment_len > 0 {
+                let extras = if fragment.html_style.is_none()
+                    && fragment.link.is_none()
+                    && fragment.footnote.is_none()
+                    && fragment.math.is_none()
+                    && fragment.image.is_none()
+                {
+                    None
+                } else {
+                    Some(Box::new(InlineSpanExtras {
+                        html_style: fragment.html_style,
+                        link: fragment.link.as_ref().map(InlineLink::hit),
+                        footnote: fragment
+                            .footnote
+                            .as_ref()
+                            .and_then(InlineFootnoteReference::hit),
+                        math: fragment.math.clone(),
+                        image: fragment.image.clone(),
+                    }))
+                };
                 spans.push(InlineSpan {
                     range: fragment_start..fragment_start + fragment_len,
                     style: fragment.style,
-                    html_style: fragment.html_style,
-                    link: fragment.link.as_ref().map(InlineLink::hit),
-                    footnote: fragment
-                        .footnote
-                        .as_ref()
-                        .and_then(InlineFootnoteReference::hit),
-                    math: fragment.math.clone(),
-                    image: fragment.image.clone(),
+                    extras,
                 });
             }
 
@@ -534,7 +556,7 @@ impl InlineRenderCache {
         self.spans
             .iter()
             .find(|span| span.range.start <= offset && offset < span.range.end)
-            .and_then(|span| span.html_style)
+            .and_then(|span| span.html_style()).copied()
     }
 
     #[allow(dead_code)]
@@ -548,7 +570,7 @@ impl InlineRenderCache {
         self.spans
             .iter()
             .find(|span| span.range.start <= offset && offset < span.range.end)
-            .and_then(|span| span.link.as_ref())
+            .and_then(|span| span.link())
     }
 
     #[allow(dead_code)]
@@ -557,7 +579,7 @@ impl InlineRenderCache {
         self.spans
             .iter()
             .find(|span| span.range.start <= offset && offset < span.range.end)
-            .and_then(|span| span.footnote.as_ref())
+            .and_then(|span| span.footnote())
     }
 
     #[allow(dead_code)]
@@ -566,7 +588,7 @@ impl InlineRenderCache {
         self.spans
             .iter()
             .find(|span| span.range.start <= offset && offset < span.range.end)
-            .and_then(|span| span.math.as_ref())
+            .and_then(|span| span.math())
     }
 
     #[allow(dead_code)]
@@ -574,7 +596,7 @@ impl InlineRenderCache {
         self.spans
             .iter()
             .find(|span| span.range.start <= offset && offset < span.range.end)
-            .and_then(|span| span.image.as_ref())
+            .and_then(|span| span.image())
     }
 }
 
@@ -3775,6 +3797,7 @@ fn is_underscore_delimiter(delimiter: Delimiter) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::{
         HtmlImageLength, InlineFragment, InlineInsertionAttributes, InlineLinkHit,
         InlineMathDelimiter, InlineScript, InlineStyle, InlineTextTree, LinkReferenceDefinitions,
@@ -4388,7 +4411,7 @@ mod tests {
                 tree.render_cache()
                     .spans()
                     .iter()
-                    .all(|span| span.math.is_none()),
+                    .all(|span| span.math().is_none()),
                 "{markdown:?} should stay plain text"
             );
         }
@@ -4811,7 +4834,7 @@ mod tests {
         let cache = tree.render_cache();
         assert_eq!(cache.spans().len(), 1);
         assert!(cache.spans()[0].style.code);
-        assert!(cache.spans()[0].link.is_none());
+        assert!(cache.spans()[0].link().is_none());
         assert!(!cache.spans()[0].style.bold);
         assert!(!cache.spans()[0].style.italic);
     }
@@ -5081,7 +5104,7 @@ mod tests {
         let images = cache
             .spans()
             .iter()
-            .filter_map(|span| span.image.as_ref())
+            .filter_map(|span| span.image())
             .map(|image| (image.alt.clone(), image.src.clone()))
             .collect::<Vec<_>>();
         assert_eq!(
@@ -5163,5 +5186,11 @@ mod tests {
                 .map(|image| image.src.clone()),
             Some("x.png".to_string())
         );
+    }
+
+    #[test]
+    fn check_inline_span_size() {
+        println!("InlineSpan size: {} bytes", std::mem::size_of::<InlineSpan>());
+        assert!(std::mem::size_of::<InlineSpan>() <= 40);
     }
 }

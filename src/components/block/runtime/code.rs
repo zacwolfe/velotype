@@ -19,9 +19,10 @@ impl Block {
     /// Recomputes highlighting from the block's language and clean visible text.
     pub(super) fn sync_code_highlight(&mut self) {
         self.code_highlight = match &self.record.kind {
-            BlockKind::CodeBlock { language } => {
-                highlight_code_block(language.as_deref(), self.render_cache.visible_text())
-            }
+            BlockKind::CodeBlock { language } => highlight_code_block(
+                language.as_deref().map(|value| &**value),
+                self.render_cache.as_ref().map(|c| c.visible_text()).unwrap_or_default(),
+            ),
             _ => None,
         };
     }

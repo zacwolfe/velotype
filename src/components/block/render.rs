@@ -899,11 +899,7 @@ impl Block {
                 let fallback_span = crate::components::InlineSpan {
                     range: cursor..span.range.start,
                     style: crate::components::InlineStyle::default(),
-                    html_style: None,
-                    link: None,
-                    footnote: None,
-                    math: None,
-                    image: None,
+                    extras: None,
                 };
                 children.extend(self.render_inline_text_word_segments(
                     &text[cursor..span.range.start],
@@ -917,11 +913,11 @@ impl Block {
             }
 
             let span_text = &text[span.range.clone()];
-            if let Some(math) = span.math.as_ref() {
+            if let Some(math) = span.math() {
                 children.push(
                     self.render_inline_math_segment(math, span, theme, base_color, font_size, cx),
                 );
-            } else if let Some(image) = span.image.as_ref() {
+            } else if let Some(image) = span.image() {
                 children.push(self.render_inline_html_image_segment(image, theme, font_size, cx));
             } else {
                 children.extend(self.render_inline_text_word_segments(
@@ -941,11 +937,7 @@ impl Block {
             let fallback_span = crate::components::InlineSpan {
                 range: cursor..text.len(),
                 style: crate::components::InlineStyle::default(),
-                html_style: None,
-                link: None,
-                footnote: None,
-                math: None,
-                image: None,
+                extras: None,
             };
             children.extend(self.render_inline_text_word_segments(
                 &text[cursor..],
@@ -979,7 +971,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let has_background = span
-            .html_style
+            .html_style()
             .is_some_and(|style| style.background_color.is_some());
         let mut segments = Vec::new();
         for word in inline_word_chunks(text, span.style.code, has_background) {
@@ -1011,12 +1003,12 @@ impl Block {
             return div().into_any_element();
         }
 
-        let mut color = if span.link.is_some() || span.footnote.is_some() {
+        let mut color = if span.link().is_some() || span.footnote().is_some() {
             theme.colors.text_link
         } else {
             base_color
         };
-        if let Some(style) = span.html_style
+        if let Some(style) = span.html_style()
             && let Some(html_color) = style.color
         {
             color = html_css_color_to_hsla(html_color, color);
@@ -1049,7 +1041,7 @@ impl Block {
             element = element.relative().top(px(script_offset));
         }
 
-        if span.style.underline || span.link.is_some() || span.footnote.is_some() {
+        if span.style.underline || span.link().is_some() || span.footnote().is_some() {
             element = element.underline();
         }
         if span.style.code {
@@ -1060,7 +1052,7 @@ impl Block {
                 .py(px(theme.dimensions.code_bg_pad_y))
                 .bg(theme.colors.code_bg);
         }
-        if let Some(style) = span.html_style
+        if let Some(style) = span.html_style()
             && let Some(background) = style.background_color
         {
             element = element
@@ -1076,7 +1068,7 @@ impl Block {
         // falls through and focuses the block for editing. The wrapper element
         // gates the hand cursor on that same modifier, matching the normal-text
         // path where links render through `BlockTextElement`.
-        if let Some(link) = span.link.clone() {
+        if let Some(link) = span.link().cloned() {
             let element = element
                 .on_mouse_down(
                     MouseButton::Left,
@@ -1110,7 +1102,7 @@ impl Block {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut color = base_color;
-        if let Some(style) = span.html_style
+        if let Some(style) = span.html_style()
             && let Some(html_color) = style.color
         {
             color = html_css_color_to_hsla(html_color, color);

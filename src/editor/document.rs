@@ -3461,7 +3461,7 @@ mod tests {
                 block
                     .inline_spans()
                     .iter()
-                    .filter(|span| span.image.is_some())
+                    .filter(|span| span.image().is_some())
                     .count(),
                 3,
                 "each badge must render as its own inline image"

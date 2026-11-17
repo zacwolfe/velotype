@@ -115,9 +115,7 @@ impl EventEmitter<BlockEvent> for Block {}
 pub struct Block {
     /// Persistent block kind, title, and identity.
     pub record: BlockRecord,
-    /// Clean visible-text cache derived from `record.title`.
-    pub(crate) render_cache: InlineRenderCache,
-    /// Highlight spans for code-block contents, when available.
+    pub(crate) render_cache: Option<InlineRenderCache>,
     code_highlight: Option<CodeHighlightResult>,
     /// Child block entities in document order.
     pub children: Vec<Entity<Block>>,
@@ -310,13 +308,23 @@ pub(crate) enum CollapsedCaretAffinity {
 }
 
 impl Block {
-    /// Creates runtime state and caches for a persistent block record.
+    pub(crate) fn render_cache(&mut self, cx: &mut Context<Self>) -> &InlineRenderCache {
+        if self.render_cache.is_none() {
+            self.render_cache = Some(self.record.title.render_cache());
+        }
+        self.render_cache.as_ref().unwrap()
+    }
+
+    pub(crate) fn cache_mut(&mut self) -> Option<&mut InlineRenderCache> {
+        self.render_cache.as_mut()
+    }
+
     pub fn with_record(cx: &mut Context<Self>, record: BlockRecord) -> Self {
         let edit_mode = EditMode::for_kind(&record.kind);
         let render_cache = record.title.render_cache();
         let mut block = Self {
             record,
-            render_cache,
+            render_cache: Some(render_cache),
             code_highlight: None,
             children: Vec::new(),
             focus_handle: cx.focus_handle(),
@@ -491,7 +499,7 @@ impl Block {
 
     /// Returns current visible text, including temporary projected delimiters.
     pub fn display_text(&self) -> &str {
-        self.current_cache().visible_text()
+        self.current_cache().map(|c| c.visible_text()).unwrap_or_else(|| self.cached_display_text.as_str())
     }
 
     /// Cheap clone of the current display text as a `SharedString` (Arc bump)
@@ -504,7 +512,7 @@ impl Block {
 
     /// Refreshes the shared display copy only when visible text changed.
     fn refresh_cached_display_text(&mut self) {
-        let current = self.current_cache().visible_text();
+        let current = self.current_cache().map(|c| c.visible_text().to_string()).unwrap_or_else(|| self.record.title.visible_text());
         if self.cached_display_text.as_ref() != current {
             self.cached_display_text = SharedString::from(current.to_string());
         }
@@ -520,13 +528,13 @@ impl Block {
 
     /// Returns styled spans in the current display cache.
     pub fn inline_spans(&self) -> &[InlineSpan] {
-        self.current_cache().spans()
+        self.current_cache().map(|c| c.spans()).unwrap_or(&[])
     }
 
     #[allow(dead_code)]
     /// Returns the inline style at a current-display byte offset.
     pub fn inline_style_at(&self, offset: usize) -> InlineStyle {
-        self.current_cache().style_at(offset)
+        self.current_cache().map(|c| c.style_at(offset)).unwrap_or_default()
     }
 
     #[allow(dead_code)]
@@ -535,31 +543,31 @@ impl Block {
         &self,
         offset: usize,
     ) -> Option<crate::components::HtmlInlineStyle> {
-        self.current_cache().html_style_at(offset)
+        self.current_cache().and_then(|c| c.html_style_at(offset))
     }
 
     #[allow(dead_code)]
     /// Returns a link target at a current-display byte offset, if present.
     pub(crate) fn inline_link_at(&self, offset: usize) -> Option<&str> {
-        self.current_cache().link_at(offset)
+        self.current_cache().and_then(|c| c.link_at(offset))
     }
 
     #[allow(dead_code)]
     /// Returns the link hit at a current-display byte offset, if present.
     pub(crate) fn inline_link_hit_at(&self, offset: usize) -> Option<&InlineLinkHit> {
-        self.current_cache().link_hit_at(offset)
+        self.current_cache().and_then(|c| c.link_hit_at(offset))
     }
 
     #[allow(dead_code)]
     /// Returns the footnote hit at a current-display byte offset, if present.
     pub(crate) fn inline_footnote_hit_at(&self, offset: usize) -> Option<&InlineFootnoteHit> {
-        self.current_cache().footnote_hit_at(offset)
+        self.current_cache().and_then(|c| c.footnote_hit_at(offset))
     }
 
     #[allow(dead_code)]
     /// Returns inline math at a current-display byte offset, if present.
     pub(crate) fn inline_math_at(&self, offset: usize) -> Option<&crate::components::InlineMath> {
-        self.current_cache().inline_math_at(offset)
+        self.current_cache().and_then(|c| c.inline_math_at(offset))
     }
 
     /// Whether the clean title mixes text with separately rendered inline content.
@@ -638,7 +646,7 @@ impl Block {
 
     /// Returns the current display text length in UTF-8 bytes.
     pub(crate) fn visible_len(&self) -> usize {
-        self.current_cache().visible_len()
+        self.current_cache().map(|c| c.visible_len()).unwrap_or(self.record.title.visible_text().len())
     }
 
     /// Splits the clean title at a current-display UTF-8 offset.
@@ -665,7 +673,7 @@ impl Block {
         let collapsed_affinity = self.current_collapsed_caret_affinity();
         let keep_projection =
             self.projection.is_some() && self.edit_mode.supports_inline_projection();
-        self.render_cache = self.record.title.render_cache();
+        self.render_cache = Some(self.record.title.render_cache());
         self.sync_code_highlight();
         self.sync_image_runtime();
         self.projection = None;
@@ -902,12 +910,11 @@ impl Block {
         );
     }
 
-    /// Returns the projected display cache, or the clean render cache.
-    pub(crate) fn current_cache(&self) -> &InlineRenderCache {
+    pub(crate) fn current_cache(&self) -> Option<&InlineRenderCache> {
         self.projection
             .as_ref()
             .map(|projection| &projection.cache)
-            .unwrap_or(&self.render_cache)
+            .or(self.render_cache.as_ref())
     }
 
     /// Rebuilds touched inline syntax while focused, preserving link selections.
