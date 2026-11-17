@@ -129,13 +129,10 @@ pub struct InlineFragment {
     pub style: InlineStyle,
     /// CSS-derived formatting from inline HTML.
     pub html_style: Option<HtmlInlineStyle>,
-    /// Link metadata shared by fragments of one link label.
-    pub link: Option<InlineLink>,
-    /// Footnote reference metadata, when this fragment is a reference.
-    pub footnote: Option<InlineFootnoteReference>,
-    /// Source-preserving math metadata, when this fragment is inline math.
-    pub math: Option<InlineMath>,
-    pub image: Option<InlineImage>,
+    pub link: Option<Box<InlineLink>>,
+    pub footnote: Option<Box<InlineFootnoteReference>>,
+    pub math: Option<Box<InlineMath>>,
+    pub image: Option<Box<InlineImage>>,
 }
 
 /// Source-preserving inline HTML `<img>` metadata.
@@ -487,13 +484,10 @@ impl InlineRenderCache {
                 } else {
                     Some(Box::new(InlineSpanExtras {
                         html_style: fragment.html_style,
-                        link: fragment.link.as_ref().map(InlineLink::hit),
-                        footnote: fragment
-                            .footnote
-                            .as_ref()
-                            .and_then(InlineFootnoteReference::hit),
-                        math: fragment.math.clone(),
-                        image: fragment.image.clone(),
+                        link: fragment.link.as_ref().map(|l| l.hit()),
+                        footnote: fragment.footnote.as_ref().and_then(|f| f.hit()),
+                        math: fragment.math.as_deref().cloned(),
+                        image: fragment.image.as_deref().cloned(),
                     }))
                 };
                 spans.push(InlineSpan {
@@ -731,7 +725,7 @@ impl InlineTextTree {
             fragment
                 .link
                 .as_ref()
-                .is_some_and(InlineLink::is_source_preserving)
+                .is_some_and(|l| l.is_source_preserving())
                 || fragment.footnote.is_some()
                 || fragment.math.is_some()
                 || fragment.image.is_some()
@@ -745,7 +739,7 @@ impl InlineTextTree {
     pub(crate) fn has_inline_links(&self) -> bool {
         self.fragments
             .iter()
-            .any(|fragment| matches!(fragment.link, Some(InlineLink::Inline { .. })))
+            .any(|fragment| matches!(fragment.link.as_deref(), Some(InlineLink::Inline { .. })))
     }
 
     /// Whether any fragment contains inline math or raised/lowered text.
@@ -1163,8 +1157,8 @@ impl InlineTextTree {
                         text: fragment.text[..split_offset].to_string(),
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned().map(Box::new),
+                        footnote: fragment.footnote.as_deref().cloned().map(Box::new),
                         math: None,
                         image: None,
                     });
@@ -1174,8 +1168,8 @@ impl InlineTextTree {
                         text: fragment.text[split_offset..].to_string(),
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned().map(Box::new),
+                        footnote: fragment.footnote.as_deref().cloned().map(Box::new),
                         math: None,
                         image: None,
                     });
@@ -1230,8 +1224,8 @@ impl InlineTextTree {
                 return InlineInsertionAttributes {
                     style: fragment.style,
                     html_style: fragment.html_style,
-                    link: fragment.link.clone(),
-                    footnote: fragment.footnote.clone(),
+                    link: fragment.link.as_deref().cloned(),
+                    footnote: fragment.footnote.as_deref().cloned(),
                     math: None,
                     image: None,
                 };
@@ -1247,8 +1241,8 @@ impl InlineTextTree {
                     InlineInsertionAttributes {
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned(),
+                        footnote: fragment.footnote.as_deref().cloned(),
                         math: None,
                         image: None,
                     }
@@ -1262,8 +1256,8 @@ impl InlineTextTree {
                     InlineInsertionAttributes {
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned(),
+                        footnote: fragment.footnote.as_deref().cloned(),
                         math: None,
                         image: None,
                     }
@@ -1351,10 +1345,10 @@ impl InlineTextTree {
                 text: new_text.to_string(),
                 style: inserted_attributes.style,
                 html_style: inserted_attributes.html_style,
-                link: inserted_attributes.link,
-                footnote: inserted_attributes.footnote,
-                math: inserted_attributes.math,
-                image: inserted_attributes.image,
+                link: inserted_attributes.link.map(Box::new),
+                footnote: inserted_attributes.footnote.map(Box::new),
+                math: inserted_attributes.math.map(Box::new),
+                image: inserted_attributes.image.map(Box::new),
             });
         }
         temp.append_tree(after);
@@ -1382,10 +1376,10 @@ impl InlineTextTree {
                 text: new_text.to_string(),
                 style: inserted_attributes.style,
                 html_style: inserted_attributes.html_style,
-                link: inserted_attributes.link,
-                footnote: inserted_attributes.footnote,
-                math: inserted_attributes.math,
-                image: inserted_attributes.image,
+                link: inserted_attributes.link.map(Box::new),
+                footnote: inserted_attributes.footnote.map(Box::new),
+                math: inserted_attributes.math.map(Box::new),
+                image: inserted_attributes.image.map(Box::new),
             });
         }
         temp.append_tree(after);
@@ -1762,7 +1756,7 @@ impl NormalizeBuilder {
             html_style: extra_html_style,
             link: None,
             footnote: None,
-            math: Some(math),
+                math: Some(Box::new(math)),
             image: None,
         });
     }
@@ -1781,7 +1775,7 @@ impl NormalizeBuilder {
             link: None,
             footnote: None,
             math: None,
-            image: Some(image),
+                image: Some(Box::new(image)),
         });
     }
 
@@ -2182,11 +2176,11 @@ fn parse_footnote_reference(
         style: extra_style,
         html_style: extra_html_style,
         link: None,
-        footnote: Some(InlineFootnoteReference {
+        footnote: Some(Box::new(InlineFootnoteReference {
             id,
             ordinal: None,
             occurrence_index: 0,
-        }),
+        })),
         math: None,
         image: None,
     }];
@@ -2272,7 +2266,7 @@ fn parse_inline_link(
     }
 
     for mut fragment in label_result.tree.fragments {
-        fragment.link = Some(link.clone());
+        fragment.link = Some(Box::new(link.clone()));
         fragment.footnote = None;
         fragment.math = None;
         builder.normalized_len += fragment.text.len();
@@ -2309,9 +2303,9 @@ fn parse_autolink(
         text: target.clone(),
         style: extra_style,
         html_style: extra_html_style,
-        link: Some(InlineLink::Autolink {
+        link: Some(Box::new(InlineLink::Autolink {
             target: target.clone(),
-        }),
+        })),
         footnote: None,
         math: None,
         image: None,
@@ -5186,6 +5180,15 @@ mod tests {
                 .map(|image| image.src.clone()),
             Some("x.png".to_string())
         );
+    }
+
+    #[test]
+    fn check_inline_fragment_size() {
+        println!(
+            "InlineFragment size: {} bytes",
+            std::mem::size_of::<InlineFragment>()
+        );
+        assert!(std::mem::size_of::<InlineFragment>() <= 96);
     }
 
     #[test]

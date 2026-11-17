@@ -6,7 +6,7 @@ use crate::components::ResolvedImageTarget;
 impl Block {
     /// Returns the resolved standalone-image runtime, if one is available.
     pub(crate) fn image_runtime(&self) -> Option<&ImageRuntime> {
-        self.image_runtime.as_ref()
+        self.image_runtime.as_deref()
     }
 
     /// Returns whether this block kind or table cell can display a lone image.
@@ -121,7 +121,7 @@ impl Block {
             self.image_edit_expanded = false;
             self.image_expand_requested = false;
         }
-        self.image_runtime = next_runtime;
+        self.image_runtime = next_runtime.map(Box::new);
     }
 
     /// Finds lone-image syntax in visible text or serialized inline Markdown.

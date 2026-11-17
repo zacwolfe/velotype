@@ -209,9 +209,12 @@ pub struct Block {
     pub(super) cursor_blink_task: Option<Task<()>>,
     /// Cached projection used to show editable inline delimiters for the
     /// currently touched inline span(s).
-    pub(crate) projection: Option<ExpandedInlineProjection>,
-    /// Focus and clean ranges that produced the projection, used to skip
-    /// unchanged rebuilds.
+    pub(crate) projection: Option<Box<ExpandedInlineProjection>>,
+    /// Inputs that produced the current `projection`. When the next
+    /// `sync_inline_projection_for_focus` computes the same inputs, the
+    /// rebuild is skipped — saves a full O(fragments + text) walk per
+    /// render frame (cursor blink + every arrow keypress).
+
     projection_cache_key: Option<(bool, Range<usize>, Option<Range<usize>>)>,
     /// Shared copy of the current display text refreshed with the caches.
     cached_display_text: SharedString,
@@ -221,9 +224,8 @@ pub struct Block {
     pub(crate) edit_mode: EditMode,
     /// Whether source editing displays line numbers.
     show_source_line_numbers: bool,
-    /// Parsed table model for table blocks.
-    pub(crate) table_runtime: Option<TableRuntime>,
-    /// Cell coordinates when this block edits a table cell.
+    pub(crate) table_runtime: Option<Box<TableRuntime>>,
+
     pub(crate) table_cell_position: Option<TableCellPosition>,
     /// Alignment of the current table cell.
     pub(crate) table_cell_alignment: Option<TableColumnAlignment>,
@@ -256,9 +258,8 @@ pub struct Block {
     /// Per-table view preference: when true the table stretches to the full
     /// editor content width instead of the centered column. Not persisted.
     pub(crate) table_wide_mode: bool,
-    /// Resolved standalone image presentation, when applicable.
-    image_runtime: Option<ImageRuntime>,
-    /// Whether the image editor is currently expanded.
+    image_runtime: Option<Box<ImageRuntime>>,
+
     image_edit_expanded: bool,
     /// Pending request to expand the image editor.
     image_expand_requested: bool,
@@ -1632,8 +1633,8 @@ impl Block {
                     return InlineInsertionAttributes {
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned(),
+                        footnote: fragment.footnote.as_deref().cloned(),
                         math: None,
                         image: None,
                     };
@@ -1645,8 +1646,8 @@ impl Block {
                     return InlineInsertionAttributes {
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned(),
+                        footnote: fragment.footnote.as_deref().cloned(),
                         math: None,
                         image: None,
                     };
@@ -1658,8 +1659,8 @@ impl Block {
                     return InlineInsertionAttributes {
                         style: fragment.style,
                         html_style: fragment.html_style,
-                        link: fragment.link.clone(),
-                        footnote: fragment.footnote.clone(),
+                        link: fragment.link.as_deref().cloned(),
+                        footnote: fragment.footnote.as_deref().cloned(),
                         math: None,
                         image: None,
                     };
@@ -1703,8 +1704,8 @@ impl Block {
         InlineInsertionAttributes {
             style: fragment.style,
             html_style: fragment.html_style,
-            link: fragment.link.clone(),
-            footnote: fragment.footnote.clone(),
+            link: fragment.link.as_deref().cloned(),
+            footnote: fragment.footnote.as_deref().cloned(),
             math: None,
             image: None,
         }

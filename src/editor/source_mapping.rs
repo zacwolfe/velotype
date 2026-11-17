@@ -50,7 +50,12 @@ impl Editor {
     ) -> (String, Vec<u32>, Vec<u32>) {
         let mut full = String::new();
         let mut content_to_source = vec![0; content.len() + 1];
-        let mut source_to_content = vec![0];
+
+        let newline_count = content.bytes().filter(|&b| b == b'\n').count();
+        let final_full_len =
+            first_prefix.len() + content.len() + (newline_count * continuation_prefix.len());
+        let mut source_to_content = Vec::with_capacity(final_full_len + 1);
+        source_to_content.push(0);
 
         full.push_str(first_prefix);
         source_to_content.resize(full.len() + 1, 0);
@@ -96,7 +101,16 @@ impl Editor {
         );
         let mut full = String::new();
         let mut content_to_source = vec![0; content.len() + 1];
-        let mut source_to_content = vec![0];
+
+        let newline_count = content.bytes().filter(|&b| b == b'\n').count();
+        let lang_len = language.map(|l| l.len()).unwrap_or(0);
+        let final_full_len = (fence.len() * 2)
+            + lang_len
+            + 2
+            + (indentation.len() * (newline_count + 1))
+            + content.len();
+        let mut source_to_content = Vec::with_capacity(final_full_len + 1);
+        source_to_content.push(0);
 
         full.push_str(&fence);
         if let Some(language) = language {

@@ -405,7 +405,7 @@ impl ExpandedInlineProjection {
                     display_cursor += close_len;
 
                     footnote_runs.push(ExpandedFootnoteRun {
-                        footnote: footnote.clone(),
+                        footnote: *footnote.clone(),
                         clean_range: clean_range.clone(),
                         display_range: run_display_start..display_cursor,
                     });
@@ -595,7 +595,7 @@ impl ExpandedInlineProjection {
                     display_cursor += close_len;
 
                     link_runs.push(ExpandedLinkRun {
-                        link: link.clone(),
+                        link: *link.clone(),
                         start_fragment_index: run_start,
                         end_fragment_index: run_end,
                         clean_range: run_clean_range.clone(),

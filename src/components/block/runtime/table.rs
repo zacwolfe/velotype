@@ -46,7 +46,7 @@ impl Block {
 
     /// Attaches the native table render data to its owning block.
     pub(crate) fn set_table_runtime(&mut self, runtime: TableRuntime) {
-        self.table_runtime = Some(runtime);
+        self.table_runtime = Some(Box::new(runtime));
     }
 
     /// Removes table render data and all transient axis and append controls.
@@ -96,7 +96,7 @@ impl Block {
         if self.focus_handle.is_focused(window) {
             return true;
         }
-        let Some(runtime) = self.table_runtime.as_ref() else {
+        let Some(runtime) = self.table_runtime.as_deref() else {
             return false;
         };
         let cell_focused = |cell: &Entity<Block>| {
