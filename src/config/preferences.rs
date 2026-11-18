@@ -32,6 +32,23 @@ const DEFAULT_THEME_ID: &str = "velotype";
 /// Language fallback for ordinary preference reads without locale detection.
 const DEFAULT_LANGUAGE_ID: &str = "en-US";
 
+/// Tab order is render order within the visible panel.
+const TAB_KEYS: &[&str] = &[
+    "prefs-tab-auto-updates",
+    "prefs-tab-associate",
+    "prefs-tab-startup-open",
+    "prefs-tab-foreground",
+    "prefs-tab-single-instance",
+    "prefs-tab-theme",
+    "prefs-tab-image-paste-action",
+    "prefs-tab-image-fallback",
+    "prefs-tab-statusbar-enabled",
+    "prefs-tab-statusbar-word-count",
+    "prefs-tab-statusbar-cursor-position",
+    "prefs-tab-statusbar-sidebar-toggle",
+    "prefs-tab-statusbar-mode-switch",
+];
+
 /// A user-configurable button shown in the status bar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct StatusBarButton {
@@ -1488,6 +1505,7 @@ pub(crate) struct PreferencesWindow {
     ui_font_input: Entity<SingleLineInput>,
     /// Editable PicGo Server URL.
     picgo_server_input: Entity<SingleLineInput>,
+    tab_handles: std::collections::HashMap<String, FocusHandle>,
 }
 
 /// File association is an immediate OS action, not a persisted application preference.
@@ -1584,6 +1602,13 @@ impl PreferencesWindow {
             cx.notify();
         })
         .detach();
+        let mut tab_handles = std::collections::HashMap::new();
+        for key in TAB_KEYS {
+            tab_handles.insert(key.to_string(), cx.focus_handle().tab_stop(true));
+        }
+        for index in 0..crate::components::shortcut_definitions().len() {
+            tab_handles.insert(format!("prefs-tab-shortcut-{index}"), cx.focus_handle().tab_stop(true));
+        }
         Self {
             nav: PreferencesNav::Settings,
             startup_open,
@@ -1648,7 +1673,38 @@ impl PreferencesWindow {
             code_font_input,
             ui_font_input,
             picgo_server_input,
+            tab_handles,
         }
+    }
+
+    fn tab_handle(&self, key: &str) -> Option<FocusHandle> {
+        self.tab_handles.get(key).cloned()
+    }
+
+    fn tab_target(
+        &self,
+        key: &str,
+        window: &Window,
+        theme: &Theme,
+        content: impl IntoElement,
+    ) -> gpui::Stateful<Div> {
+        let handle = self.tab_handle(key);
+        let focused = handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(window));
+        let mut wrapper = div()
+            .id(key.to_string())
+            .rounded(px(theme.dimensions.menu_item_radius))
+            .border(px(theme.dimensions.dialog_border_width))
+            .border_color(if focused {
+                theme.colors.dialog_primary_button_bg
+            } else {
+                Hsla::transparent_black()
+            });
+        if let Some(handle) = handle.as_ref() {
+            wrapper = wrapper.track_focus(handle);
+        }
+        wrapper.child(content)
     }
 
     /// Returns the first localized font syntax error in body, code, UI order.
