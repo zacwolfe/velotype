@@ -41,7 +41,11 @@ const TAB_KEYS: &[&str] = &[
     "prefs-tab-single-instance",
     "prefs-tab-theme",
     "prefs-tab-image-paste-action",
-    "prefs-tab-image-fallback",
+    "prefs-tab-image-reveal-on-click",
+    "prefs-tab-image-reveal-diagram-source",
+    "prefs-tab-editor-reveal-source-on-focus",
+    "prefs-tab-editor-show-table-headers",
+    "prefs-tab-editor-tables-as-markdown",
     "prefs-tab-statusbar-enabled",
     "prefs-tab-statusbar-word-count",
     "prefs-tab-statusbar-cursor-position",
@@ -1607,7 +1611,10 @@ impl PreferencesWindow {
             tab_handles.insert(key.to_string(), cx.focus_handle().tab_stop(true));
         }
         for index in 0..crate::components::shortcut_definitions().len() {
-            tab_handles.insert(format!("prefs-tab-shortcut-{index}"), cx.focus_handle().tab_stop(true));
+            tab_handles.insert(
+                format!("prefs-tab-shortcut-{index}"),
+                cx.focus_handle().tab_stop(true),
+            );
         }
         Self {
             nav: PreferencesNav::Settings,
@@ -1811,6 +1818,127 @@ impl PreferencesWindow {
         ]
     }
 
+    /// Runs the keyboard action for the tab target that currently holds focus.
+    fn activate_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let focused = self
+            .tab_handles
+            .iter()
+            .find(|(_, handle)| handle.is_focused(window))
+            .map(|(key, _)| key.clone());
+        let Some(key) = focused else {
+            return false;
+        };
+        let click = ClickEvent::default();
+        if let Some(rest) = key.strip_prefix("prefs-tab-shortcut-") {
+            if let Ok(index) = rest.parse::<usize>() {
+                if let Some(definition) = shortcut_definitions().get(index) {
+                    let command = definition.command;
+                    self.begin_recording_shortcut(command, &click, window, cx);
+                    return true;
+                }
+            }
+            return false;
+        }
+        match key.as_str() {
+            "prefs-tab-auto-updates" => {
+                self.toggle_auto_download_updates(window, cx)
+            },
+            "prefs-tab-associate" => self.associate_file_formats(&click, window, cx),
+            "prefs-tab-startup-open" => self.toggle_startup_dropdown(&click, window, cx),
+            "prefs-tab-foreground" => self.toggle_foreground_dropdown(&click, window, cx),
+            "prefs-tab-single-instance" => self.toggle_single_instance_dropdown(&click, window, cx),
+            "prefs-tab-theme" => self.toggle_theme_dropdown(&click, window, cx),
+            "prefs-tab-image-paste-action" => self.toggle_image_dropdown(&click, window, cx),
+            "prefs-tab-image-reveal-on-click" => {
+                self.toggle_reveal_image_source_on_click(window, cx)
+            }
+            "prefs-tab-image-reveal-diagram-source" => {
+                self.toggle_reveal_diagram_source_on_double_click(window, cx)
+            }
+            "prefs-tab-editor-reveal-source-on-focus" => {
+                self.toggle_reveal_source_on_focus(window, cx)
+            }
+            "prefs-tab-editor-show-table-headers" => {
+                self.toggle_show_table_headers(window, cx)
+            },
+            "prefs-tab-editor-tables-as-markdown" => {
+                self.toggle_edit_tables_as_markdown(window, cx)
+            },
+            "prefs-tab-statusbar-enabled" => self.toggle_status_bar_enabled(window, cx),
+            "prefs-tab-statusbar-word-count" => self.toggle_status_bar_show_word_count(window, cx),
+            "prefs-tab-statusbar-cursor-position" => {
+                self.toggle_status_bar_show_cursor_position(window, cx)
+            }
+            "prefs-tab-statusbar-sidebar-toggle" => {
+                self.toggle_status_bar_show_sidebar_toggle(window, cx)
+            }
+            "prefs-tab-statusbar-mode-switch" => {
+                self.toggle_status_bar_show_mode_switch(window, cx)
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn toggle_auto_download_updates(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.auto_download_updates = !self.auto_download_updates;
+        cx.notify();
+    }
+
+    fn toggle_reveal_image_source_on_click(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_image_source_on_click = !self.reveal_image_source_on_click;
+        cx.notify();
+    }
+
+    fn toggle_reveal_diagram_source_on_double_click(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.reveal_diagram_source_on_double_click = !self.reveal_diagram_source_on_double_click;
+        cx.notify();
+    }
+
+    fn toggle_reveal_source_on_focus(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_source_on_focus = !self.reveal_source_on_focus;
+        cx.notify();
+    }
+
+    fn toggle_show_table_headers(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_table_headers = !self.show_table_headers;
+        cx.notify();
+    }
+
+    fn toggle_edit_tables_as_markdown(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.edit_tables_as_markdown = !self.edit_tables_as_markdown;
+        cx.notify();
+    }
+
+    fn toggle_status_bar_enabled(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.status_bar_enabled = !self.status_bar_enabled;
+        cx.notify();
+    }
+
+    fn toggle_status_bar_show_word_count(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.status_bar_show_word_count = !self.status_bar_show_word_count;
+        cx.notify();
+    }
+
+    fn toggle_status_bar_show_cursor_position(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.status_bar_show_cursor_position = !self.status_bar_show_cursor_position;
+        cx.notify();
+    }
+
+    fn toggle_status_bar_show_sidebar_toggle(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.status_bar_show_sidebar_toggle = !self.status_bar_show_sidebar_toggle;
+        cx.notify();
+    }
+
+    fn toggle_status_bar_show_mode_switch(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.status_bar_show_mode_switch = !self.status_bar_show_mode_switch;
+        cx.notify();
+    }
+
     /// Moves the selected category by delta, wrapping at both ends.
     fn move_nav(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let order = Self::nav_order();
@@ -1855,6 +1983,15 @@ impl PreferencesWindow {
                 window.focus_next(cx);
             }
             cx.stop_propagation();
+            return;
+        }
+
+        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+            && !event.keystroke.modifiers.modified()
+        {
+            if self.activate_focused(window, cx) {
+                cx.stop_propagation();
+            }
             return;
         }
 
@@ -2409,6 +2546,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let selected = match self.startup_open {
@@ -2423,12 +2561,14 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .child(Self::dropdown_button(
-                "preferences-startup-dropdown",
-                selected,
-                theme,
-                Self::toggle_startup_dropdown,
-                cx,
+            .child(self.tab_target("prefs-tab-startup-open", window, theme,
+                Self::dropdown_button(
+                    "preferences-startup-dropdown",
+                    selected,
+                    theme,
+                    Self::toggle_startup_dropdown,
+                    cx,
+                ),
             ));
         if self.startup_dropdown_open {
             let new_file_label = strings.preferences_startup_new_file.clone();
@@ -2466,6 +2606,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let selected = if self.foreground_on_launch {
@@ -2477,12 +2618,14 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .child(Self::dropdown_button(
-                "preferences-foreground-dropdown",
-                selected,
-                theme,
-                Self::toggle_foreground_dropdown,
-                cx,
+            .child(self.tab_target("prefs-tab-foreground", window, theme,
+                Self::dropdown_button(
+                    "preferences-foreground-dropdown",
+                    selected,
+                    theme,
+                    Self::toggle_foreground_dropdown,
+                    cx,
+                ),
             ));
         if self.foreground_dropdown_open {
             let enabled_label = strings.preferences_foreground_enabled.clone();
@@ -2520,6 +2663,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let selected = if self.single_instance {
@@ -2531,12 +2675,14 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .child(Self::dropdown_button(
-                "preferences-single-instance-dropdown",
-                selected,
-                theme,
-                Self::toggle_single_instance_dropdown,
-                cx,
+            .child(self.tab_target("prefs-tab-single-instance", window, theme,
+                Self::dropdown_button(
+                    "preferences-single-instance-dropdown",
+                    selected,
+                    theme,
+                    Self::toggle_single_instance_dropdown,
+                    cx,
+                ),
             ));
         if self.single_instance_dropdown_open {
             let shared_label = strings.preferences_single_instance_shared.clone();
@@ -2575,6 +2721,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut dropdown = div()
@@ -2583,12 +2730,14 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(4.0))
-            .child(Self::dropdown_button(
-                "preferences-theme-dropdown",
-                self.selected_theme_name(),
-                theme,
-                Self::toggle_theme_dropdown,
-                cx,
+            .child(self.tab_target("prefs-tab-theme", window, theme,
+                Self::dropdown_button(
+                    "preferences-theme-dropdown",
+                    self.selected_theme_name(),
+                    theme,
+                    Self::toggle_theme_dropdown,
+                    cx,
+                ),
             ));
         if self.theme_dropdown_open {
             let mut list = div()
@@ -2721,6 +2870,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let options = [
@@ -2794,31 +2944,43 @@ impl PreferencesWindow {
                 .flex_col()
                 .items_center()
                 .gap(px(12.0))
-                .child(self.labeled_row(
-                    &strings.preferences_image_insert_behavior,
-                    dropdown,
+                .child(self.tab_target(
+                    "prefs-tab-image-paste-action",
+                    window,
                     theme,
+                    Self::dropdown_button(
+                        "preferences-image-dropdown",
+                        Self::image_paste_behavior_label(self.image_paste_behavior, strings),
+                        theme,
+                        Self::toggle_image_dropdown,
+                        cx,
+                    ),
                 ))
-                .child(self.switch_row(
-                    &strings.preferences_reveal_image_source_on_click,
-                    self.reveal_image_source_on_click,
-                    |this, _, _, cx| {
-                        this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
-                        cx.notify();
-                    },
+                .child(self.tab_target(
+                    "prefs-tab-image-reveal-on-click",
+                    window,
                     theme,
-                    cx,
+                    self.switch_row(
+                        &strings.preferences_reveal_image_source_on_click,
+                        self.reveal_image_source_on_click,
+                        |this, _, window, cx| this.toggle_reveal_image_source_on_click(window, cx),
+                        theme,
+                        cx,
+                    ),
                 ))
-                .child(self.switch_row(
-                    &strings.preferences_reveal_diagram_source_on_double_click,
-                    self.reveal_diagram_source_on_double_click,
-                    |this, _, _, cx| {
-                        this.reveal_diagram_source_on_double_click =
-                            !this.reveal_diagram_source_on_double_click;
-                        cx.notify();
-                    },
+                .child(self.tab_target(
+                    "prefs-tab-image-reveal-diagram-source",
+                    window,
                     theme,
-                    cx,
+                    self.switch_row(
+                        &strings.preferences_reveal_diagram_source_on_double_click,
+                        self.reveal_diagram_source_on_double_click,
+                        |this, _, window, cx| {
+                            this.toggle_reveal_diagram_source_on_double_click(window, cx)
+                        },
+                        theme,
+                        cx,
+                    ),
                 )),
         );
         content
@@ -2828,6 +2990,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         div()
@@ -2835,35 +2998,41 @@ impl PreferencesWindow {
             .flex_col()
             .items_center()
             .gap(px(12.0))
-            .child(self.switch_row(
-                &strings.preferences_reveal_source_on_focus,
-                self.reveal_source_on_focus,
-                |this, _, _, cx| {
-                    this.reveal_source_on_focus = !this.reveal_source_on_focus;
-                    cx.notify();
-                },
+            .child(self.tab_target(
+                "prefs-tab-editor-reveal-source-on-focus",
+                window,
                 theme,
-                cx,
+                self.switch_row(
+                    &strings.preferences_reveal_source_on_focus,
+                    self.reveal_source_on_focus,
+                    |this, _, window, cx| this.toggle_reveal_source_on_focus(window, cx),
+                    theme,
+                    cx,
+                ),
             ))
-            .child(self.switch_row(
-                &strings.preferences_show_table_headers,
-                self.show_table_headers,
-                |this, _, _, cx| {
-                    this.show_table_headers = !this.show_table_headers;
-                    cx.notify();
-                },
+            .child(self.tab_target(
+                "prefs-tab-editor-show-table-headers",
+                window,
                 theme,
-                cx,
+                self.switch_row(
+                    &strings.preferences_show_table_headers,
+                    self.show_table_headers,
+                    |this, _, window, cx| this.toggle_show_table_headers(window, cx),
+                    theme,
+                    cx,
+                ),
             ))
-            .child(self.switch_row(
-                &strings.preferences_edit_tables_as_markdown,
-                self.edit_tables_as_markdown,
-                |this, _, _, cx| {
-                    this.edit_tables_as_markdown = !this.edit_tables_as_markdown;
-                    cx.notify();
-                },
+            .child(self.tab_target(
+                "prefs-tab-editor-tables-as-markdown",
+                window,
                 theme,
-                cx,
+                self.switch_row(
+                    &strings.preferences_edit_tables_as_markdown,
+                    self.edit_tables_as_markdown,
+                    |this, _, window, cx| this.toggle_edit_tables_as_markdown(window, cx),
+                    theme,
+                    cx,
+                ),
             ))
     }
 
@@ -3133,9 +3302,11 @@ impl PreferencesWindow {
     /// Renders one command's resolved keys and record/reset controls.
     fn render_shortcut_row(
         &self,
+        index: usize,
         definition: ShortcutDefinition,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let c = &theme.colors;
@@ -3158,48 +3329,53 @@ impl PreferencesWindow {
             }
         }
 
-        div()
-            .w_full()
-            .min_h(px(42.0))
-            .px(px(10.0))
-            .py(px(6.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap(px(12.0))
-            .rounded(px(d.menu_item_radius))
-            .bg(c.dialog_surface)
-            .child(
-                div()
-                    .min_w(px(144.0))
-                    .text_size(px(t.dialog_body_size))
-                    .text_color(c.dialog_body)
-                    .child(label),
-            )
-            .child(div().flex_1().child(chips))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(6.0))
-                    .child(Self::shortcut_action_button(
-                        ("preferences-shortcut-record", definition.command as u32),
-                        strings.preferences_shortcut_record.clone(),
-                        theme,
-                        move |this, event, window, cx| {
-                            this.begin_recording_shortcut(command, event, window, cx)
-                        },
-                        cx,
-                    ))
-                    .child(Self::shortcut_action_button(
-                        ("preferences-shortcut-reset", definition.command as u32),
-                        strings.preferences_shortcut_reset.clone(),
-                        theme,
-                        move |this, event, window, cx| {
-                            this.reset_shortcut(command, event, window, cx)
-                        },
-                        cx,
-                    )),
-            )
+        self.tab_target(
+            &format!("prefs-tab-shortcut-{}", index),
+            window,
+            theme,
+            div()
+                .w_full()
+                .min_h(px(42.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.0))
+                .rounded(px(d.menu_item_radius))
+                .bg(c.dialog_surface)
+                .child(
+                    div()
+                        .min_w(px(144.0))
+                        .text_size(px(t.dialog_body_size))
+                        .text_color(c.dialog_body)
+                        .child(label),
+                )
+                .child(div().flex_1().child(chips))
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(6.0))
+                        .child(Self::shortcut_action_button(
+                            ("preferences-shortcut-record", definition.command as u32),
+                            strings.preferences_shortcut_record.clone(),
+                            theme,
+                            move |this, event, window, cx| {
+                                this.begin_recording_shortcut(command, event, window, cx)
+                            },
+                            cx,
+                        ))
+                        .child(Self::shortcut_action_button(
+                            ("preferences-shortcut-reset", definition.command as u32),
+                            strings.preferences_shortcut_reset.clone(),
+                            theme,
+                            move |this, event, window, cx| {
+                                this.reset_shortcut(command, event, window, cx)
+                            },
+                            cx,
+                        )),
+                ),
+        )
     }
 
     /// Renders categorized shortcut rows and the current validation error.
@@ -3207,6 +3383,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let c = &theme.colors;
@@ -3232,6 +3409,7 @@ impl PreferencesWindow {
             ShortcutCategory::Other,
         ];
 
+        let mut shortcut_idx = 0;
         for category in categories {
             let mut group = div().w_full().flex().flex_col().gap(px(8.0)).child(
                 div()
@@ -3258,7 +3436,16 @@ impl PreferencesWindow {
                 .copied()
                 .filter(|definition| definition.category == category)
             {
-                group = group.child(self.render_shortcut_row(definition, theme, strings, cx));
+                let row = self.render_shortcut_row(
+                    shortcut_idx,
+                    definition,
+                    theme,
+                    strings,
+                    window,
+                    cx,
+                );
+                group = group.child(row);
+                shortcut_idx += 1;
             }
             content = content.child(group);
         }
@@ -3290,6 +3477,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         div()
@@ -3312,12 +3500,16 @@ impl PreferencesWindow {
                             .child(strings.preferences_updates_auto_download.clone()),
                     )
                     .child(
-                        Switch::new("preferences-auto-download-updates")
-                            .checked(self.auto_download_updates)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.auto_download_updates = !this.auto_download_updates;
-                                cx.notify();
-                            })),
+                        self.tab_target(
+                            "prefs-tab-auto-updates",
+                            window,
+                            theme,
+                            Switch::new("preferences-auto-download-updates")
+                                .checked(self.auto_download_updates)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_auto_download_updates(window, cx)
+                                })),
+                        ),
                     ),
             )
             .child(
@@ -3342,34 +3534,36 @@ impl PreferencesWindow {
                             .child(strings.preferences_file_associations.clone()),
                     )
                     .child(
-                        div()
-                            .id("preferences-associate-formats")
-                            .h(px(theme.dimensions.dialog_button_height))
-                            .px(px(theme.dimensions.dialog_button_padding_x))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px((theme.dimensions.dialog_radius - 4.0).max(0.0)))
-                            .border(px(theme.dimensions.dialog_border_width))
-                            .border_color(theme.colors.dialog_border)
-                            .bg(theme.colors.dialog_secondary_button_bg)
-                            .text_size(px(theme.typography.dialog_button_size))
-                            .font_weight(theme.typography.dialog_button_weight.to_font_weight())
-                            .text_color(if enabled {
-                                theme.colors.dialog_secondary_button_text
-                            } else {
-                                theme.colors.dialog_muted
-                            })
-                            .when(enabled, |button| {
-                                button
-                                    .cursor_pointer()
-                                    .hover(|style| {
-                                        style.bg(theme.colors.dialog_secondary_button_hover)
-                                    })
-                                    .on_click(cx.listener(Self::associate_file_formats))
-                            })
-                            .child(strings.preferences_associate_formats.clone()),
+                        self.tab_target("prefs-tab-associate", window, theme,
+                            div()
+                                .id("preferences-associate-formats")
+                                .h(px(theme.dimensions.dialog_button_height))
+                                .px(px(theme.dimensions.dialog_button_padding_x))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px((theme.dimensions.dialog_radius - 4.0).max(0.0)))
+                                .border(px(theme.dimensions.dialog_border_width))
+                                .border_color(theme.colors.dialog_border)
+                                .bg(theme.colors.dialog_secondary_button_bg)
+                                .text_size(px(theme.typography.dialog_button_size))
+                                .font_weight(theme.typography.dialog_button_weight.to_font_weight())
+                                .text_color(if enabled {
+                                    theme.colors.dialog_secondary_button_text
+                                } else {
+                                    theme.colors.dialog_muted
+                                })
+                                .when(enabled, |button| {
+                                    button
+                                        .cursor_pointer()
+                                        .hover(|style| {
+                                            style.bg(theme.colors.dialog_secondary_button_hover)
+                                        })
+                                        .on_click(cx.listener(Self::associate_file_formats))
+                                })
+                                .child(strings.preferences_associate_formats.clone()),
+                        ),
                     )
             })
             .children(
@@ -3400,6 +3594,7 @@ impl PreferencesWindow {
         &self,
         theme: &Theme,
         strings: &crate::i18n::I18nStrings,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let c = &theme.colors;
@@ -3433,50 +3628,60 @@ impl PreferencesWindow {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(switch_row(
-                &strings.preferences_status_bar_enabled,
-                self.status_bar_enabled,
-                |this, _, _, cx| {
-                    this.status_bar_enabled = !this.status_bar_enabled;
-                    cx.notify();
-                },
-                cx,
+            .child(self.tab_target(
+                "prefs-tab-statusbar-enabled",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_status_bar_enabled,
+                    self.status_bar_enabled,
+                    |this, _, window, cx| this.toggle_status_bar_enabled(window, cx),
+                    cx,
+                ),
             ))
-            .child(switch_row(
-                &strings.preferences_status_bar_show_word_count,
-                self.status_bar_show_word_count,
-                |this, _, _, cx| {
-                    this.status_bar_show_word_count = !this.status_bar_show_word_count;
-                    cx.notify();
-                },
-                cx,
+            .child(self.tab_target(
+                "prefs-tab-statusbar-word-count",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_status_bar_show_word_count,
+                    self.status_bar_show_word_count,
+                    |this, _, window, cx| this.toggle_status_bar_show_word_count(window, cx),
+                    cx,
+                ),
             ))
-            .child(switch_row(
-                &strings.preferences_status_bar_show_cursor_position,
-                self.status_bar_show_cursor_position,
-                |this, _, _, cx| {
-                    this.status_bar_show_cursor_position = !this.status_bar_show_cursor_position;
-                    cx.notify();
-                },
-                cx,
+            .child(self.tab_target(
+                "prefs-tab-statusbar-cursor-position",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_status_bar_show_cursor_position,
+                    self.status_bar_show_cursor_position,
+                    |this, _, window, cx| this.toggle_status_bar_show_cursor_position(window, cx),
+                    cx,
+                ),
             ))
-            .child(switch_row(
-                &strings.preferences_status_bar_show_sidebar_toggle,
-                self.status_bar_show_sidebar_toggle,
-                |this, _, _, cx| {
-                    this.status_bar_show_sidebar_toggle = !this.status_bar_show_sidebar_toggle;
-                    cx.notify();
-                },
-                cx,
+            .child(self.tab_target(
+                "prefs-tab-statusbar-sidebar-toggle",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_status_bar_show_sidebar_toggle,
+                    self.status_bar_show_sidebar_toggle,
+                    |this, _, window, cx| this.toggle_status_bar_show_sidebar_toggle(window, cx),
+                    cx,
+                ),
             ))
-            .child(switch_row(
-                &strings.preferences_status_bar_show_mode_switch,
-                self.status_bar_show_mode_switch,
-                |this, _, _, cx| {
-                    this.status_bar_show_mode_switch = !this.status_bar_show_mode_switch;
-                    cx.notify();
-                },
-                cx,
+            .child(self.tab_target(
+                "prefs-tab-statusbar-mode-switch",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_status_bar_show_mode_switch,
+                    self.status_bar_show_mode_switch,
+                    |this, _, window, cx| this.toggle_status_bar_show_mode_switch(window, cx),
+                    cx,
+                ),
             ));
 
         div()
@@ -3641,7 +3846,7 @@ impl Render for PreferencesWindow {
                                     .flex_1()
                                     .min_h(px(0.0))
                                     .overflow_y_scroll()
-                                    .child(self.render_settings_page(&theme, &strings, cx))
+                                    .child(self.render_settings_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::File => div()
                                     .id("preferences-file-scroll")
@@ -3656,15 +3861,30 @@ impl Render for PreferencesWindow {
                                     .flex_col()
                                     .items_center()
                                     .gap(px(20.0))
-                                    .child(self.render_startup_page(&theme, &strings, cx))
-                                    .child(self.render_foreground_page(&theme, &strings, cx))
-                                    .child(self.render_single_instance_page(&theme, &strings, cx))
+                                    .child(self.render_startup_page(
+                                        &theme,
+                                        &strings,
+                                        window,
+                                        cx,
+                                    ))
+                                    .child(self.render_foreground_page(
+                                        &theme,
+                                        &strings,
+                                        window,
+                                        cx,
+                                    ))
+                                    .child(self.render_single_instance_page(
+                                        &theme,
+                                        &strings,
+                                        window,
+                                        cx,
+                                    ))
                                     .into_any_element(),
                                 PreferencesNav::Theme => div()
                                     .w_full()
                                     .flex_1()
                                     .min_h(px(0.0))
-                                    .child(self.render_theme_page(&theme, &strings, cx))
+                                    .child(self.render_theme_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::Image => div()
                                     .id("preferences-image-scroll")
@@ -3675,7 +3895,7 @@ impl Render for PreferencesWindow {
                                     .min_w(px(0.0))
                                     .overflow_y_scroll()
                                     .pr(px(4.0))
-                                    .child(self.render_image_page(&theme, &strings, cx))
+                                    .child(self.render_image_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::Editor => div()
                                     .w_full()
@@ -3684,13 +3904,13 @@ impl Render for PreferencesWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(self.render_editor_page(&theme, &strings, cx))
+                                    .child(self.render_editor_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::Shortcuts => div()
                                     .w_full()
                                     .flex_1()
                                     .min_h(px(0.0))
-                                    .child(self.render_shortcuts_page(&theme, &strings, cx))
+                                    .child(self.render_shortcuts_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::StatusBar => div()
                                     .w_full()
@@ -3699,7 +3919,12 @@ impl Render for PreferencesWindow {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(self.render_status_bar_page(&theme, &strings, cx))
+                                    .child(self.render_status_bar_page(
+                                        &theme,
+                                        &strings,
+                                        window,
+                                        cx,
+                                    ))
                                     .into_any_element(),
                             }),
                     )
