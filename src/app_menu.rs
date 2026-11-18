@@ -1193,7 +1193,6 @@ fn prompt_and_open_folder_with_error_window(cx: &mut App, error_window: Option<A
     .detach();
 }
 
-
 fn prompt_and_import_language_config(cx: &mut App) {
     let error_window = cx.active_window();
     prompt_and_import_language_config_with_error_window(cx, error_window);
@@ -1947,7 +1946,8 @@ mod tests {
         let first_window =
             cx.update(|cx| super::open_editor_window(cx, "doc".to_string(), Some(path.clone())));
         cx.run_until_parked();
-        let second_window = cx.update(|cx| super::open_editor_window(cx, "other".to_string(), None));
+        let second_window =
+            cx.update(|cx| super::open_editor_window(cx, "other".to_string(), None));
         cx.run_until_parked();
 
         assert_eq!(cx.update(|cx| cx.windows().len()), 2);

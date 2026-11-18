@@ -18,8 +18,8 @@ use self::tree::DocumentTree;
 use crate::components::{
     Block, BlockKind, BlockRecord, FootnoteDefinitionBinding, FootnoteReferenceLocation,
     FootnoteRegistry, FootnoteResolvedOccurrence, ImageReferenceDefinitions, ImageRuntime,
-    InlineTextTree,
-    LinkReferenceDefinitions, parse_image_reference_definitions, parse_link_reference_definitions,
+    InlineTextTree, LinkReferenceDefinitions, parse_image_reference_definitions,
+    parse_link_reference_definitions,
 };
 use crate::components::{
     TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellPosition, TableColumnAlignment,
@@ -222,12 +222,13 @@ pub struct Editor {
     /// Table insertion dialog state, if open.
     table_insert_dialog: Option<TableInsertDialogState>,
     search_bar: Option<SearchBarState>,
-    /// Delayed insert-submenu close task, canceled on renewed hover.
+    /// Query and replacement text remembered across find-bar sessions.
     last_search_query: String,
     last_search_replacement: String,
     /// True while Replace All is applying edits. Suppresses the per-block undo
     /// finalize so the whole batch becomes one undo entry.
     search_replace_batch_in_progress: bool,
+    /// Delayed insert-submenu close task, canceled on renewed hover.
     context_menu_submenu_close_task: Option<Task<()>>,
     /// Hover preview is distinct from the committed row/column selection.
     table_axis_preview: Option<TableAxisSelection>,
@@ -521,7 +522,9 @@ impl Editor {
     const HISTORY_COALESCE_WINDOW: Duration = Duration::from_millis(1_000);
     /// Maximum gap between select-all presses in the rendered selection-upgrade cycle.
     const RENDERED_SELECT_ALL_CYCLE_WINDOW: Duration = Duration::from_millis(750);
-    
+
+    /// On-disk path backing this editor window, if any. Untitled/scratch buffers
+    /// (no backing file) return `None`.
     pub(crate) fn open_file_path(&self) -> Option<&Path> {
         self.file_path.as_deref()
     }
