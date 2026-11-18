@@ -4548,7 +4548,8 @@ async fn rendered_mode_intra_block_caret_movement_scrolls_the_viewport(cx: &mut 
             block.selected_range = 0..0;
             cx.notify();
         });
-        target.read(cx).focus_handle.focus(window);
+        let focus_handle = target.read(cx).focus_handle.clone();
+        focus_handle.focus(window, cx);
         editor.active_entity_id = Some(target.entity_id());
         target
     });
