@@ -742,7 +742,7 @@ impl Editor {
                 search.show_replace_row = true;
             }
             search.reset_cursor_blink();
-            window.focus(&search.focus_handle);
+            window.focus(&search.focus_handle, cx);
             cx.notify();
         }
     }

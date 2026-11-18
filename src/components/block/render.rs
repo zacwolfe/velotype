@@ -13,12 +13,12 @@ const BLOCK_EDITOR_CONTEXT: &str = "BlockEditor";
 use super::element::{BlockTextElement, CodeLanguageInputElement};
 use super::{Block, BlockEvent, BlockKind, ImageResolvedSource, ImageRuntime, InlineLinkHit};
 use crate::components::{
-    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlImageLength, HtmlNode, HtmlNodeKind, InlineScript,
-    MermaidPalette, TableAxisHighlight, TableAxisKind, TableAxisMarker, TableCellInlineImageSegment,
-    TableColumnLayout, attr_value, display_math_font_size, inline_math_font_size,
-    parse_display_math_source, parse_html_image_block, parse_mermaid_fence_source,
-    parse_table_cell_inline_images, render_display_math_svg, render_inline_math_svg,
-    render_mermaid_svg_for_display, style_for_node,
+    Editor, HtmlContainerImage, HtmlCssColor, HtmlDocument, HtmlImageLength, HtmlNode,
+    HtmlNodeKind, InlineScript, MermaidPalette, TableAxisHighlight, TableAxisKind,
+    TableCellInlineImageSegment, TableColumnLayout, attr_value, display_math_font_size,
+    inline_math_font_size, parse_display_math_source, parse_html_image_block,
+    parse_mermaid_fence_source, parse_table_cell_inline_images, render_display_math_svg,
+    render_inline_math_svg, render_mermaid_svg_for_display, style_for_node,
 };
 use crate::fonts::FontSettings;
 use crate::i18n::{I18nManager, I18nStrings};
@@ -41,7 +41,6 @@ fn bulleted_list_marker(depth: usize) -> &'static str {
         _ => BULLET_SQUARE,
     }
 }
-
 
 /// Makes a row-axis highlight color more opaque (more solid, still translucent)
 /// for the header row, keeping the theme's hue so the header handle reads as a
@@ -222,8 +221,7 @@ fn effective_table_width(block: &Block, viewport_width: f32, d: &ThemeDimensions
         0.0
     };
 
-    (base_width - quote_inset - callout_inset)
-        .max((d.table_cell_padding_x * 2.0 + 80.0).max(120.0))
+    (base_width - quote_inset - callout_inset).max((d.table_cell_padding_x * 2.0 + 80.0).max(120.0))
 }
 
 /// Returns the centered-column width left after quote and callout insets.
@@ -562,7 +560,7 @@ impl Block {
 
         let image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
             ImageResolvedSource::Inline(image) => img(image),
             // Empty bytes never decode, which routes straight to the fallback
             // element below — the placeholder this case should show anyway.
@@ -581,15 +579,15 @@ impl Block {
                     &placeholder_strings,
                 )
             })
-        .with_loading(move || {
-            render_loading_placeholder(
-                &runtime_for_loading,
-                max_width,
-                placeholder_height,
-                &loading_theme,
-                &loading_strings,
-            )
-        });
+            .with_loading(move || {
+                render_loading_placeholder(
+                    &runtime_for_loading,
+                    max_width,
+                    placeholder_height,
+                    &loading_theme,
+                    &loading_strings,
+                )
+            });
 
         let mut container = div()
             .w_full()
@@ -1208,7 +1206,7 @@ impl Block {
 
         let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
             ImageResolvedSource::Inline(image) => img(image),
             // Empty bytes never decode, which routes straight to the fallback
             // element below — the placeholder this case should show anyway.
@@ -1223,7 +1221,12 @@ impl Block {
                 &fallback_strings,
             )
         })
-        .with_loading(move || div().w(reserved_width).h(reserved_height).into_any_element());
+        .with_loading(move || {
+            div()
+                .w(reserved_width)
+                .h(reserved_height)
+                .into_any_element()
+        });
 
         // `img` publishes the decoded image's aspect ratio to the layout, so a
         // single explicit axis derives the other one the way HTML does. With
@@ -1281,7 +1284,7 @@ impl Block {
 
         let mut image = match source {
             ImageResolvedSource::Local(path) => img(path),
-            ImageResolvedSource::Remote(uri) => img(uri),
+            ImageResolvedSource::Remote(uri) => crate::net::remote_image(uri),
             ImageResolvedSource::Inline(image) => img(image),
             // Empty bytes never decode, which routes straight to the fallback
             // element below — the placeholder this case should show anyway.
@@ -3135,35 +3138,28 @@ impl Render for Block {
                                             });
                                         });
                                     })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        move |_event, _window, cx| {
-                                            let _ = select_block.update(cx, |_block, cx| {
-                                                cx.stop_propagation();
-                                                cx.emit(BlockEvent::RequestSelectTableAxis {
-                                                    kind: TableAxisKind::Column,
-                                                    index: column,
-                                                });
+                                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                        let _ = select_block.update(cx, |_block, cx| {
+                                            cx.stop_propagation();
+                                            cx.emit(BlockEvent::RequestSelectTableAxis {
+                                                kind: TableAxisKind::Column,
+                                                index: column,
                                             });
-                                        },
-                                    )
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        move |event, _window, cx| {
-                                            let _ = menu_block.update(cx, |_block, cx| {
-                                                cx.stop_propagation();
-                                                cx.emit(BlockEvent::RequestOpenTableAxisMenu {
-                                                    kind: TableAxisKind::Column,
-                                                    index: column,
-                                                    position: event.position,
-                                                });
+                                        });
+                                    })
+                                    .on_mouse_down(MouseButton::Right, move |event, _window, cx| {
+                                        let _ = menu_block.update(cx, |_block, cx| {
+                                            cx.stop_propagation();
+                                            cx.emit(BlockEvent::RequestOpenTableAxisMenu {
+                                                kind: TableAxisKind::Column,
+                                                index: column,
+                                                position: event.position,
                                             });
-                                        },
-                                    )
+                                        });
+                                    })
                                     .block_mouse_except_scroll(),
                             )
                     }));
-
 
                 let header_hover_block = weak_table_block.clone();
                 let header_select_block = weak_table_block.clone();
@@ -3873,5 +3869,4 @@ mod tests {
         );
         assert!(language_bounds.size.width <= px(156.0));
     }
-
 }

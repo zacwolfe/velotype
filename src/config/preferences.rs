@@ -19,9 +19,9 @@ use crate::components::{
     normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
     shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
+use crate::editor::search_match::SearchOptions;
 use crate::fonts::{FontCatalog, FontPreferences, FontSettings, FontStackParseError};
 use crate::i18n::{I18nManager, I18nStrings, language_id_for_locale_preferences};
-use crate::editor::search_match::SearchOptions;
 use crate::theme::{Theme, ThemeCatalogEntry, ThemeManager};
 use crate::window_chrome::{
     custom_titlebar_height, render_custom_titlebar, velotype_window_options,
@@ -327,9 +327,7 @@ impl EditorSettings {
             .as_ref()
             .map(|p| p.status_bar.clone())
             .unwrap_or_default();
-        let workspace = preferences
-            .map(|p| p.workspace)
-            .unwrap_or_default();
+        let workspace = preferences.map(|p| p.workspace).unwrap_or_default();
         Self::set_global(
             cx,
             show_table_headers,
@@ -381,8 +379,7 @@ impl EditorSettings {
     pub fn set_show_table_headers(cx: &mut App, show_table_headers: bool) {
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
-        let reveal_diagram_source_on_double_click =
-            Self::reveal_diagram_source_on_double_click(cx);
+        let reveal_diagram_source_on_double_click = Self::reveal_diagram_source_on_double_click(cx);
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
@@ -448,8 +445,7 @@ impl EditorSettings {
         let show_table_headers = Self::show_table_headers(cx);
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
-        let reveal_diagram_source_on_double_click =
-            Self::reveal_diagram_source_on_double_click(cx);
+        let reveal_diagram_source_on_double_click = Self::reveal_diagram_source_on_double_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         let workspace = Self::workspace_preferences(cx);
         Self::set_global(
@@ -608,8 +604,7 @@ impl EditorSettings {
         let edit_tables_as_markdown = Self::edit_tables_as_markdown(cx);
         let reveal_source_on_focus = Self::reveal_source_on_focus(cx);
         let reveal_image_source_on_click = Self::reveal_image_source_on_click(cx);
-        let reveal_diagram_source_on_double_click =
-            Self::reveal_diagram_source_on_double_click(cx);
+        let reveal_diagram_source_on_double_click = Self::reveal_diagram_source_on_double_click(cx);
         let status_bar = Self::status_bar_preferences(cx);
         Self::set_global(
             cx,
@@ -836,8 +831,7 @@ impl From<&AppPreferences> for PreferencesFile {
                 edit_tables_as_markdown: value.edit_tables_as_markdown,
                 reveal_source_on_focus: value.reveal_source_on_focus,
                 reveal_image_source_on_click: value.reveal_image_source_on_click,
-                reveal_diagram_source_on_double_click:
-                    value.reveal_diagram_source_on_double_click,
+                reveal_diagram_source_on_double_click: value.reveal_diagram_source_on_double_click,
                 image_paste_behavior: value.image_paste_behavior.as_str().into(),
                 image_paste_fallback: value.image_paste_fallback.local_only().as_str().into(),
                 picgo_server_url: value.picgo_server_url.clone(),
@@ -1334,8 +1328,7 @@ fn save_preferences_from_window_with_dirs(
     preferences.edit_tables_as_markdown = edit_tables_as_markdown;
     preferences.reveal_source_on_focus = reveal_source_on_focus;
     preferences.reveal_image_source_on_click = reveal_image_source_on_click;
-    preferences.reveal_diagram_source_on_double_click =
-        reveal_diagram_source_on_double_click;
+    preferences.reveal_diagram_source_on_double_click = reveal_diagram_source_on_double_click;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -1604,8 +1597,8 @@ impl PreferencesWindow {
             edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             reveal_source_on_focus: preferences.reveal_source_on_focus,
             reveal_image_source_on_click: preferences.reveal_image_source_on_click,
-            reveal_diagram_source_on_double_click:
-                preferences.reveal_diagram_source_on_double_click,
+            reveal_diagram_source_on_double_click: preferences
+                .reveal_diagram_source_on_double_click,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
@@ -1625,8 +1618,8 @@ impl PreferencesWindow {
             saved_edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
-            saved_reveal_diagram_source_on_double_click:
-                preferences.reveal_diagram_source_on_double_click,
+            saved_reveal_diagram_source_on_double_click: preferences
+                .reveal_diagram_source_on_double_click,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -2651,7 +2644,6 @@ impl PreferencesWindow {
                 ));
             }
         }
-<<<<<<< HEAD
         let mut content = div().w_full().flex().flex_col().gap(px(14.0));
         if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
             let status = match self.picgo_status {
@@ -2673,40 +2665,39 @@ impl PreferencesWindow {
                         .child(status.clone()),
                 );
         }
-        content = content
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .gap(px(12.0))
-                    .child(self.labeled_row(
-                        &strings.preferences_image_insert_behavior,
-                        dropdown,
-                        theme,
-                    ))
-                    .child(self.switch_row(
-                        &strings.preferences_reveal_image_source_on_click,
-                        self.reveal_image_source_on_click,
-                        |this, _, _, cx| {
-                            this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
-                            cx.notify();
-                        },
-                        theme,
-                        cx,
-                    ))
-                    .child(self.switch_row(
-                        &strings.preferences_reveal_diagram_source_on_double_click,
-                        self.reveal_diagram_source_on_double_click,
-                        |this, _, _, cx| {
-                            this.reveal_diagram_source_on_double_click = !this
-                                .reveal_diagram_source_on_double_click;
-                            cx.notify();
-                        },
-                        theme,
-                        cx,
-                    )),
-            );
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(12.0))
+                .child(self.labeled_row(
+                    &strings.preferences_image_insert_behavior,
+                    dropdown,
+                    theme,
+                ))
+                .child(self.switch_row(
+                    &strings.preferences_reveal_image_source_on_click,
+                    self.reveal_image_source_on_click,
+                    |this, _, _, cx| {
+                        this.reveal_image_source_on_click = !this.reveal_image_source_on_click;
+                        cx.notify();
+                    },
+                    theme,
+                    cx,
+                ))
+                .child(self.switch_row(
+                    &strings.preferences_reveal_diagram_source_on_double_click,
+                    self.reveal_diagram_source_on_double_click,
+                    |this, _, _, cx| {
+                        this.reveal_diagram_source_on_double_click =
+                            !this.reveal_diagram_source_on_double_click;
+                        cx.notify();
+                    },
+                    theme,
+                    cx,
+                )),
+        );
         content
     }
 
@@ -3733,8 +3724,8 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
 #[cfg(test)]
 mod tests {
     use super::{
-        AppPreferences, DEFAULT_PICGO_SERVER_URL, EditorSettings, ImagePasteBehavior, SearchPreferences,
-        StartupOpenPreference, StatusBarPreferences, WorkspacePreferences,
+        AppPreferences, DEFAULT_PICGO_SERVER_URL, EditorSettings, ImagePasteBehavior,
+        SearchPreferences, StartupOpenPreference, StatusBarPreferences, WorkspacePreferences,
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
@@ -4471,8 +4462,7 @@ mod tests {
     ) {
         // No `EditorSettings::init` call: the getter must not depend on the
         // developer's own config.toml, so tests never observe their config.
-        let enabled =
-            cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx));
+        let enabled = cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx));
         assert!(!enabled);
     }
 
@@ -4483,14 +4473,10 @@ mod tests {
         cx.update(|cx| EditorSettings::init(cx, true, false, false, false, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
 
-        cx.update(
-            |cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, true),
-        );
+        cx.update(|cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, true));
         assert!(cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
 
-        cx.update(
-            |cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, false),
-        );
+        cx.update(|cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
     }
 }

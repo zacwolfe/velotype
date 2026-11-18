@@ -6,7 +6,6 @@
 use std::time::Duration;
 
 use gpui::*;
-use unicode_segmentation::UnicodeSegmentation;
 
 use super::CollapsedCaretAffinity;
 use super::{
@@ -1567,27 +1566,6 @@ impl Block {
         let offset = self.index_for_mouse_position(event.position);
         let was_focused = self.focus_handle.is_focused(window);
 
-        // Double click to select a word
-        if event.button == MouseButton::Left && event.click_count == 2 {
-            let text = self.display_text();
-
-            let range = text
-                .split_word_bound_indices()
-                .find(|(start, segment)| {
-                    let end = start + segment.len();
-                    *start <= offset && offset < end
-                })
-                .map(|(start, segment)| start..start + segment.len());
-
-            if let Some(range) = range {
-                self.selected_range = range;
-            }
-
-            cx.notify();
-
-            return;
-        }
-
         // Cmd/Ctrl+click follows a rendered link instead of editing it, so the
         // block is neither focused nor selected; the link opens on mouse-up.
         if event.modifiers.secondary() && self.pointer_link_hit(event.position).is_some() {
@@ -2115,7 +2093,7 @@ mod tests {
         // not hovered yet). This also populates `last_bounds` from the text
         // layout and registers the container's hover handler.
         cx.update(|window, cx| {
-            window.draw(cx).clear();
+            window.draw(cx).clear(cx);
         });
         cx.run_until_parked();
 
@@ -2142,7 +2120,7 @@ mod tests {
         // Redraw so the now-visible button is in the element tree with a real
         // hitbox.
         cx.update(|window, cx| {
-            window.draw(cx).clear();
+            window.draw(cx).clear(cx);
         });
         cx.run_until_parked();
 
