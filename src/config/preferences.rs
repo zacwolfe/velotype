@@ -1779,14 +1779,112 @@ impl PreferencesWindow {
             || self.fonts != self.saved_fonts
     }
 
-    /// Shows general settings while dismissing page-local editing controls.
-    fn set_nav_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.nav = PreferencesNav::Settings;
+    /// Returns true while any preferences dropdown list is expanded.
+    fn any_dropdown_open(&self) -> bool {
+        self.startup_dropdown_open
+            || self.foreground_dropdown_open
+            || self.single_instance_dropdown_open
+            || self.theme_dropdown_open
+            || self.image_dropdown_open
+    }
+
+    /// Dismisses every dropdown list and cancels shortcut recording.
+    fn close_popups(&mut self) {
         self.startup_dropdown_open = false;
+        self.foreground_dropdown_open = false;
+        self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.recording_shortcut = None;
+    }
+
+    /// Category cycle used by Up/Down navigation.
+    fn nav_order() -> [PreferencesNav; 7] {
+        [
+            PreferencesNav::Settings,
+            PreferencesNav::File,
+            PreferencesNav::Theme,
+            PreferencesNav::Image,
+            PreferencesNav::Editor,
+            PreferencesNav::Shortcuts,
+            PreferencesNav::StatusBar,
+        ]
+    }
+
+    /// Moves the selected category by delta, wrapping at both ends.
+    fn move_nav(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let order = Self::nav_order();
+        let idx = order
+            .iter()
+            .position(|&n| n == self.nav)
+            .expect("current nav missing from order");
+        let next_idx = (idx as isize + delta).rem_euclid(order.len() as isize) as usize;
+        self.enter_nav(order[next_idx], window, cx);
+    }
+
+    /// Centralized entry point for navigation that handles side effects and focus.
+    fn enter_nav(&mut self, nav: PreferencesNav, window: &mut Window, cx: &mut Context<Self>) {
+        self.nav = nav;
+        self.close_popups();
+        self.shortcut_error = None;
+        if nav == PreferencesNav::Image
+            && self.image_paste_behavior == ImagePasteBehavior::UsePicGo
+        {
+            self.check_picgo_server(cx);
+        }
         cx.notify();
+        window.focus(&self.focus_handle, cx);
+    }
+
+    fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.recording_shortcut.is_some() {
+            self.capture_shortcut_key(event, window, cx);
+            return;
+        }
+
+        if event.keystroke.key.as_str() == "tab" {
+            if event.keystroke.modifiers.platform
+                || event.keystroke.modifiers.control
+                || event.keystroke.modifiers.alt
+            {
+                return;
+            }
+            if event.keystroke.modifiers.shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
+
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+
+        if self.any_dropdown_open() {
+            return;
+        }
+
+        match event.keystroke.key.as_str() {
+            "up" => {
+                self.move_nav(-1, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            "down" => {
+                self.move_nav(1, window, cx);
+                cx.stop_propagation();
+                return;
+            }
+            _ => {}
+        }
+
+        self.capture_shortcut_key(event, window, cx);
+    }
+
+    fn set_nav_settings(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::Settings, window, cx);
     }
 
     /// Serializes background checks/actions and refreshes after the system default-app UI returns.
@@ -1872,42 +1970,18 @@ impl PreferencesWindow {
     }
 
     /// Shows startup settings and closes dropdowns and shortcut recording.
-    fn set_nav_file(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.nav = PreferencesNav::File;
-        self.startup_dropdown_open = false;
-        self.foreground_dropdown_open = false;
-        self.single_instance_dropdown_open = false;
-        self.theme_dropdown_open = false;
-        self.image_dropdown_open = false;
-        self.recording_shortcut = None;
-        cx.notify();
+    fn set_nav_file(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::File, window, cx);
     }
 
     /// Shows theme/font settings and closes dropdowns and shortcut recording.
-    fn set_nav_theme(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.nav = PreferencesNav::Theme;
-        self.startup_dropdown_open = false;
-        self.foreground_dropdown_open = false;
-        self.single_instance_dropdown_open = false;
-        self.theme_dropdown_open = false;
-        self.image_dropdown_open = false;
-        self.recording_shortcut = None;
-        cx.notify();
+    fn set_nav_theme(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::Theme, window, cx);
     }
 
     /// Shows image settings and closes dropdowns and shortcut recording.
-    fn set_nav_image(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.nav = PreferencesNav::Image;
-        self.startup_dropdown_open = false;
-        self.foreground_dropdown_open = false;
-        self.single_instance_dropdown_open = false;
-        self.theme_dropdown_open = false;
-        self.image_dropdown_open = false;
-        self.recording_shortcut = None;
-        if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
-            self.check_picgo_server(cx);
-        }
-        cx.notify();
+    fn set_nav_image(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::Image, window, cx);
     }
 
     /// Probes the configured loopback server without uploading clipboard data.
@@ -1943,15 +2017,8 @@ impl PreferencesWindow {
     }
 
     /// Shows shortcut settings, closes dropdowns, and clears the recording error.
-    fn set_nav_editor(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.nav = PreferencesNav::Editor;
-        self.startup_dropdown_open = false;
-        self.foreground_dropdown_open = false;
-        self.single_instance_dropdown_open = false;
-        self.theme_dropdown_open = false;
-        self.image_dropdown_open = false;
-        self.recording_shortcut = None;
-        cx.notify();
+    fn set_nav_editor(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::Editor, window, cx);
     }
 
     fn set_nav_shortcuts(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -3443,7 +3510,7 @@ impl Render for PreferencesWindow {
             .flex()
             .key_context("Preferences")
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(Self::capture_shortcut_key))
+            .on_key_down(cx.listener(Self::handle_key_down))
             .bg(c.editor_background)
             .text_color(c.dialog_body)
             .font(FontSettings::ui_font(cx))
