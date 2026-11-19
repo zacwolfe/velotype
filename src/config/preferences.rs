@@ -156,6 +156,14 @@ pub(crate) enum ImagePasteBehavior {
     UsePicGo,
 }
 
+const IMAGE_PASTE_OPTIONS: [ImagePasteBehavior; 5] = [
+    ImagePasteBehavior::None,
+    ImagePasteBehavior::CopyToDocumentFolder,
+    ImagePasteBehavior::CopyToAssetsFolder,
+    ImagePasteBehavior::CopyToNamedAssetsFolder,
+    ImagePasteBehavior::UsePicGo,
+];
+
 impl ImagePasteBehavior {
     /// Returns the stable TOML value for this image storage policy.
     pub(crate) fn as_str(self) -> &'static str {
@@ -1469,6 +1477,7 @@ pub(crate) struct PreferencesWindow {
     theme_dropdown_open: bool,
     /// Whether image storage options are expanded.
     image_dropdown_open: bool,
+    dropdown_highlight: usize,
     /// Command awaiting a replacement keystroke.
     recording_shortcut: Option<ShortcutCommand>,
     /// Localized invalid-key or conflict message for shortcut recording.
@@ -1650,6 +1659,7 @@ impl PreferencesWindow {
             saved_edit_tables_as_markdown: preferences.edit_tables_as_markdown,
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
+            dropdown_highlight: 0,
             saved_reveal_diagram_source_on_double_click: preferences
                 .reveal_diagram_source_on_double_click,
             saved_keybindings: keybindings,
@@ -1964,10 +1974,136 @@ impl PreferencesWindow {
         window.focus(&self.focus_handle, cx);
     }
 
+    /// Returns the length of the currently open dropdown.
+    fn open_dropdown_len(&self) -> usize {
+        if self.startup_dropdown_open {
+            2
+        } else if self.foreground_dropdown_open {
+            2
+        } else if self.single_instance_dropdown_open {
+            2
+        } else if self.theme_dropdown_open {
+            self.theme_options.len()
+        } else if self.image_dropdown_open {
+            IMAGE_PASTE_OPTIONS.len()
+        } else {
+            0
+        }
+    }
+
+    /// Returns the index of the current selection in the open dropdown.
+    fn open_dropdown_selected(&self) -> usize {
+        if self.startup_dropdown_open {
+            if self.startup_open == StartupOpenPreference::NewFile { 0 } else { 1 }
+        } else if self.foreground_dropdown_open {
+            if self.foreground_on_launch { 0 } else { 1 }
+        } else if self.single_instance_dropdown_open {
+            if self.single_instance { 0 } else { 1 }
+        } else if self.theme_dropdown_open {
+            self.theme_options
+                .iter()
+                .position(|t| t.id == self.selected_theme_id)
+                .unwrap_or(0)
+        } else if self.image_dropdown_open {
+            IMAGE_PASTE_OPTIONS
+                .iter()
+                .position(|&b| b == self.image_paste_behavior)
+                .unwrap_or(0)
+        } else {
+            0
+        }
+    }
+
+    /// Resets the dropdown highlight to the current selection.
+    fn reset_dropdown_highlight(&mut self) {
+        self.dropdown_highlight = self.open_dropdown_selected();
+    }
+
+    /// Moves the dropdown highlight with wrapping.
+    fn move_dropdown_highlight(&mut self, delta: isize) {
+        let len = self.open_dropdown_len();
+        if len == 0 {
+            return;
+        }
+        self.dropdown_highlight = (self.dropdown_highlight as isize + delta)
+            .rem_euclid(len as isize) as usize;
+    }
+
+    /// Commits the highlighted item and closes the dropdown.
+    fn commit_dropdown_highlight(&mut self, cx: &mut Context<Self>) {
+        let idx = self.dropdown_highlight;
+        if self.startup_dropdown_open {
+            if idx == 0 {
+                self.startup_open = StartupOpenPreference::NewFile;
+            } else {
+                self.startup_open = StartupOpenPreference::LastOpenedFile;
+            }
+            self.startup_dropdown_open = false;
+            cx.notify();
+        } else if self.foreground_dropdown_open {
+            self.foreground_on_launch = idx == 0;
+            self.foreground_dropdown_open = false;
+            cx.notify();
+        } else if self.single_instance_dropdown_open {
+            self.single_instance = idx == 0;
+            self.single_instance_dropdown_open = false;
+            cx.notify();
+        } else if self.theme_dropdown_open {
+            if let Some(theme) = self.theme_options.get(idx) {
+                self.selected_theme_id = theme.id.clone();
+            }
+            self.theme_dropdown_open = false;
+            cx.notify();
+        } else if self.image_dropdown_open {
+            if let Some(&behavior) = IMAGE_PASTE_OPTIONS.get(idx) {
+                if behavior != ImagePasteBehavior::UsePicGo {
+                    self.image_paste_fallback = behavior;
+                }
+                self.image_paste_behavior = behavior;
+                self.image_dropdown_open = false;
+                if behavior == ImagePasteBehavior::UsePicGo {
+                    self.check_picgo_server(cx);
+                }
+                cx.notify();
+            }
+        }
+    }
+
     fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.recording_shortcut.is_some() {
             self.capture_shortcut_key(event, window, cx);
             return;
+        }
+
+        if self.any_dropdown_open() {
+            if !event.keystroke.modifiers.modified() {
+                match event.keystroke.key.as_str() {
+                    "up" => {
+                        self.move_dropdown_highlight(-1);
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "down" => {
+                        self.move_dropdown_highlight(1);
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "enter" | "space" if !event.keystroke.modifiers.modified() => {
+                        self.commit_dropdown_highlight(cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    "escape" => {
+                        self.close_popups();
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
         }
 
         if event.keystroke.key.as_str() == "tab" {
@@ -2186,6 +2322,7 @@ impl PreferencesWindow {
         self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
+        self.reset_dropdown_highlight();
         cx.notify();
     }
 
@@ -2200,6 +2337,7 @@ impl PreferencesWindow {
         self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
+        self.reset_dropdown_highlight();
         cx.notify();
     }
 
@@ -2214,6 +2352,7 @@ impl PreferencesWindow {
         self.foreground_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
+        self.reset_dropdown_highlight();
         cx.notify();
     }
 
@@ -2224,6 +2363,7 @@ impl PreferencesWindow {
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
         self.image_dropdown_open = false;
+        self.reset_dropdown_highlight();
         cx.notify();
     }
 
@@ -2234,6 +2374,7 @@ impl PreferencesWindow {
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
+        self.reset_dropdown_highlight();
         cx.notify();
     }
 
@@ -2461,6 +2602,7 @@ impl PreferencesWindow {
         id: impl Into<ElementId>,
         label: String,
         selected: bool,
+        highlighted: bool,
         theme: &Theme,
         on_click: impl Fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
@@ -2477,7 +2619,9 @@ impl PreferencesWindow {
             .items_center()
             .rounded(px(d.menu_item_radius))
             .cursor_pointer()
-            .bg(if selected {
+            .border(px(if highlighted { d.dialog_border_width } else { 0.0 }))
+            .border_color(c.dialog_border)
+            .bg(if highlighted || selected {
                 c.selection
             } else {
                 c.dialog_surface
@@ -2578,6 +2722,7 @@ impl PreferencesWindow {
                     "preferences-startup-new-file",
                     new_file_label,
                     self.startup_open == StartupOpenPreference::NewFile,
+                    self.startup_dropdown_open && 0 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.startup_open = StartupOpenPreference::NewFile;
@@ -2590,6 +2735,7 @@ impl PreferencesWindow {
                     "preferences-startup-last-opened-file",
                     last_file_label,
                     self.startup_open == StartupOpenPreference::LastOpenedFile,
+                    self.startup_dropdown_open && 1 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.startup_open = StartupOpenPreference::LastOpenedFile;
@@ -2635,6 +2781,7 @@ impl PreferencesWindow {
                     "preferences-foreground-enabled",
                     enabled_label,
                     self.foreground_on_launch,
+                    self.foreground_dropdown_open && 0 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.foreground_on_launch = true;
@@ -2647,6 +2794,7 @@ impl PreferencesWindow {
                     "preferences-foreground-disabled",
                     disabled_label,
                     !self.foreground_on_launch,
+                    self.foreground_dropdown_open && 1 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.foreground_on_launch = false;
@@ -2692,6 +2840,7 @@ impl PreferencesWindow {
                     "preferences-single-instance-shared",
                     shared_label,
                     self.single_instance,
+                    self.single_instance_dropdown_open && 0 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.single_instance = true;
@@ -2704,6 +2853,7 @@ impl PreferencesWindow {
                     "preferences-single-instance-separate",
                     separate_label,
                     !self.single_instance,
+                    self.single_instance_dropdown_open && 1 == self.dropdown_highlight,
                     theme,
                     |this, _, _, cx| {
                         this.single_instance = false;
@@ -2754,6 +2904,7 @@ impl PreferencesWindow {
                     ("preferences-theme-option", index),
                     entry.name,
                     selected,
+                    self.theme_dropdown_open && index == self.dropdown_highlight,
                     theme,
                     move |this, _, _, cx| {
                         this.selected_theme_id = entry.id.clone();
@@ -2873,13 +3024,6 @@ impl PreferencesWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let options = [
-            ImagePasteBehavior::None,
-            ImagePasteBehavior::CopyToDocumentFolder,
-            ImagePasteBehavior::CopyToAssetsFolder,
-            ImagePasteBehavior::CopyToNamedAssetsFolder,
-            ImagePasteBehavior::UsePicGo,
-        ];
         let mut dropdown = div()
             .w_full()
             .min_w(px(0.0))
@@ -2894,13 +3038,14 @@ impl PreferencesWindow {
                 cx,
             ));
         if self.image_dropdown_open {
-            for (index, behavior) in options.into_iter().enumerate() {
+            for (index, behavior) in IMAGE_PASTE_OPTIONS.into_iter().enumerate() {
                 let selected = behavior == self.image_paste_behavior;
                 let label = Self::image_paste_behavior_label(behavior, strings);
                 dropdown = dropdown.child(Self::dropdown_item(
                     ("preferences-image-option", index),
                     label,
                     selected,
+                    self.image_dropdown_open && index == self.dropdown_highlight,
                     theme,
                     move |this, _, _, cx| {
                         if behavior != ImagePasteBehavior::UsePicGo {
@@ -4511,6 +4656,164 @@ mod tests {
             "escape should end shortcut recording"
         );
         redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn g1_preferences_down_moves_dropdown_highlight(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        window.update(cx, |view, _, _| {
+            view.startup_dropdown_open = true;
+            view.reset_dropdown_highlight();
+        }).expect("window should be updateable");
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+
+        window.read_with(cx, |view, _| {
+            assert_eq!(view.dropdown_highlight, 1);
+            assert_eq!(view.nav, PreferencesNav::Settings);
+            assert_eq!(view.startup_dropdown_open, true);
+        }).expect("window should be readable");
+    }
+
+    #[gpui::test]
+    async fn g2_preferences_dropdown_highlight_wraps(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        window.update(cx, |view, _, _| {
+            view.startup_dropdown_open = true;
+            view.dropdown_highlight = 0;
+        }).expect("window should be updateable");
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
+        cx.run_until_parked();
+
+        window.read_with(cx, |view, _| {
+            assert_eq!(view.dropdown_highlight, 1);
+        }).expect("window should be readable");
+    }
+
+    #[gpui::test]
+    async fn g3_preferences_enter_applies_highlighted_item(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        window.update(cx, |view, _, _| {
+            view.startup_dropdown_open = true;
+        }).expect("window should be updateable");
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("enter").unwrap());
+        cx.run_until_parked();
+
+        window.read_with(cx, |view, _| {
+            assert_eq!(view.startup_open, StartupOpenPreference::LastOpenedFile);
+            assert_eq!(view.startup_dropdown_open, false);
+            assert_eq!(view.nav, PreferencesNav::Settings);
+        }).expect("window should be readable");
+    }
+
+    #[gpui::test]
+    async fn g4_preferences_theme_dropdown_enter_selects_second_theme(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let theme_options = vec![
+            ThemeCatalogEntry { id: "velotype".into(), name: "Velotype".into() },
+            ThemeCatalogEntry { id: "velotype-dark".into(), name: "Velotype Dark".into() },
+        ];
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                theme_options,
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        // Navigate to Theme page (two "down" presses on Settings page body)
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+
+        window.update(cx, |view, _, _| {
+            view.theme_dropdown_open = true;
+            view.reset_dropdown_highlight();
+        }).expect("window should be updateable");
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("enter").unwrap());
+        cx.run_until_parked();
+
+        window.read_with(cx, |view, _| {
+            assert_eq!(view.selected_theme_id, "velotype-dark");
+            assert_eq!(view.theme_dropdown_open, false);
+        }).expect("window should be readable");
+    }
+
+    #[gpui::test]
+    async fn g5_preferences_escape_closes_dropdown_only(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let theme_options = vec![
+            ThemeCatalogEntry { id: "velotype".into(), name: "Velotype".into() },
+            ThemeCatalogEntry { id: "velotype-dark".into(), name: "Velotype Dark".into() },
+        ];
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                theme_options,
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        // Navigate to Theme page
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+
+        window.update(cx, |view, _, _| {
+            view.theme_dropdown_open = true;
+        }).expect("window should be updateable");
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("escape").unwrap());
+        cx.run_until_parked();
+
+        window.read_with(cx, |view, _| {
+            assert_eq!(view.theme_dropdown_open, false);
+            assert_eq!(view.selected_theme_id, "velotype");
+        }).expect("window should be readable");
     }
 
     fn init_preferences_test_app(cx: &mut TestAppContext) {
