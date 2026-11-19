@@ -2868,9 +2868,12 @@ impl PreferencesWindow {
             .min_w(px(0.0))
             .flex()
             .flex_col()
+            .gap(px(8.0))
             .child(self.labeled_row(&strings.preferences_single_instance_option, dropdown, theme))
             .child(
                 div()
+                    .w_full()
+                    .min_w(px(0.0))
                     .text_size(px(theme.typography.dialog_body_size))
                     .text_color(theme.colors.dialog_muted)
                     .child(strings.preferences_single_instance_hint.clone()),
