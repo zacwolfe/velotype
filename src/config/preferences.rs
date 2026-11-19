@@ -4073,7 +4073,8 @@ pub(crate) fn open_preferences_window(cx: &mut App) -> WindowHandle<PreferencesW
 mod tests {
     use super::{
         AppPreferences, DEFAULT_PICGO_SERVER_URL, EditorSettings, ImagePasteBehavior,
-        SearchPreferences, StartupOpenPreference, StatusBarPreferences, WorkspacePreferences,
+        PreferencesNav, PreferencesWindow, SearchPreferences, StartupOpenPreference,
+        StatusBarPreferences, WorkspacePreferences,
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
@@ -4082,8 +4083,435 @@ mod tests {
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
     use crate::theme::{ThemeCatalogEntry, ThemeManager};
-    use gpui::TestAppContext;
+    use gpui::{AppContext, Keystroke, TestAppContext, WindowHandle};
     use std::collections::BTreeMap;
+
+    fn redraw_preferences(cx: &mut TestAppContext, window: WindowHandle<PreferencesWindow>) {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("preferences window should be drawn");
+        cx.run_until_parked();
+    }
+
+    fn focused_key(
+        cx: &mut TestAppContext,
+        window: WindowHandle<PreferencesWindow>,
+        keys: &[&str],
+    ) -> Option<String> {
+        window
+            .update(cx, |view, window, _cx| {
+                keys.iter()
+                    .find(|key| {
+                        view.tab_handle(key)
+                            .is_some_and(|handle| handle.is_focused(window))
+                    })
+                    .map(|key| key.to_string())
+            })
+            .expect("preferences window should be updateable")
+    }
+
+    #[gpui::test]
+    async fn f1_preferences_up_down_wraps_categories(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        let nav = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable")
+        };
+        assert_eq!(nav(cx), PreferencesNav::Settings);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::StatusBar);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::Settings);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::File);
+
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f2_preferences_up_down_single_step(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        let nav = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable")
+        };
+        assert_eq!(nav(cx), PreferencesNav::Settings);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::File);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::Theme);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::File);
+
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f3_preferences_tab_enters_page_and_cycles(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+        const EDITOR: [&str; 3] = [
+            "prefs-tab-editor-reveal-source-on-focus",
+            "prefs-tab-editor-show-table-headers",
+            "prefs-tab-editor-tables-as-markdown",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        for index in 0..SETTINGS.len() {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+            cx.run_until_parked();
+            assert_eq!(focused_key(cx, window, &SETTINGS).as_deref(), Some(SETTINGS[index]));
+            redraw_preferences(cx, window);
+        }
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(focused_key(cx, window, &SETTINGS).as_deref(), Some(SETTINGS[0]));
+
+        window
+            .update(cx, |view, window, cx| window.focus(&view.focus_handle, cx))
+            .expect("preferences window should be updateable");
+        for _ in 0..4 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Editor
+        );
+        redraw_preferences(cx, window);
+
+        for index in 0..EDITOR.len() {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+            cx.run_until_parked();
+            assert_eq!(focused_key(cx, window, &EDITOR).as_deref(), Some(EDITOR[index]));
+            redraw_preferences(cx, window);
+        }
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(focused_key(cx, window, &EDITOR).as_deref(), Some(EDITOR[0]));
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f4_preferences_shift_tab_reverses_and_wraps(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        window
+            .update(cx, |view, window, cx| window.focus(&view.focus_handle, cx))
+            .expect("preferences window should be updateable");
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("shift-tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[SETTINGS.len() - 1])
+        );
+        redraw_preferences(cx, window);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("shift-tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[SETTINGS.len() - 2])
+        );
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f5_preferences_tab_cycles_editor_and_shortcuts_pages(cx: &mut TestAppContext) {
+        const EDITOR: [&str; 2] = [
+            "prefs-tab-editor-reveal-source-on-focus",
+            "prefs-tab-editor-show-table-headers",
+        ];
+        const SHORTCUTS: [&str; 2] = ["prefs-tab-shortcut-0", "prefs-tab-shortcut-1"];
+        const STATUS_BAR: [&str; 2] = [
+            "prefs-tab-statusbar-enabled",
+            "prefs-tab-statusbar-word-count",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        let pages: [(usize, [&str; 2]); 3] = [(4, EDITOR), (1, SHORTCUTS), (1, STATUS_BAR)];
+        for (steps, page) in pages {
+            window
+                .update(cx, |view, window, cx| window.focus(&view.focus_handle, cx))
+                .expect("preferences window should be updateable");
+            for _ in 0..steps {
+                cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+                cx.run_until_parked();
+            }
+            redraw_preferences(cx, window);
+
+            for index in 0..page.len() {
+                cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+                cx.run_until_parked();
+                assert_eq!(focused_key(cx, window, &page).as_deref(), Some(page[index]));
+                redraw_preferences(cx, window);
+            }
+        }
+    }
+
+    #[gpui::test]
+    async fn f6_preferences_arrows_ignored_while_dropdown_open(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        let nav = |cx: &mut TestAppContext| {
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable")
+        };
+        assert_eq!(nav(cx), PreferencesNav::Settings);
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::File);
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.startup_dropdown_open = true;
+                cx.notify();
+            })
+            .expect("preferences window should be updateable");
+        redraw_preferences(cx, window);
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::File);
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.startup_dropdown_open = false;
+                cx.notify();
+            })
+            .expect("preferences window should be updateable");
+        redraw_preferences(cx, window);
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(nav(cx), PreferencesNav::Theme);
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f7_preferences_tab_still_works_while_dropdown_open(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        window
+            .update(cx, |view, _window, cx| {
+                view.startup_dropdown_open = true;
+                cx.notify();
+            })
+            .expect("preferences window should be updateable");
+        redraw_preferences(cx, window);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[0])
+        );
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Settings
+        );
+        redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f8_preferences_tab_ignores_platform_modifiers(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        // Tab only navigates when shift is the sole modifier. Ctrl and alt must
+        // fall through so platform and app shortcuts keep working.
+        for stroke in ["ctrl-tab", "alt-tab"] {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse(stroke).unwrap());
+            cx.run_until_parked();
+            assert!(
+                focused_key(cx, window, &SETTINGS).is_none(),
+                "{} should not move focus to a tab target",
+                stroke
+            );
+            let root_focused = window
+                .update(cx, |view, window, _cx| view.focus_handle.is_focused(window))
+                .expect("preferences window should be updateable");
+            assert!(root_focused, "{} should leave focus on the page root", stroke);
+            redraw_preferences(cx, window);
+        }
+
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Settings
+        );
+    }
+
+    #[gpui::test]
+    async fn f9_preferences_tab_during_shortcut_recording_does_not_move_focus(
+        cx: &mut TestAppContext,
+    ) {
+        const SHORTCUTS: [&str; 2] = ["prefs-tab-shortcut-0", "prefs-tab-shortcut-1"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        for _ in 0..5 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        redraw_preferences(cx, window);
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Shortcuts
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SHORTCUTS).as_deref(),
+            Some(SHORTCUTS[0])
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("enter").unwrap());
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |view, _| view.recording_shortcut.is_some())
+                .expect("preferences window should be readable"),
+            "enter on a shortcut row should start recording"
+        );
+        redraw_preferences(cx, window);
+
+        // While recording, the page root owns focus and tab is captured as a
+        // candidate shortcut key. A navigated tab would land on SHORTCUTS[0].
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert!(focused_key(cx, window, &SHORTCUTS).is_none());
+        redraw_preferences(cx, window);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("escape").unwrap());
+        cx.run_until_parked();
+        assert!(
+            window
+                .read_with(cx, |view, _| view.recording_shortcut.is_none())
+                .expect("preferences window should be readable"),
+            "escape should end shortcut recording"
+        );
+        redraw_preferences(cx, window);
+    }
 
     fn init_preferences_test_app(cx: &mut TestAppContext) {
         cx.update(|cx| {
