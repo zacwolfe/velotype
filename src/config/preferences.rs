@@ -2863,7 +2863,18 @@ impl PreferencesWindow {
                     cx,
                 ));
         }
-        self.labeled_row(&strings.preferences_single_instance_option, dropdown, theme)
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .child(self.labeled_row(&strings.preferences_single_instance_option, dropdown, theme))
+            .child(
+                div()
+                    .text_size(px(theme.typography.dialog_body_size))
+                    .text_color(theme.colors.dialog_muted)
+                    .child(strings.preferences_single_instance_hint.clone()),
+            )
     }
 
     /// Renders theme selection, font inputs, syntax errors, and availability warnings.

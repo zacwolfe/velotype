@@ -225,6 +225,8 @@ pub struct I18nStrings {
     pub preferences_single_instance_shared: String,
     /// Window-grouping option: each launch gets its own separate process.
     pub preferences_single_instance_separate: String,
+    /// Window-grouping hint: which launches the preference actually affects.
+    pub preferences_single_instance_hint: String,
     /// Theme preference field label.
     pub preferences_local_theme: String,
     /// Label for the document body font family list.
@@ -709,6 +711,7 @@ struct I18nStringsDe {
     preferences_single_instance_option: Option<String>,
     preferences_single_instance_shared: Option<String>,
     preferences_single_instance_separate: Option<String>,
+    preferences_single_instance_hint: Option<String>,
     preferences_local_theme: Option<String>,
     /// Optional body font family field label.
     preferences_font_body: Option<String>,
@@ -1090,6 +1093,7 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_single_instance_option",
     "preferences_single_instance_shared",
     "preferences_single_instance_separate",
+    "preferences_single_instance_hint",
     "preferences_local_theme",
     "preferences_font_body",
     "preferences_font_code",
@@ -1509,6 +1513,9 @@ impl I18nStringsDe {
             preferences_single_instance_separate: self
                 .preferences_single_instance_separate
                 .unwrap_or(defaults.preferences_single_instance_separate),
+            preferences_single_instance_hint: self
+                .preferences_single_instance_hint
+                .unwrap_or(defaults.preferences_single_instance_hint),
             preferences_local_theme: self
                 .preferences_local_theme
                 .unwrap_or(defaults.preferences_local_theme),
@@ -2060,6 +2067,7 @@ impl I18nStrings {
             preferences_single_instance_option: "窗口分组".into(),
             preferences_single_instance_shared: "共用一个应用".into(),
             preferences_single_instance_separate: "每次独立启动".into(),
+            preferences_single_instance_hint: "仅影响从终端启动时的文件打开行为；从访达或聚焦启动时，系统始终复用已在运行的应用。".into(),
             preferences_local_theme: "本地主题".into(),
             preferences_font_body: "正文字体".into(),
             preferences_font_code: "代码字体".into(),
@@ -2363,6 +2371,7 @@ impl I18nStrings {
             preferences_single_instance_option: "Window Grouping".into(),
             preferences_single_instance_shared: "One shared app".into(),
             preferences_single_instance_separate: "Separate instance".into(),
+            preferences_single_instance_hint: "Only affects files opened from a terminal. Launching from Finder or Spotlight always reuses the running app.".into(),
             preferences_local_theme: "Local Theme".into(),
             preferences_font_body: "Body font".into(),
             preferences_font_code: "Code font".into(),
