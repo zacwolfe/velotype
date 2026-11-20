@@ -1,7 +1,9 @@
 //! Persistent app preferences and the preferences window.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
@@ -9,7 +11,7 @@ use futures::channel::oneshot;
 
 use anyhow::Context as _;
 use gpui::prelude::FluentBuilder;
-use gpui::*;
+use gpui::{AnyElement, *};
 use serde::{Deserialize, Serialize};
 
 use super::{VelotypeConfigDirs, read_recent_files};
@@ -163,6 +165,46 @@ const IMAGE_PASTE_OPTIONS: [ImagePasteBehavior; 5] = [
     ImagePasteBehavior::CopyToNamedAssetsFolder,
     ImagePasteBehavior::UsePicGo,
 ];
+
+/// Identifies which preferences dropdown trigger a recorded bound belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DropdownSlot {
+    Startup,
+    Foreground,
+    SingleInstance,
+    Theme,
+    Image,
+}
+
+/// Number of dropdown triggers tracked across the preferences pages.
+const DROPDOWN_SLOT_COUNT: usize = 5;
+/// Space between a dropdown trigger and its floating panel.
+const DROPDOWN_PANEL_GAP: f32 = 4.0;
+/// Inner padding of a floating dropdown panel.
+const DROPDOWN_PANEL_PADDING: f32 = 4.0;
+/// Minimum width of a floating dropdown panel.
+const DROPDOWN_PANEL_MIN_WIDTH: f32 = 180.0;
+/// Estimated row height, matching `dropdown_item` min height plus highlight border.
+const DROPDOWN_ROW_HEIGHT: f32 = 32.0;
+/// Space between rows inside a floating dropdown panel.
+const DROPDOWN_ROW_GAP: f32 = 4.0;
+/// Minimum margin kept between a floating panel and the window edge.
+const DROPDOWN_PANEL_MARGIN: f32 = 8.0;
+/// Stable element id for the floating dropdown panel.
+const DROPDOWN_OVERLAY_ID: &str = "preferences-dropdown-overlay";
+
+impl DropdownSlot {
+    /// Index used for the trigger bounds array.
+    fn index(self) -> usize {
+        match self {
+            Self::Startup => 0,
+            Self::Foreground => 1,
+            Self::SingleInstance => 2,
+            Self::Theme => 3,
+            Self::Image => 4,
+        }
+    }
+}
 
 impl ImagePasteBehavior {
     /// Returns the stable TOML value for this image storage policy.
@@ -1477,6 +1519,8 @@ pub(crate) struct PreferencesWindow {
     theme_dropdown_open: bool,
     /// Whether image storage options are expanded.
     image_dropdown_open: bool,
+    /// Last painted window-space bounds of each dropdown trigger, indexed by `DropdownSlot`.
+    dropdown_trigger_bounds: Rc<RefCell<[Option<Bounds<Pixels>>; DROPDOWN_SLOT_COUNT]>>,
     dropdown_highlight: usize,
     /// Command awaiting a replacement keystroke.
     recording_shortcut: Option<ShortcutCommand>,
@@ -1541,6 +1585,54 @@ impl FileAssociationStatus {
     }
     fn is_busy(&self) -> bool {
         matches!(self, Self::Checking | Self::Associating)
+    }
+}
+
+struct DropdownPlacement {
+    left: f32,
+    width: f32,
+    above: bool,
+    offset: f32,
+    max_height: f32,
+}
+
+fn dropdown_panel_placement(
+    trigger: Bounds<Pixels>,
+    panel_height: f32,
+    viewport_width: f32,
+    viewport_height: f32,
+    top_inset: f32,
+) -> DropdownPlacement {
+    let width = trigger.size.width.as_f32().clamp(
+        DROPDOWN_PANEL_MIN_WIDTH,
+        viewport_width - 2.0 * DROPDOWN_PANEL_MARGIN,
+    );
+    let left = trigger.origin.x.as_f32().clamp(
+        DROPDOWN_PANEL_MARGIN,
+        viewport_width - width - DROPDOWN_PANEL_MARGIN,
+    );
+
+    let trigger_bottom = trigger.origin.y.as_f32() + trigger.size.height.as_f32();
+    let space_below =
+        viewport_height - DROPDOWN_PANEL_MARGIN - (trigger_bottom + DROPDOWN_PANEL_GAP);
+    let space_above = trigger.origin.y.as_f32() - DROPDOWN_PANEL_GAP - top_inset;
+
+    let (above, offset, max_height) = if space_below >= panel_height {
+        (false, trigger_bottom + DROPDOWN_PANEL_GAP, space_below)
+    } else if space_above >= panel_height {
+        (true, trigger.origin.y.as_f32() - DROPDOWN_PANEL_GAP, space_above)
+    } else if space_below >= space_above {
+        (false, trigger_bottom + DROPDOWN_PANEL_GAP, space_below)
+    } else {
+        (true, trigger.origin.y.as_f32() - DROPDOWN_PANEL_GAP, space_above)
+    };
+
+    DropdownPlacement {
+        left,
+        width,
+        above,
+        offset,
+        max_height: max_height.max(0.0),
     }
 }
 
@@ -1660,6 +1752,9 @@ impl PreferencesWindow {
             saved_reveal_source_on_focus: preferences.reveal_source_on_focus,
             saved_reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             dropdown_highlight: 0,
+            dropdown_trigger_bounds: Rc::new(
+                RefCell::new([None; DROPDOWN_SLOT_COUNT]),
+            ),
             saved_reveal_diagram_source_on_double_click: preferences
                 .reveal_diagram_source_on_double_click,
             saved_keybindings: keybindings,
@@ -2634,6 +2729,237 @@ impl PreferencesWindow {
             .on_click(cx.listener(on_click))
     }
 
+    fn track_dropdown_trigger(
+        &self,
+        slot: DropdownSlot,
+        trigger: impl IntoElement,
+    ) -> impl IntoElement {
+        let bounds = self.dropdown_trigger_bounds.clone();
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .child(trigger)
+            .on_children_prepainted(move |child_bounds, _window, _cx| {
+                if let Some(child) = child_bounds.first() {
+                    bounds.borrow_mut()[slot.index()] = Some(*child);
+                }
+            })
+    }
+
+    fn render_dropdown_overlay(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.any_dropdown_open() {
+            return None;
+        }
+        let (slot, row_count, list) = self.open_dropdown_list(theme, strings, cx)?;
+        let trigger = (*self.dropdown_trigger_bounds.borrow())[slot.index()]?;
+        let c = &theme.colors;
+        let d = &theme.dimensions;
+        let viewport = window.viewport_size();
+        let viewport_width = viewport.width.as_f32();
+        let viewport_height = viewport.height.as_f32();
+        let border = d.dialog_border_width;
+        let rows = row_count as f32;
+        let list_height = rows * DROPDOWN_ROW_HEIGHT + (rows - 1.0).max(0.0) * DROPDOWN_ROW_GAP;
+        let panel_height = list_height + DROPDOWN_PANEL_PADDING * 2.0 + border * 2.0;
+
+        let top_inset = custom_titlebar_height(window, d) + DROPDOWN_PANEL_MARGIN;
+        let placement = dropdown_panel_placement(
+            trigger,
+            panel_height,
+            viewport_width,
+            viewport_height,
+            top_inset,
+        );
+
+        let mut panel = div()
+            .id(DROPDOWN_OVERLAY_ID)
+            .absolute()
+            .left(px(placement.left))
+            .w(px(placement.width))
+            .max_h(px(placement.max_height))
+            .overflow_y_scroll()
+            .p(px(DROPDOWN_PANEL_PADDING))
+            .flex()
+            .flex_col()
+            .gap(px(DROPDOWN_ROW_GAP))
+            .occlude()
+            .bg(c.dialog_surface)
+            .border(px(border))
+            .border_color(c.dialog_border)
+            .rounded(px(d.menu_panel_radius))
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx| {
+                cx.stop_propagation()
+            })
+            .child(list);
+
+        if placement.above {
+            panel = panel.bottom(px(viewport_height - placement.offset));
+        } else {
+            panel = panel.top(px(placement.offset));
+        }
+        Some(panel.into_any_element())
+    }
+
+    fn open_dropdown_list(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        cx: &mut Context<Self>,
+    ) -> Option<(DropdownSlot, usize, Div)> {
+        let mut list = div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap(px(DROPDOWN_ROW_GAP));
+        if self.startup_dropdown_open {
+            list = list
+                .child(Self::dropdown_item(
+                    "preferences-startup-new-file",
+                    strings.preferences_startup_new_file.clone(),
+                    self.startup_open == StartupOpenPreference::NewFile,
+                    self.dropdown_highlight == 0,
+                    theme,
+                    |this, _, _, cx| {
+                        this.startup_open = StartupOpenPreference::NewFile;
+                        this.startup_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(Self::dropdown_item(
+                    "preferences-startup-last-opened-file",
+                    strings.preferences_startup_last_opened_file.clone(),
+                    self.startup_open == StartupOpenPreference::LastOpenedFile,
+                    self.dropdown_highlight == 1,
+                    theme,
+                    |this, _, _, cx| {
+                        this.startup_open = StartupOpenPreference::LastOpenedFile;
+                        this.startup_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+            return Some((DropdownSlot::Startup, 2, list));
+        }
+        if self.foreground_dropdown_open {
+            list = list
+                .child(Self::dropdown_item(
+                    "preferences-foreground-enabled",
+                    strings.preferences_foreground_enabled.clone(),
+                    self.foreground_on_launch,
+                    self.dropdown_highlight == 0,
+                    theme,
+                    |this, _, _, cx| {
+                        this.foreground_on_launch = true;
+                        this.foreground_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(Self::dropdown_item(
+                    "preferences-foreground-disabled",
+                    strings.preferences_foreground_disabled.clone(),
+                    !self.foreground_on_launch,
+                    self.dropdown_highlight == 1,
+                    theme,
+                    |this, _, _, cx| {
+                        this.foreground_on_launch = false;
+                        this.foreground_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+            return Some((DropdownSlot::Foreground, 2, list));
+        }
+        if self.single_instance_dropdown_open {
+            list = list
+                .child(Self::dropdown_item(
+                    "preferences-single-instance-shared",
+                    strings.preferences_single_instance_shared.clone(),
+                    self.single_instance,
+                    self.dropdown_highlight == 0,
+                    theme,
+                    |this, _, _, cx| {
+                        this.single_instance = true;
+                        this.single_instance_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(Self::dropdown_item(
+                    "preferences-single-instance-separate",
+                    strings.preferences_single_instance_separate.clone(),
+                    !self.single_instance,
+                    self.dropdown_highlight == 1,
+                    theme,
+                    |this, _, _, cx| {
+                        this.single_instance = false;
+                        this.single_instance_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+            return Some((DropdownSlot::SingleInstance, 2, list));
+        }
+        if self.theme_dropdown_open {
+            let mut count = 0;
+            for index in 0..self.theme_options.len() {
+                let option = self.theme_options[index].clone();
+                let selected = self.selected_theme_id == option.id;
+                list = list.child(Self::dropdown_item(
+                    ("preferences-theme-option", index),
+                    option.name.clone(),
+                    selected,
+                    self.dropdown_highlight == index,
+                    theme,
+                    move |this, _, _, cx| {
+                        this.selected_theme_id = option.id.clone();
+                        this.theme_dropdown_open = false;
+                        cx.notify();
+                    },
+                    cx,
+                ));
+                count += 1;
+            }
+            return Some((DropdownSlot::Theme, count, list));
+        }
+        if self.image_dropdown_open {
+            let mut count = 0;
+            for (index, behavior) in IMAGE_PASTE_OPTIONS.into_iter().enumerate() {
+                list = list.child(Self::dropdown_item(
+                    ("preferences-image-option", index),
+                    Self::image_paste_behavior_label(behavior, strings),
+                    self.image_paste_behavior == behavior,
+                    self.dropdown_highlight == index,
+                    theme,
+                    move |this, _, _, cx| {
+                        if behavior != ImagePasteBehavior::UsePicGo {
+                            this.image_paste_fallback = behavior;
+                        }
+                        this.image_paste_behavior = behavior;
+                        this.image_dropdown_open = false;
+                        if behavior == ImagePasteBehavior::UsePicGo {
+                            this.check_picgo_server(cx);
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                ));
+                count += 1;
+            }
+            return Some((DropdownSlot::Image, count, list));
+        }
+        None
+    }
+
     /// Stacks a field label above its full-width control.
     fn labeled_row(&self, label: &str, control: impl IntoElement, theme: &Theme) -> Div {
         let c = &theme.colors;
@@ -2699,52 +3025,23 @@ impl PreferencesWindow {
                 strings.preferences_startup_last_opened_file.clone()
             }
         };
-        let mut dropdown = div()
+        let dropdown = div()
             .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
             .gap(px(4.0))
             .child(self.tab_target("prefs-tab-startup-open", window, theme,
-                Self::dropdown_button(
-                    "preferences-startup-dropdown",
-                    selected,
-                    theme,
-                    Self::toggle_startup_dropdown,
-                    cx,
+                self.track_dropdown_trigger(DropdownSlot::Startup,
+                    Self::dropdown_button(
+                        "preferences-startup-dropdown",
+                        selected,
+                        theme,
+                        Self::toggle_startup_dropdown,
+                        cx,
+                    ),
                 ),
             ));
-        if self.startup_dropdown_open {
-            let new_file_label = strings.preferences_startup_new_file.clone();
-            let last_file_label = strings.preferences_startup_last_opened_file.clone();
-            dropdown = dropdown
-                .child(Self::dropdown_item(
-                    "preferences-startup-new-file",
-                    new_file_label,
-                    self.startup_open == StartupOpenPreference::NewFile,
-                    self.startup_dropdown_open && 0 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.startup_open = StartupOpenPreference::NewFile;
-                        this.startup_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .child(Self::dropdown_item(
-                    "preferences-startup-last-opened-file",
-                    last_file_label,
-                    self.startup_open == StartupOpenPreference::LastOpenedFile,
-                    self.startup_dropdown_open && 1 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.startup_open = StartupOpenPreference::LastOpenedFile;
-                        this.startup_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ));
-        }
         self.labeled_row(&strings.preferences_startup_option, dropdown, theme)
     }
 
@@ -2760,50 +3057,21 @@ impl PreferencesWindow {
         } else {
             strings.preferences_foreground_disabled.clone()
         };
-        let mut dropdown = div()
+        let dropdown = div()
             .flex()
             .flex_col()
             .gap(px(4.0))
             .child(self.tab_target("prefs-tab-foreground", window, theme,
-                Self::dropdown_button(
-                    "preferences-foreground-dropdown",
-                    selected,
-                    theme,
-                    Self::toggle_foreground_dropdown,
-                    cx,
+                self.track_dropdown_trigger(DropdownSlot::Foreground,
+                    Self::dropdown_button(
+                        "preferences-foreground-dropdown",
+                        selected,
+                        theme,
+                        Self::toggle_foreground_dropdown,
+                        cx,
+                    ),
                 ),
             ));
-        if self.foreground_dropdown_open {
-            let enabled_label = strings.preferences_foreground_enabled.clone();
-            let disabled_label = strings.preferences_foreground_disabled.clone();
-            dropdown = dropdown
-                .child(Self::dropdown_item(
-                    "preferences-foreground-enabled",
-                    enabled_label,
-                    self.foreground_on_launch,
-                    self.foreground_dropdown_open && 0 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.foreground_on_launch = true;
-                        this.foreground_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .child(Self::dropdown_item(
-                    "preferences-foreground-disabled",
-                    disabled_label,
-                    !self.foreground_on_launch,
-                    self.foreground_dropdown_open && 1 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.foreground_on_launch = false;
-                        this.foreground_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ));
-        }
         self.labeled_row(&strings.preferences_foreground_option, dropdown, theme)
     }
 
@@ -2819,50 +3087,21 @@ impl PreferencesWindow {
         } else {
             strings.preferences_single_instance_separate.clone()
         };
-        let mut dropdown = div()
+        let dropdown = div()
             .flex()
             .flex_col()
             .gap(px(4.0))
             .child(self.tab_target("prefs-tab-single-instance", window, theme,
-                Self::dropdown_button(
-                    "preferences-single-instance-dropdown",
-                    selected,
-                    theme,
-                    Self::toggle_single_instance_dropdown,
-                    cx,
+                self.track_dropdown_trigger(DropdownSlot::SingleInstance,
+                    Self::dropdown_button(
+                        "preferences-single-instance-dropdown",
+                        selected,
+                        theme,
+                        Self::toggle_single_instance_dropdown,
+                        cx,
+                    ),
                 ),
             ));
-        if self.single_instance_dropdown_open {
-            let shared_label = strings.preferences_single_instance_shared.clone();
-            let separate_label = strings.preferences_single_instance_separate.clone();
-            dropdown = dropdown
-                .child(Self::dropdown_item(
-                    "preferences-single-instance-shared",
-                    shared_label,
-                    self.single_instance,
-                    self.single_instance_dropdown_open && 0 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.single_instance = true;
-                        this.single_instance_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .child(Self::dropdown_item(
-                    "preferences-single-instance-separate",
-                    separate_label,
-                    !self.single_instance,
-                    self.single_instance_dropdown_open && 1 == self.dropdown_highlight,
-                    theme,
-                    |this, _, _, cx| {
-                        this.single_instance = false;
-                        this.single_instance_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ));
-        }
         div()
             .w_full()
             .min_w(px(0.0))
@@ -2888,48 +3127,23 @@ impl PreferencesWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let mut dropdown = div()
+        let dropdown = div()
             .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
             .gap(px(4.0))
             .child(self.tab_target("prefs-tab-theme", window, theme,
-                Self::dropdown_button(
-                    "preferences-theme-dropdown",
-                    self.selected_theme_name(),
-                    theme,
-                    Self::toggle_theme_dropdown,
-                    cx,
+                self.track_dropdown_trigger(DropdownSlot::Theme,
+                    Self::dropdown_button(
+                        "preferences-theme-dropdown",
+                        self.selected_theme_name(),
+                        theme,
+                        Self::toggle_theme_dropdown,
+                        cx,
+                    ),
                 ),
             ));
-        if self.theme_dropdown_open {
-            let mut list = div()
-                .id("preferences-theme-dropdown-list")
-                .w_full()
-                .min_w(px(0.0))
-                .flex()
-                .flex_col()
-                .gap(px(4.0));
-
-            for (index, entry) in self.theme_options.clone().into_iter().enumerate() {
-                let selected = entry.id == self.selected_theme_id;
-                list = list.child(Self::dropdown_item(
-                    ("preferences-theme-option", index),
-                    entry.name,
-                    selected,
-                    self.theme_dropdown_open && index == self.dropdown_highlight,
-                    theme,
-                    move |this, _, _, cx| {
-                        this.selected_theme_id = entry.id.clone();
-                        this.theme_dropdown_open = false;
-                        cx.notify();
-                    },
-                    cx,
-                ));
-            }
-            dropdown = dropdown.child(list);
-        }
         let c = &theme.colors;
         let t = &theme.typography;
         let font_error = self.font_validation_error(strings);
@@ -3038,44 +3252,6 @@ impl PreferencesWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut dropdown = div()
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(Self::dropdown_button(
-                "preferences-image-dropdown",
-                Self::image_paste_behavior_label(self.image_paste_behavior, strings),
-                theme,
-                Self::toggle_image_dropdown,
-                cx,
-            ));
-        if self.image_dropdown_open {
-            for (index, behavior) in IMAGE_PASTE_OPTIONS.into_iter().enumerate() {
-                let selected = behavior == self.image_paste_behavior;
-                let label = Self::image_paste_behavior_label(behavior, strings);
-                dropdown = dropdown.child(Self::dropdown_item(
-                    ("preferences-image-option", index),
-                    label,
-                    selected,
-                    self.image_dropdown_open && index == self.dropdown_highlight,
-                    theme,
-                    move |this, _, _, cx| {
-                        if behavior != ImagePasteBehavior::UsePicGo {
-                            this.image_paste_fallback = behavior;
-                        }
-                        this.image_paste_behavior = behavior;
-                        this.image_dropdown_open = false;
-                        if behavior == ImagePasteBehavior::UsePicGo {
-                            this.check_picgo_server(cx);
-                        }
-                        cx.notify();
-                    },
-                    cx,
-                ));
-            }
-        }
         let mut content = div().w_full().flex().flex_col().gap(px(14.0));
         if self.image_paste_behavior == ImagePasteBehavior::UsePicGo {
             let status = match self.picgo_status {
@@ -3107,12 +3283,14 @@ impl PreferencesWindow {
                     "prefs-tab-image-paste-action",
                     window,
                     theme,
-                    Self::dropdown_button(
-                        "preferences-image-dropdown",
-                        Self::image_paste_behavior_label(self.image_paste_behavior, strings),
-                        theme,
-                        Self::toggle_image_dropdown,
-                        cx,
+                    self.track_dropdown_trigger(DropdownSlot::Image,
+                        Self::dropdown_button(
+                            "preferences-image-dropdown",
+                            Self::image_paste_behavior_label(self.image_paste_behavior, strings),
+                            theme,
+                            Self::toggle_image_dropdown,
+                            cx,
+                        ),
                     ),
                 ))
                 .child(self.tab_target(
@@ -4156,7 +4334,11 @@ impl Render for PreferencesWindow {
             .relative()
             .bg(c.editor_background)
             .font(FontSettings::ui_font(cx))
-            .child(content);
+            .child(content)
+            .when_some(
+                self.render_dropdown_overlay(&theme, &strings, window, cx),
+                |this, overlay| this.child(overlay),
+            );
 
         if let Some(titlebar) = render_custom_titlebar(
             "preferences-titlebar",
@@ -4237,6 +4419,7 @@ mod tests {
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
+        dropdown_panel_placement, DROPDOWN_PANEL_GAP, Bounds, Point, px, Size,
     };
     use crate::config::VelotypeConfigDirs;
     use crate::fonts::FontPreferences;
@@ -5571,5 +5754,37 @@ mod tests {
 
         cx.update(|cx| EditorSettings::set_reveal_diagram_source_on_double_click(cx, false));
         assert!(!cx.update(|cx| EditorSettings::reveal_diagram_source_on_double_click(cx)));
+    }
+
+    #[test]
+    fn test_dropdown_placement_fits_below() {
+        let trigger = Bounds {
+            origin: Point { x: px(100.0), y: px(100.0) },
+            size: Size { width: px(100.0), height: px(32.0) },
+        };
+        let placement = dropdown_panel_placement(trigger, 100.0, 1000.0, 1000.0, 50.0);
+        assert!(!placement.above);
+        assert_eq!(placement.offset, 100.0 + 32.0 + DROPDOWN_PANEL_GAP);
+    }
+
+    #[test]
+    fn test_dropdown_placement_fits_above() {
+        let trigger = Bounds {
+            origin: Point { x: px(100.0), y: px(500.0) },
+            size: Size { width: px(100.0), height: px(32.0) },
+        };
+        let placement = dropdown_panel_placement(trigger, 100.0, 1000.0, 600.0, 50.0);
+        assert!(placement.above);
+        assert!(placement.offset >= 50.0 + 100.0);
+    }
+
+    #[test]
+    fn test_dropdown_placement_neither_fits() {
+        let trigger = Bounds {
+            origin: Point { x: px(100.0), y: px(300.0) },
+            size: Size { width: px(100.0), height: px(32.0) },
+        };
+        let placement = dropdown_panel_placement(trigger, 300.0, 1000.0, 400.0, 50.0);
+        assert!(placement.max_height < 300.0);
     }
 }
