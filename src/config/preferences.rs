@@ -1563,6 +1563,93 @@ pub(crate) struct PreferencesWindow {
     /// Editable PicGo Server URL.
     picgo_server_input: Entity<SingleLineInput>,
     tab_handles: std::collections::HashMap<String, FocusHandle>,
+    /// Last painted window-space bounds of each tab target, keyed by tab key.
+    /// Cleared every render so only targets on the visible page take part in
+    /// directional focus movement.
+    tab_bounds: Rc<RefCell<std::collections::HashMap<String, Bounds<Pixels>>>>,
+}
+
+/// Arrow direction used for spatial focus movement between preference widgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FocusDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl FocusDirection {
+    /// Maps a keystroke key name to a focus direction.
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            _ => None,
+        }
+    }
+
+    /// Ranks `to` as a destination from `from`, returning `None` when it does
+    /// not lie in this direction. Targets sharing a band with the current one on
+    /// the perpendicular axis win outright (that is how a grid advances row by
+    /// row); travel along the axis of movement then dominates, and sideways
+    /// offset only breaks ties between equally near targets.
+    fn rank(self, from: Bounds<Pixels>, to: Bounds<Pixels>) -> Option<(bool, f32)> {
+        let from_center = from.center();
+        let to_center = to.center();
+        let dx = to_center.x.as_f32() - from_center.x.as_f32();
+        let dy = to_center.y.as_f32() - from_center.y.as_f32();
+        let (travel, offset, aligned) = match self {
+            Self::Left => (
+                -dx,
+                dy.abs(),
+                Self::bands_overlap(
+                    from.origin.y,
+                    from.size.height,
+                    to.origin.y,
+                    to.size.height,
+                ),
+            ),
+            Self::Right => (
+                dx,
+                dy.abs(),
+                Self::bands_overlap(
+                    from.origin.y,
+                    from.size.height,
+                    to.origin.y,
+                    to.size.height,
+                ),
+            ),
+            Self::Up => (
+                -dy,
+                dx.abs(),
+                Self::bands_overlap(
+                    from.origin.x,
+                    from.size.width,
+                    to.origin.x,
+                    to.size.width,
+                ),
+            ),
+            Self::Down => (
+                dy,
+                dx.abs(),
+                Self::bands_overlap(
+                    from.origin.x,
+                    from.size.width,
+                    to.origin.x,
+                    to.size.width,
+                ),
+            ),
+        };
+        (travel > 0.5).then_some((!aligned, travel + 2.0 * offset))
+    }
+
+    fn bands_overlap(start: Pixels, length: Pixels, other_start: Pixels, other_length: Pixels) -> bool {
+        let end = start.as_f32() + length.as_f32();
+        let other_end = other_start.as_f32() + other_length.as_f32();
+        other_start.as_f32() < end && start.as_f32() < other_end
+    }
 }
 
 /// File association is an immediate OS action, not a persisted application preference.
@@ -1786,11 +1873,105 @@ impl PreferencesWindow {
             ui_font_input,
             picgo_server_input,
             tab_handles,
+            tab_bounds: Rc::new(RefCell::new(std::collections::HashMap::new())),
         }
     }
 
     fn tab_handle(&self, key: &str) -> Option<FocusHandle> {
         self.tab_handles.get(key).cloned()
+    }
+
+    /// Tab key of the widget that currently holds keyboard focus, if any.
+    fn focused_tab_key(&self, window: &Window) -> Option<String> {
+        self.tab_handles
+            .iter()
+            .find(|(_, handle)| handle.is_focused(window))
+            .map(|(key, _)| key.clone())
+    }
+
+    /// Visible tab targets in render order, used as a deterministic fallback
+    /// when bounds alone cannot pick a destination.
+    fn ordered_tab_keys(&self) -> Vec<String> {
+        TAB_KEYS
+            .iter()
+            .map(|key| key.to_string())
+            .chain(
+                (0..shortcut_definitions().len())
+                    .map(|index| format!("prefs-tab-shortcut-{index}")),
+            )
+            .collect()
+    }
+
+    /// Moves focus to the nearest tab target in `direction`, reporting whether
+    /// focus moved.
+    fn move_tab_focus(
+        &mut self,
+        direction: FocusDirection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(current_key) = self.focused_tab_key(window) else {
+            return false;
+        };
+        let destination = {
+            let bounds = self.tab_bounds.borrow();
+            let Some(current) = bounds.get(&current_key).copied() else {
+                return false;
+            };
+            let mut best: Option<((bool, f32), &str)> = None;
+            for (key, rect) in bounds.iter() {
+                if key == &current_key {
+                    continue;
+                }
+                let Some(rank) = direction.rank(current, *rect) else {
+                    continue;
+                };
+                let better = match best {
+                    None => true,
+                    Some((best_rank, _)) => {
+                        rank.partial_cmp(&best_rank) == Some(std::cmp::Ordering::Less)
+                    }
+                };
+                if better {
+                    best = Some((rank, key.as_str()));
+                }
+            }
+            best.map(|(_, key)| key.to_string())
+        };
+        let Some(destination) = destination else {
+            return false;
+        };
+        let Some(handle) = self.tab_handle(&destination) else {
+            return false;
+        };
+        window.focus(&handle, cx);
+        cx.notify();
+        true
+    }
+
+    /// Moves focus from the category list into the first visible widget.
+    fn focus_first_tab_target(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let bounds = self.tab_bounds.borrow();
+        let Some(key) = self
+            .ordered_tab_keys()
+            .into_iter()
+            .find(|key| bounds.contains_key(key))
+        else {
+            return false;
+        };
+        drop(bounds);
+        let Some(handle) = self.tab_handle(&key) else {
+            return false;
+        };
+        window.focus(&handle, cx);
+        cx.notify();
+        true
+    }
+
+    /// Returns focus to the category list so up/down change categories again.
+    fn focus_category_list(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
     }
 
     fn tab_target(
@@ -1799,7 +1980,7 @@ impl PreferencesWindow {
         window: &Window,
         theme: &Theme,
         content: impl IntoElement,
-    ) -> gpui::Stateful<Div> {
+    ) -> Div {
         let handle = self.tab_handle(key);
         let focused = handle
             .as_ref()
@@ -1816,7 +1997,16 @@ impl PreferencesWindow {
         if let Some(handle) = handle.as_ref() {
             wrapper = wrapper.track_focus(handle);
         }
-        wrapper.child(content)
+        let wrapper = wrapper.child(content);
+        let bounds = self.tab_bounds.clone();
+        let bound_key = key.to_string();
+        div()
+            .child(wrapper)
+            .on_children_prepainted(move |child_bounds, _window, _cx| {
+                if let Some(child) = child_bounds.first() {
+                    bounds.borrow_mut().insert(bound_key.clone(), *child);
+                }
+            })
     }
 
     /// Returns the first localized font syntax error in body, code, UI order.
@@ -1925,12 +2115,7 @@ impl PreferencesWindow {
 
     /// Runs the keyboard action for the tab target that currently holds focus.
     fn activate_focused(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let focused = self
-            .tab_handles
-            .iter()
-            .find(|(_, handle)| handle.is_focused(window))
-            .map(|(key, _)| key.clone());
-        let Some(key) = focused else {
+        let Some(key) = self.focused_tab_key(window) else {
             return false;
         };
         let click = ClickEvent::default();
@@ -2232,6 +2417,25 @@ impl PreferencesWindow {
 
         if self.any_dropdown_open() {
             return;
+        }
+
+        if let Some(direction) = FocusDirection::from_key(event.keystroke.key.as_str()) {
+            if self.focused_tab_key(window).is_some() {
+                if !self.move_tab_focus(direction, window, cx)
+                    && direction == FocusDirection::Left
+                {
+                    self.focus_category_list(window, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if direction == FocusDirection::Right
+                && self.focus_handle.is_focused(window)
+                && self.focus_first_tab_target(window, cx)
+            {
+                cx.stop_propagation();
+                return;
+            }
         }
 
         match event.keystroke.key.as_str() {
@@ -4044,6 +4248,8 @@ impl Render for PreferencesWindow {
         let window_title =
             SharedString::from(format!("Velotype - {}", strings.preferences_window_title));
         window.set_window_title(window_title.as_ref());
+        // Rebuilt below by each visible tab target during prepaint.
+        self.tab_bounds.borrow_mut().clear();
         let titlebar_height = custom_titlebar_height(window, d);
 
         let content = div()
@@ -4853,6 +5059,122 @@ mod tests {
             "escape should end shortcut recording"
         );
         redraw_preferences(cx, window);
+    }
+
+    #[gpui::test]
+    async fn f10_preferences_arrows_move_between_settings_widgets(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        let rendered = window
+            .read_with(cx, |view, _| view.tab_bounds.borrow().len())
+            .expect("preferences window should be readable");
+        assert!(
+            rendered >= SETTINGS.len(),
+            "expected laid-out tab bounds, found {rendered}"
+        );
+
+        // Right from the category list enters the first widget on the page.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[0])
+        );
+
+        // Directional movement stays inside the settings panel.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[1])
+        );
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Settings,
+            "arrows inside the panel must not change the category"
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[0])
+        );
+
+        // Right at the panel edge holds position instead of wrapping.
+        redraw_preferences(cx, window);
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[0])
+        );
+    }
+
+    #[gpui::test]
+    async fn f11_preferences_left_returns_to_category_list(cx: &mut TestAppContext) {
+        const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[0])
+        );
+
+        // Move to the leftmost widget on the page: the associate row.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &SETTINGS).as_deref(),
+            Some(SETTINGS[1])
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("left").unwrap());
+        cx.run_until_parked();
+        assert!(focused_key(cx, window, &SETTINGS).is_none());
+        assert!(
+            window
+                .update(cx, |view, window, _cx| view.focus_handle.is_focused(window))
+                .expect("preferences window should be updateable"),
+            "left past the panel edge should focus the category list"
+        );
+
+        // The category list owns the arrows again once it holds focus.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::File
+        );
     }
 
     #[gpui::test]
