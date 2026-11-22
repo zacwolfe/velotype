@@ -42,6 +42,9 @@ const TAB_KEYS: &[&str] = &[
     "prefs-tab-foreground",
     "prefs-tab-single-instance",
     "prefs-tab-theme",
+    "prefs-tab-font-body",
+    "prefs-tab-font-code",
+    "prefs-tab-font-ui",
     "prefs-tab-image-paste-action",
     "prefs-tab-image-reveal-on-click",
     "prefs-tab-image-reveal-diagram-source",
@@ -1901,6 +1904,15 @@ impl PreferencesWindow {
                 cx.focus_handle().tab_stop(true),
             );
         }
+        for (key, input) in [
+            ("prefs-tab-font-body", &body_font_input),
+            ("prefs-tab-font-code", &code_font_input),
+            ("prefs-tab-font-ui", &ui_font_input),
+        ] {
+            if let Some(handle) = tab_handles.get_mut(key) {
+                *handle = input.read(cx).focus_handle(cx).tab_stop(true);
+            }
+        }
         Self {
             nav: PreferencesNav::Settings,
             startup_open,
@@ -2072,11 +2084,12 @@ impl PreferencesWindow {
         cx.notify();
     }
 
-    fn tab_target(
+    fn tab_frame(
         &self,
         key: &str,
         window: &Window,
         theme: &Theme,
+        track_focus: bool,
         content: impl IntoElement,
     ) -> Div {
         let handle = self.tab_handle(key);
@@ -2092,8 +2105,10 @@ impl PreferencesWindow {
             } else {
                 Hsla::transparent_black()
             });
-        if let Some(handle) = handle.as_ref() {
-            wrapper = wrapper.track_focus(handle);
+        if track_focus {
+            if let Some(handle) = handle.as_ref() {
+                wrapper = wrapper.track_focus(handle);
+            }
         }
         let wrapper = wrapper.child(content);
         let bounds = self.tab_bounds.clone();
@@ -2105,6 +2120,34 @@ impl PreferencesWindow {
                     bounds.borrow_mut().insert(bound_key.clone(), *child);
                 }
             })
+    }
+
+    fn tab_target(
+        &self,
+        key: &str,
+        window: &Window,
+        theme: &Theme,
+        content: impl IntoElement,
+    ) -> Div {
+        self.tab_frame(key, window, theme, true, content)
+    }
+
+    /// Like tab_target, for rows whose child is already a focusable input.
+    fn field_tab_target(
+        &self,
+        key: &str,
+        window: &Window,
+        theme: &Theme,
+        content: impl IntoElement,
+    ) -> Div {
+        self.tab_frame(key, window, theme, false, content)
+    }
+
+    /// Moves keyboard focus to a tab stop after it was clicked.
+    fn focus_clicked_tab(&self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.tab_handle(key) {
+            window.focus(&handle, cx);
+        }
     }
 
     /// Returns the first localized font syntax error in body, code, UI order.
@@ -2510,6 +2553,7 @@ impl PreferencesWindow {
             } else {
                 window.focus_next(cx);
             }
+            cx.notify();
             cx.stop_propagation();
             return;
         }
@@ -2727,20 +2771,21 @@ impl PreferencesWindow {
     }
 
     /// Toggles startup options and closes the other dropdowns.
-    fn toggle_startup_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_startup_dropdown(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.startup_dropdown_open = !self.startup_dropdown_open;
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.reset_dropdown_highlight();
+        self.focus_clicked_tab("prefs-tab-startup-open", window, cx);
         cx.notify();
     }
 
     fn toggle_foreground_dropdown(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.foreground_dropdown_open = !self.foreground_dropdown_open;
@@ -2749,13 +2794,14 @@ impl PreferencesWindow {
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.reset_dropdown_highlight();
+        self.focus_clicked_tab("prefs-tab-foreground", window, cx);
         cx.notify();
     }
 
     fn toggle_single_instance_dropdown(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.single_instance_dropdown_open = !self.single_instance_dropdown_open;
@@ -2764,28 +2810,31 @@ impl PreferencesWindow {
         self.theme_dropdown_open = false;
         self.image_dropdown_open = false;
         self.reset_dropdown_highlight();
+        self.focus_clicked_tab("prefs-tab-single-instance", window, cx);
         cx.notify();
     }
 
     /// Toggles theme options and closes the other dropdowns.
-    fn toggle_theme_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_theme_dropdown(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.theme_dropdown_open = !self.theme_dropdown_open;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
         self.image_dropdown_open = false;
         self.reset_dropdown_highlight();
+        self.focus_clicked_tab("prefs-tab-theme", window, cx);
         cx.notify();
     }
 
     /// Toggles image storage options and closes the other dropdowns.
-    fn toggle_image_dropdown(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn toggle_image_dropdown(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.image_dropdown_open = !self.image_dropdown_open;
         self.startup_dropdown_open = false;
         self.foreground_dropdown_open = false;
         self.single_instance_dropdown_open = false;
         self.theme_dropdown_open = false;
         self.reset_dropdown_highlight();
+        self.focus_clicked_tab("prefs-tab-image-paste-action", window, cx);
         cx.notify();
     }
 
@@ -3497,7 +3546,12 @@ impl PreferencesWindow {
             .gap(px(10.))
             .child(self.labeled_row(
                 &strings.preferences_font_body,
-                self.body_font_input.clone(),
+                self.field_tab_target(
+                    "prefs-tab-font-body",
+                    window,
+                    theme,
+                    self.body_font_input.clone(),
+                ),
                 theme,
             ))
             .child(warning(
@@ -3505,7 +3559,12 @@ impl PreferencesWindow {
             ))
             .child(self.labeled_row(
                 &strings.preferences_font_code,
-                self.code_font_input.clone(),
+                self.field_tab_target(
+                    "prefs-tab-font-code",
+                    window,
+                    theme,
+                    self.code_font_input.clone(),
+                ),
                 theme,
             ))
             .child(warning(
@@ -3513,7 +3572,12 @@ impl PreferencesWindow {
             ))
             .child(self.labeled_row(
                 &strings.preferences_font_ui,
-                self.ui_font_input.clone(),
+                self.field_tab_target(
+                    "prefs-tab-font-ui",
+                    window,
+                    theme,
+                    self.ui_font_input.clone(),
+                ),
                 theme,
             ))
             .child(warning(
@@ -4768,7 +4832,7 @@ mod tests {
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
     use crate::theme::{ThemeCatalogEntry, ThemeManager};
-    use gpui::{AppContext, Hsla, Keystroke, TestAppContext, WindowHandle, rgba};
+    use gpui::{AppContext, ClickEvent, Hsla, Keystroke, TestAppContext, WindowHandle, rgba};
     use std::collections::BTreeMap;
 
     fn redraw_preferences(cx: &mut TestAppContext, window: WindowHandle<PreferencesWindow>) {
@@ -5311,6 +5375,110 @@ mod tests {
                 .read_with(cx, |view, _| view.nav)
                 .expect("preferences window should be readable"),
             PreferencesNav::File
+        );
+    }
+
+    #[gpui::test]
+    async fn f12_preferences_theme_page_tabs_through_font_fields(cx: &mut TestAppContext) {
+        const THEME_PAGE: [&str; 4] = [
+            "prefs-tab-theme",
+            "prefs-tab-font-body",
+            "prefs-tab-font-code",
+            "prefs-tab-font-ui",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        // Settings -> File -> Theme: the theme page owns the right-hand panel.
+        for _ in 0..2 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Theme
+        );
+        redraw_preferences(cx, window);
+
+        // Tab must walk the page: theme dropdown, then the three font fields.
+        for key in THEME_PAGE {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+            cx.run_until_parked();
+            assert_eq!(
+                focused_key(cx, window, &THEME_PAGE).as_deref(),
+                Some(key),
+                "tab should land on {key}"
+            );
+            redraw_preferences(cx, window);
+        }
+
+        // One more tab wraps back to the first target on the page.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &THEME_PAGE).as_deref(),
+            Some(THEME_PAGE[0]),
+            "tab should wrap back to the theme dropdown"
+        );
+    }
+
+    #[gpui::test]
+    async fn f13_preferences_clicking_dropdown_focuses_its_target(cx: &mut TestAppContext) {
+        const THEME_PAGE: [&str; 4] = [
+            "prefs-tab-theme",
+            "prefs-tab-font-body",
+            "prefs-tab-font-code",
+            "prefs-tab-font-ui",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |view, window, cx| window.focus(&view.focus_handle, cx))
+            .expect("preferences window should be updateable");
+        for _ in 0..2 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        redraw_preferences(cx, window);
+
+        // Clicking the dropdown must hand focus to it, so arrows/Tab work afterwards.
+        window
+            .update(cx, |view, window, cx| {
+                view.toggle_theme_dropdown(&ClickEvent::default(), window, cx)
+            })
+            .expect("preferences window should be updateable");
+        cx.run_until_parked();
+
+        assert_eq!(
+            focused_key(cx, window, &THEME_PAGE).as_deref(),
+            Some("prefs-tab-theme"),
+            "clicking the theme dropdown should focus it"
+        );
+        assert!(
+            window
+                .read_with(cx, |view, _| view.theme_dropdown_open)
+                .expect("preferences window should be readable"),
+            "clicking the theme dropdown should expand it"
         );
     }
 
