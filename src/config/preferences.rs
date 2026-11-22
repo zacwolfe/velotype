@@ -1781,10 +1781,25 @@ fn dropdown_panel_placement(
 }
 
 
+/// High-contrast keyboard focus ring colour for the given background fill.
+///
+/// The ring has to read as an indicator, not as part of the widget edge, so it
+/// flips polarity with the fill: a saturated deep blue over light fills and a
+/// bright amber over dark or saturated fills.
+fn focus_ring_color(background: Hsla) -> Hsla {
+    let rgb = background.to_rgb();
+    let luma = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    if luma > 0.6 {
+        Hsla::from(rgba(0x1d4ed8ff))
+    } else {
+        Hsla::from(rgba(0xfbbf24ff))
+    }
+}
+
 /// Border colour for a category navigation item.
 fn nav_border_color(theme: &Theme, selected: bool, list_focused: bool) -> Hsla {
     if selected && list_focused {
-        theme.colors.dialog_primary_button_text
+        focus_ring_color(theme.colors.dialog_primary_button_bg)
     } else {
         Hsla::transparent_black()
     }
@@ -2073,7 +2088,7 @@ impl PreferencesWindow {
             .rounded(px(theme.dimensions.menu_item_radius))
             .border(px(theme.dimensions.dialog_border_width))
             .border_color(if focused {
-                theme.colors.dialog_primary_button_bg
+                focus_ring_color(theme.colors.dialog_surface)
             } else {
                 Hsla::transparent_black()
             });
@@ -2957,6 +2972,17 @@ impl PreferencesWindow {
             })
             .border(px(d.dialog_border_width))
             .border_color(nav_border_color(theme, selected, list_focused))
+            .shadow(if selected && list_focused {
+                vec![BoxShadow {
+                    color: nav_border_color(theme, selected, list_focused),
+                    offset: point(px(0.0), px(0.0)),
+                    blur_radius: px(0.0),
+                    spread_radius: px(1.0),
+                    inset: false,
+                }]
+            } else {
+                Vec::new()
+            })
             .id(id)
             .child(label)
             .on_click(cx.listener(on_click))
@@ -4734,14 +4760,15 @@ mod tests {
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
-        dropdown_panel_placement, nav_border_color, Theme, DROPDOWN_PANEL_GAP, Bounds, Point, px, Size,
+        dropdown_panel_placement, focus_ring_color, nav_border_color, Theme, DROPDOWN_PANEL_GAP,
+        Bounds, Point, px, Size,
     };
     use crate::components::SaveDocument;
     use crate::config::VelotypeConfigDirs;
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
     use crate::theme::{ThemeCatalogEntry, ThemeManager};
-    use gpui::{AppContext, Hsla, Keystroke, TestAppContext, WindowHandle};
+    use gpui::{AppContext, Hsla, Keystroke, TestAppContext, WindowHandle, rgba};
     use std::collections::BTreeMap;
 
     fn redraw_preferences(cx: &mut TestAppContext, window: WindowHandle<PreferencesWindow>) {
@@ -6323,9 +6350,21 @@ mod tests {
     async fn nav_border_color_marks_only_the_focused_active_item(cx: &mut TestAppContext) {
         init_preferences_test_app(cx);
         let theme = cx.update(|cx| cx.global::<ThemeManager>().current().clone());
-        assert_eq!(nav_border_color(&theme, true, true), theme.colors.dialog_primary_button_text);
+        assert_eq!(
+            nav_border_color(&theme, true, true),
+            focus_ring_color(theme.colors.dialog_primary_button_bg)
+        );
+        assert_eq!(nav_border_color(&theme, true, true), Hsla::from(rgba(0x1d4ed8ff)));
         assert_eq!(nav_border_color(&theme, true, false), Hsla::transparent_black());
         assert_eq!(nav_border_color(&theme, false, true), Hsla::transparent_black());
+    }
+
+    #[test]
+    fn focus_ring_color_stays_visible_on_light_and_dark_fills() {
+        assert_eq!(focus_ring_color(Hsla::from(rgba(0xf4f4f5ff))), Hsla::from(rgba(0x1d4ed8ff)));
+        assert_eq!(focus_ring_color(Hsla::from(rgba(0x2563ebff))), Hsla::from(rgba(0xfbbf24ff)));
+        assert_eq!(focus_ring_color(Hsla::from(rgba(0x18181bff))), Hsla::from(rgba(0xfbbf24ff)));
+        assert_ne!(focus_ring_color(Hsla::from(rgba(0x2563ebff))), Hsla::transparent_black());
     }
 
     #[gpui::test]
