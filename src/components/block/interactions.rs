@@ -1541,6 +1541,25 @@ impl Block {
             return;
         }
 
+        if event.click_count == 1
+            && matches!(self.kind(), BlockKind::MermaidBlock)
+            && !crate::config::EditorSettings::reveal_diagram_source_on_double_click(cx)
+            && !self.reveals_raw_source_when_focused(self.focus_handle.is_focused(window), cx)
+        {
+            self.is_selecting = false;
+            let raw = self
+                .record
+                .raw_fallback
+                .clone()
+                .unwrap_or_else(|| self.display_text().to_string());
+            cx.emit(BlockEvent::RequestExpandDiagram { source: raw });
+            if !self.focus_handle.is_focused(window) {
+                cx.emit(BlockEvent::RequestFocus);
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         // A title carrying inline images (e.g. an icon heading) renders through
         // the mixed-visual widget row while unexpanded, which cannot host a
         // caret. Any click inside it — not just on the image — requests the

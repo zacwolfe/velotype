@@ -198,6 +198,8 @@ pub struct Editor {
     info_dialog: Option<InfoDialogKind>,
     /// Image the user clicked to enlarge, drawn over the whole application frame.
     expanded_image: Option<ImageRuntime>,
+    /// Mermaid diagram the user clicked to enlarge, drawn over the whole application frame.
+    expanded_diagram: Option<String>,
     workspace: WorkspaceState,
     workspace_watch: WorkspaceWatchState,
     /// Focus target for keyboard navigation of the Files/Outline sidebar.
@@ -594,6 +596,7 @@ impl Editor {
             drop_replace_restore_focus: None,
             info_dialog: None,
             expanded_image: None,
+            expanded_diagram: None,
             workspace: WorkspaceState::from_settings(cx),
             workspace_watch: WorkspaceWatchState::default(),
             workspace_focus_handle: cx.focus_handle(),

@@ -1829,6 +1829,11 @@ impl Editor {
         event: &BlockEvent,
         cx: &mut Context<Self>,
     ) {
+        if let BlockEvent::RequestExpandDiagram { source } = event {
+            self.expanded_diagram = Some(source.clone());
+            cx.notify();
+            return;
+        }
         if let BlockEvent::RequestExpandImage { runtime } = event {
             self.expanded_image = Some(runtime.clone());
             cx.notify();
@@ -2595,6 +2600,7 @@ impl Editor {
                 cx.notify();
             }
             BlockEvent::RequestRenderedSelectAll => {}
+            BlockEvent::RequestExpandDiagram { .. } => {}
             BlockEvent::RequestExpandImage { .. } => {}
             BlockEvent::PrepareUndo { .. } => {}
         }

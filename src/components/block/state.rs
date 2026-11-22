@@ -864,6 +864,9 @@ pub enum BlockEvent {
         /// Content after the replaced selection.
         trailing: InlineTextTree,
     },
+    /// A rendered Mermaid diagram was clicked; the editor should display it enlarged to
+    /// fill the application frame.
+    RequestExpandDiagram { source: String },
     /// A rendered image was clicked; the editor should display it enlarged to
     /// fill the application frame.
     RequestExpandImage { runtime: ImageRuntime },

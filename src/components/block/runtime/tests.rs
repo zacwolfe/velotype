@@ -3786,3 +3786,131 @@ async fn clicking_rendered_image_emits_expand_request(cx: &mut TestAppContext) {
         ImageResolvedSource::Unusable
     ));
 }
+
+#[gpui::test]
+async fn clicking_rendered_mermaid_emits_expand_request(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    let raw = "```mermaid\nflowchart LR\nA --> B\n```";
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::mermaid(raw)));
+
+    let seen: Rc<RefCell<Vec<BlockEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    cx.update(|_window, cx| {
+        crate::config::EditorSettings::set_reveal_diagram_source_on_double_click(cx, false);
+        cx.subscribe(&block, move |_block, event: &BlockEvent, _cx| {
+            sink.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+
+    cx.update(|window, cx| {
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+    });
+
+    let events = seen.borrow();
+    let expand_requests: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, BlockEvent::RequestExpandDiagram { .. }))
+        .collect();
+    assert_eq!(
+        expand_requests.len(),
+        1,
+        "clicking a rendered mermaid diagram should emit exactly one expand request"
+    );
+    if let Some(BlockEvent::RequestExpandDiagram { source }) = expand_requests.first() {
+        assert_eq!(source, raw);
+    } else {
+        panic!("expand request should carry the raw markdown");
+    }
+}
+
+#[gpui::test]
+async fn clicking_mermaid_with_revealed_source_does_not_emit_expand_request(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let raw = "```mermaid\nflowchart LR\nA --> B\n```";
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::mermaid(raw)));
+
+    block.update(cx, |block, _| block.diagram_source_revealed = true);
+
+    let seen: Rc<RefCell<Vec<BlockEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    cx.update(|_window, cx| {
+        cx.subscribe(&block, move |_block, event: &BlockEvent, _cx| {
+            sink.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+
+    cx.update(|window, cx| {
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+    });
+
+    let events = seen.borrow();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BlockEvent::RequestExpandDiagram { .. })),
+        "clicking a mermaid diagram with revealed source should not emit an expand request"
+    );
+}
+
+#[gpui::test]
+async fn single_click_with_diagram_reveal_pref_enabled_does_not_emit_expand_request(
+    cx: &mut TestAppContext,
+) {
+    let cx = cx.add_empty_window();
+    let raw = "```mermaid\nflowchart LR\nA --> B\n```";
+    let block = cx.new(|cx| Block::with_record(cx, BlockRecord::mermaid(raw)));
+
+    cx.update(|_window, cx| {
+        crate::config::EditorSettings::set_reveal_diagram_source_on_double_click(cx, true);
+    });
+
+    let seen: Rc<RefCell<Vec<BlockEvent>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = seen.clone();
+    cx.update(|_window, cx| {
+        cx.subscribe(&block, move |_block, event: &BlockEvent, _cx| {
+            sink.borrow_mut().push(event.clone());
+        })
+        .detach();
+    });
+
+    cx.update(|window, cx| {
+        let event = MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(10.0), px(10.0)),
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        };
+        block.update(cx, |block, cx| block.on_mouse_down(&event, window, cx));
+    });
+
+    cx.update(|_window, cx| {
+        crate::config::EditorSettings::set_reveal_diagram_source_on_double_click(cx, false);
+    });
+
+    let events = seen.borrow();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, BlockEvent::RequestExpandDiagram { .. })),
+        "single click should not emit an expand request when double-click reveal is enabled"
+    );
+}
