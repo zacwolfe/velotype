@@ -1723,6 +1723,16 @@ fn dropdown_panel_placement(
     }
 }
 
+
+/// Border colour for a category navigation item.
+fn nav_border_color(theme: &Theme, selected: bool, list_focused: bool) -> Hsla {
+    if selected && list_focused {
+        theme.colors.dialog_primary_button_text
+    } else {
+        Hsla::transparent_black()
+    }
+}
+
 impl PreferencesWindow {
     /// Builds the draft, saved baselines, and subscribed font inputs from preferences.
     fn new(
@@ -2823,6 +2833,7 @@ impl PreferencesWindow {
         id: &'static str,
         label: String,
         selected: bool,
+        list_focused: bool,
         theme: &Theme,
         on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
         cx: &mut Context<Self>,
@@ -2858,6 +2869,8 @@ impl PreferencesWindow {
                     c.dialog_secondary_button_hover
                 })
             })
+            .border(px(d.dialog_border_width))
+            .border_color(nav_border_color(theme, selected, list_focused))
             .id(id)
             .child(label)
             .on_click(cx.listener(on_click))
@@ -4252,6 +4265,8 @@ impl Render for PreferencesWindow {
         self.tab_bounds.borrow_mut().clear();
         let titlebar_height = custom_titlebar_height(window, d);
 
+        let nav_list_focused = self.focus_handle.is_focused(window);
+
         let content = div()
             .size_full()
             .pt(px(titlebar_height))
@@ -4281,6 +4296,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-settings",
                                 strings.preferences_nav_settings.clone(),
                                 self.nav == PreferencesNav::Settings,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_settings,
                                 cx,
@@ -4289,6 +4305,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-file",
                                 strings.preferences_nav_file.clone(),
                                 self.nav == PreferencesNav::File,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_file,
                                 cx,
@@ -4297,6 +4314,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-theme",
                                 strings.preferences_nav_theme.clone(),
                                 self.nav == PreferencesNav::Theme,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_theme,
                                 cx,
@@ -4305,6 +4323,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-image",
                                 strings.preferences_nav_image.clone(),
                                 self.nav == PreferencesNav::Image,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_image,
                                 cx,
@@ -4313,6 +4332,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-editor",
                                 strings.preferences_nav_editor.clone(),
                                 self.nav == PreferencesNav::Editor,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_editor,
                                 cx,
@@ -4321,6 +4341,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-shortcuts",
                                 strings.preferences_nav_shortcuts.clone(),
                                 self.nav == PreferencesNav::Shortcuts,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_shortcuts,
                                 cx,
@@ -4329,6 +4350,7 @@ impl Render for PreferencesWindow {
                                 "preferences-nav-status-bar",
                                 strings.preferences_nav_status_bar.clone(),
                                 self.nav == PreferencesNav::StatusBar,
+                                nav_list_focused,
                                 &theme,
                                 Self::set_nav_status_bar,
                                 cx,
@@ -4625,13 +4647,13 @@ mod tests {
         load_or_create_app_preferences_with_dirs_and_locales, open_preferences_window_with_state,
         read_app_preferences_with_dirs, save_app_preferences_with_dirs,
         save_preferences_from_window_with_dirs,
-        dropdown_panel_placement, DROPDOWN_PANEL_GAP, Bounds, Point, px, Size,
+        dropdown_panel_placement, nav_border_color, Theme, DROPDOWN_PANEL_GAP, Bounds, Point, px, Size,
     };
     use crate::config::VelotypeConfigDirs;
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
     use crate::theme::{ThemeCatalogEntry, ThemeManager};
-    use gpui::{AppContext, Keystroke, TestAppContext, WindowHandle};
+    use gpui::{AppContext, Hsla, Keystroke, TestAppContext, WindowHandle};
     use std::collections::BTreeMap;
 
     fn redraw_preferences(cx: &mut TestAppContext, window: WindowHandle<PreferencesWindow>) {
@@ -6108,5 +6130,44 @@ mod tests {
         };
         let placement = dropdown_panel_placement(trigger, 300.0, 1000.0, 400.0, 50.0);
         assert!(placement.max_height < 300.0);
+    }
+
+    #[gpui::test]
+    async fn nav_border_color_marks_only_the_focused_active_item(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let theme = cx.update(|cx| cx.global::<ThemeManager>().current().clone());
+        assert_eq!(nav_border_color(&theme, true, true), theme.colors.dialog_primary_button_text);
+        assert_eq!(nav_border_color(&theme, true, false), Hsla::transparent_black());
+        assert_eq!(nav_border_color(&theme, false, true), Hsla::transparent_black());
+    }
+
+    #[gpui::test]
+    async fn nav_list_focus_drives_nav_focus_ring(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let theme_options = vec![ThemeCatalogEntry { id: "velotype".into(), name: "Velotype".into() }];
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(cx, AppPreferences::default(), theme_options, "Preferences".into())
+        });
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+
+        let focused = window
+            .update(cx, |view, window, _cx| view.focus_handle.is_focused(window))
+            .expect("preferences window should be updateable");
+        assert!(focused, "category list should hold focus when the window opens");
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Settings
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("tab").unwrap());
+        cx.run_until_parked();
+
+        let focused = window
+            .update(cx, |view, window, _cx| view.focus_handle.is_focused(window))
+            .expect("preferences window should be updateable");
+        assert!(!focused, "tab should move focus off the category list root");
     }
 }
