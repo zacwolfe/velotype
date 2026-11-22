@@ -2028,7 +2028,7 @@ impl PreferencesWindow {
         // to a visible target instead of letting the arrows go dead.
         let current = self.tab_bounds.borrow().get(&current_key).copied();
         let Some(current) = current else {
-            return self.recover_tab_focus(&current_key, window, cx);
+            return self.recover_tab_focus(&current_key, direction, window, cx);
         };
         let destination = {
             let bounds = self.tab_bounds.borrow();
@@ -2093,19 +2093,42 @@ impl PreferencesWindow {
     fn recover_tab_focus(
         &self,
         current: &str,
+        direction: FocusDirection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let bounds = self.tab_bounds.borrow();
-        let Some(key) = self
-            .ordered_tab_keys()
-            .into_iter()
-            .find(|key| key != current && bounds.contains_key(key))
-        else {
+        let keys = self.ordered_tab_keys();
+        let Some(current_idx) = keys.iter().position(|k| k == current) else {
+            return false;
+        };
+
+        let key = match direction {
+            FocusDirection::Right | FocusDirection::Down => {
+                keys.iter()
+                    .skip(current_idx + 1)
+                    .find(|&k| bounds.contains_key(k))
+            }
+            FocusDirection::Left | FocusDirection::Up => {
+                keys.iter()
+                    .take(current_idx)
+                    .rev()
+                    .find(|&k| bounds.contains_key(k))
+            }
+        };
+
+        // No visible target in the pressed direction (for example a left press
+        // from the first key). Rather than leaving focus on an unpainted target,
+        // fall back to any other painted target so the arrows keep working.
+        let key = key.or_else(|| {
+            keys.iter()
+                .find(|k| k.as_str() != current && bounds.contains_key(k.as_str()))
+        });
+        let Some(key) = key else {
             return false;
         };
         drop(bounds);
-        let Some(handle) = self.tab_handle(&key) else {
+        let Some(handle) = self.tab_handle(key) else {
             return false;
         };
         window.focus(&handle, cx);
@@ -5577,6 +5600,59 @@ mod tests {
         assert!(
             after_recovery.is_some(),
             "focus should stay on a painted theme target, got {after_recovery:?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn f15_preferences_arrow_left_recovers_from_unpainted_first_tab(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        redraw_preferences(cx, window);
+
+        window
+            .update(cx, |view, window, cx| {
+                let handle = view
+                    .tab_handle("prefs-tab-theme")
+                    .expect("registered tab keys should have handles");
+                window.focus(&handle, cx);
+            })
+            .expect("preferences window should be updateable");
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        window
+            .update(cx, |view, _, _| {
+                view.tab_bounds.borrow_mut().remove("prefs-tab-theme");
+            })
+            .expect("preferences window should be updateable");
+
+        // The first tab key is the one with no left-hand neighbour, so the
+        // directional search misses and the fallback must take over rather
+        // than leaving focus on a target that is not painted.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("left").unwrap());
+        cx.run_until_parked();
+
+        let painted: Vec<String> = window
+            .update(cx, |view, _, _| {
+                view.tab_bounds.borrow().keys().cloned().collect()
+            })
+            .expect("preferences window should be updateable");
+        let painted_keys: Vec<&str> = painted.iter().map(String::as_str).collect();
+        let recovered = focused_key(cx, window, &painted_keys);
+        assert!(
+            recovered.is_some(),
+            "a left press from an unpainted first target should recover onto a painted target, got {recovered:?} with painted keys {painted:?}"
         );
     }
 
