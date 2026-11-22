@@ -2023,11 +2023,15 @@ impl PreferencesWindow {
         let Some(current_key) = self.focused_tab_key(window) else {
             return false;
         };
+        // Focus can land on a target whose bounds were never painted (the first
+        // frame, or a widget from a page that is no longer on screen). Recover
+        // to a visible target instead of letting the arrows go dead.
+        let current = self.tab_bounds.borrow().get(&current_key).copied();
+        let Some(current) = current else {
+            return self.recover_tab_focus(&current_key, window, cx);
+        };
         let destination = {
             let bounds = self.tab_bounds.borrow();
-            let Some(current) = bounds.get(&current_key).copied() else {
-                return false;
-            };
             let mut best: Option<((bool, f32), &str)> = None;
             for (key, rect) in bounds.iter() {
                 if key == &current_key {
@@ -2082,6 +2086,31 @@ impl PreferencesWindow {
     fn focus_category_list(&self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle, cx);
         cx.notify();
+    }
+
+    /// Moves focus off a target whose bounds were never painted and onto the
+    /// first visible tab target, so arrow navigation keeps working.
+    fn recover_tab_focus(
+        &self,
+        current: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let bounds = self.tab_bounds.borrow();
+        let Some(key) = self
+            .ordered_tab_keys()
+            .into_iter()
+            .find(|key| key != current && bounds.contains_key(key))
+        else {
+            return false;
+        };
+        drop(bounds);
+        let Some(handle) = self.tab_handle(&key) else {
+            return false;
+        };
+        window.focus(&handle, cx);
+        cx.notify();
+        true
     }
 
     fn tab_frame(
@@ -5479,6 +5508,75 @@ mod tests {
                 .read_with(cx, |view, _| view.theme_dropdown_open)
                 .expect("preferences window should be readable"),
             "clicking the theme dropdown should expand it"
+        );
+    }
+
+    #[gpui::test]
+    async fn f14_preferences_arrow_recovers_from_unpainted_tab(cx: &mut TestAppContext) {
+        const THEME_PAGE: [&str; 4] = [
+            "prefs-tab-theme",
+            "prefs-tab-font-body",
+            "prefs-tab-font-code",
+            "prefs-tab-font-ui",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        for _ in 0..2 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        redraw_preferences(cx, window);
+
+        // Focus a real theme target, then drop its painted bounds to simulate a
+        // target that keyed focus without ever being prepainted.
+        window
+            .update(cx, |view, window, cx| {
+                let handle = view
+                    .tab_handle("prefs-tab-theme")
+                    .expect("registered tab keys should have handles");
+                window.focus(&handle, cx);
+            })
+            .expect("preferences window should be updateable");
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        window
+            .update(cx, |view, _, _| {
+                view.tab_bounds.borrow_mut().remove("prefs-tab-theme");
+            })
+            .expect("preferences window should be updateable");
+        assert_eq!(
+            focused_key(cx, window, &["prefs-tab-theme"]).as_deref(),
+            Some("prefs-tab-theme")
+        );
+
+        // An arrow press must recover onto a target that is actually painted.
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        assert_eq!(
+            focused_key(cx, window, &THEME_PAGE[1..]).as_deref(),
+            Some("prefs-tab-font-body"),
+            "arrows should recover onto the first painted theme target"
+        );
+
+        // Further arrows must never strand focus again: with font-body at the
+        // right edge there is no right-hand neighbour, so focus stays put on a
+        // painted target rather than falling off the tab ring.
+        redraw_preferences(cx, window);
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        let after_recovery = focused_key(cx, window, &THEME_PAGE[1..]);
+        assert!(
+            after_recovery.is_some(),
+            "focus should stay on a painted theme target, got {after_recovery:?}"
         );
     }
 
