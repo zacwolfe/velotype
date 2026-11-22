@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::{VelotypeConfigDirs, read_recent_files};
 use crate::components::single_line_input::{InputChanged, SingleLineInput, SingleLineOverflow};
 use crate::components::{
-    ShortcutCategory, ShortcutCommand, ShortcutDefinition, install_keybindings,
+    SaveDocument, ShortcutCategory, ShortcutCommand, ShortcutDefinition, install_keybindings,
     normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
     shortcut_conflict_for, shortcut_definitions, switch::Switch,
 };
@@ -1407,6 +1407,61 @@ fn save_preferences_from_window_with_dirs(
     Ok(preferences)
 }
 
+/// Saves the visible draft through either the system config root or a test override.
+fn save_preferences_from_view(
+    view: &PreferencesWindow,
+    dirs: Option<&VelotypeConfigDirs>,
+) -> anyhow::Result<AppPreferences> {
+    let status_bar = StatusBarPreferences {
+        enabled: view.status_bar_enabled,
+        show_word_count: view.status_bar_show_word_count,
+        show_cursor_position: view.status_bar_show_cursor_position,
+        show_sidebar_toggle: view.status_bar_show_sidebar_toggle,
+        show_mode_switch: view.status_bar_show_mode_switch,
+        custom_buttons: Vec::new(),
+    };
+    let keybindings = view.keybindings.clone();
+    match dirs {
+        Some(dirs) => save_preferences_from_window_with_dirs(
+            view.startup_open,
+            view.foreground_on_launch,
+            view.single_instance,
+            &view.selected_theme_id,
+            view.image_paste_behavior,
+            view.image_paste_fallback,
+            &view.picgo_server_url,
+            view.auto_download_updates,
+            view.show_table_headers,
+            view.edit_tables_as_markdown,
+            view.reveal_source_on_focus,
+            view.reveal_image_source_on_click,
+            view.reveal_diagram_source_on_double_click,
+            keybindings,
+            &status_bar,
+            &view.fonts,
+            dirs,
+        ),
+        None => save_preferences_from_window(
+            view.startup_open,
+            view.foreground_on_launch,
+            view.single_instance,
+            &view.selected_theme_id,
+            view.image_paste_behavior,
+            view.image_paste_fallback,
+            &view.picgo_server_url,
+            view.auto_download_updates,
+            view.show_table_headers,
+            view.edit_tables_as_markdown,
+            view.reveal_source_on_focus,
+            view.reveal_image_source_on_click,
+            view.reveal_diagram_source_on_double_click,
+            keybindings,
+            &status_bar,
+            &view.fonts,
+        ),
+    }
+}
+
 /// Loads normalized preferences, applies one mutation, and saves the result.
 fn update_app_preferences(
     update: impl FnOnce(&mut AppPreferences),
@@ -1567,6 +1622,8 @@ pub(crate) struct PreferencesWindow {
     /// Cleared every render so only targets on the visible page take part in
     /// directional focus movement.
     tab_bounds: Rc<RefCell<std::collections::HashMap<String, Bounds<Pixels>>>>,
+    /// Sets a config root for tests; production always leaves this None.
+    config_dirs_override: Option<VelotypeConfigDirs>,
 }
 
 /// Arrow direction used for spatial focus movement between preference widgets.
@@ -1733,6 +1790,21 @@ fn nav_border_color(theme: &Theme, selected: bool, list_focused: bool) -> Hsla {
     }
 }
 
+/// True when the keystroke is the platform save shortcut: cmd+s on macOS,
+/// ctrl+s elsewhere. Shift, alt, and function modifiers disqualify it.
+fn is_save_shortcut(key: &Keystroke) -> bool {
+    let m = key.modifiers;
+    if m.alt || m.shift || m.function {
+        return false;
+    }
+    let expected = if cfg!(target_os = "macos") {
+        m.platform && !m.control
+    } else {
+        m.control && !m.platform
+    };
+    expected && key.key.eq_ignore_ascii_case("s")
+}
+
 impl PreferencesWindow {
     /// Builds the draft, saved baselines, and subscribed font inputs from preferences.
     fn new(
@@ -1884,6 +1956,7 @@ impl PreferencesWindow {
             picgo_server_input,
             tab_handles,
             tab_bounds: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            config_dirs_override: None,
         }
     }
 
@@ -2396,6 +2469,20 @@ impl PreferencesWindow {
             }
         }
 
+        if is_save_shortcut(&event.keystroke) {
+            cx.stop_propagation();
+            self.save_draft(window, cx);
+            return;
+        }
+
+        if event.keystroke.key.eq_ignore_ascii_case("escape")
+            && !event.keystroke.modifiers.modified()
+        {
+            cx.stop_propagation();
+            self.cancel_dialog(window);
+            return;
+        }
+
         if event.keystroke.key.as_str() == "tab" {
             if event.keystroke.modifiers.platform
                 || event.keystroke.modifiers.control
@@ -2688,7 +2775,14 @@ impl PreferencesWindow {
     }
 
     /// Closes the window without persisting the draft.
-    fn cancel(&mut self, _: &ClickEvent, window: &mut Window, _: &mut Context<Self>) {
+    fn cancel(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_dialog(window);
+        cx.notify();
+    }
+
+    /// Closes the window without persisting the draft; shared by the Cancel
+    /// button, bare Escape, and the titlebar close button.
+    fn cancel_dialog(&mut self, window: &mut Window) {
         window.remove_window();
     }
 
@@ -2700,12 +2794,25 @@ impl PreferencesWindow {
         _cx: &mut Context<Self>,
     ) {
         if event.standard_click() {
-            window.remove_window();
+            self.cancel_dialog(window);
         }
     }
 
-    /// Validates and saves a changed draft, prompting on write failure before applying it.
+    /// Saves the draft when the global SaveDocument action reaches this window.
+    fn on_save_document(&mut self, _: &SaveDocument, window: &mut Window, cx: &mut Context<Self>) {
+        cx.stop_propagation();
+        self.save_draft(window, cx);
+    }
+
+    /// Click handler for the Save button; the work lives in `save_draft`.
     fn save(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_draft(window, cx);
+    }
+
+    /// Validates and saves a changed draft, prompting on write failure before applying it.
+    /// Shared by the Save button, the save shortcut, and the SaveDocument action;
+    /// `config_dirs_override` is a test seam only.
+    fn save_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_unsaved_changes() {
             return;
         }
@@ -2716,30 +2823,9 @@ impl PreferencesWindow {
             return;
         }
 
-        let preferences = match save_preferences_from_window(
-            self.startup_open,
-            self.foreground_on_launch,
-            self.single_instance,
-            &self.selected_theme_id,
-            self.image_paste_behavior,
-            self.image_paste_fallback,
-            &self.picgo_server_url,
-            self.auto_download_updates,
-            self.show_table_headers,
-            self.edit_tables_as_markdown,
-            self.reveal_source_on_focus,
-            self.reveal_image_source_on_click,
-            self.reveal_diagram_source_on_double_click,
-            self.keybindings.clone(),
-            &StatusBarPreferences {
-                enabled: self.status_bar_enabled,
-                show_word_count: self.status_bar_show_word_count,
-                show_cursor_position: self.status_bar_show_cursor_position,
-                show_sidebar_toggle: self.status_bar_show_sidebar_toggle,
-                show_mode_switch: self.status_bar_show_mode_switch,
-                custom_buttons: Vec::new(),
-            },
-            &self.fonts,
+        let preferences = match save_preferences_from_view(
+            self,
+            self.config_dirs_override.as_ref(),
         ) {
             Ok(preferences) => preferences,
             Err(err) => {
@@ -4274,6 +4360,7 @@ impl Render for PreferencesWindow {
             .key_context("Preferences")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::handle_key_down))
+            .on_action(cx.listener(Self::on_save_document))
             .bg(c.editor_background)
             .text_color(c.dialog_body)
             .font(FontSettings::ui_font(cx))
@@ -4649,6 +4736,7 @@ mod tests {
         save_preferences_from_window_with_dirs,
         dropdown_panel_placement, nav_border_color, Theme, DROPDOWN_PANEL_GAP, Bounds, Point, px, Size,
     };
+    use crate::components::SaveDocument;
     use crate::config::VelotypeConfigDirs;
     use crate::fonts::FontPreferences;
     use crate::i18n::I18nManager;
@@ -5355,6 +5443,105 @@ mod tests {
             assert_eq!(view.theme_dropdown_open, false);
             assert_eq!(view.selected_theme_id, "velotype");
         }).expect("window should be readable");
+    }
+
+    #[gpui::test]
+    async fn escape_closes_preferences_when_no_popup_open(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.update(|cx| cx.windows().len()), 1);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("escape").unwrap());
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 0);
+    }
+
+    #[gpui::test]
+    async fn save_shortcut_saves_and_closes_preferences(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-save-shortcut-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should exist");
+        let dirs = VelotypeConfigDirs::from_root(&root);
+
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                view.config_dirs_override = Some(dirs.clone());
+                view.startup_open = StartupOpenPreference::LastOpenedFile;
+                assert!(view.has_unsaved_changes());
+            })
+            .expect("preferences window should be updateable");
+
+        let stroke = if cfg!(target_os = "macos") {
+            "cmd-s"
+        } else {
+            "ctrl-s"
+        };
+        cx.dispatch_keystroke(window.into(), Keystroke::parse(stroke).unwrap());
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 0);
+        let saved = read_app_preferences_with_dirs(&dirs).expect("preferences should be saved");
+        assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[gpui::test]
+    async fn save_document_action_saves_and_closes_preferences(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-preferences-save-action-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should exist");
+        let dirs = VelotypeConfigDirs::from_root(&root);
+
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |view, _, _| {
+                view.config_dirs_override = Some(dirs.clone());
+                view.startup_open = StartupOpenPreference::LastOpenedFile;
+                assert!(view.has_unsaved_changes());
+            })
+            .expect("preferences window should be updateable");
+
+        cx.dispatch_action(window.into(), SaveDocument);
+        cx.run_until_parked();
+
+        assert_eq!(cx.update(|cx| cx.windows().len()), 0);
+        let saved = read_app_preferences_with_dirs(&dirs).expect("preferences should be saved");
+        assert_eq!(saved.startup_open, StartupOpenPreference::LastOpenedFile);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn init_preferences_test_app(cx: &mut TestAppContext) {
