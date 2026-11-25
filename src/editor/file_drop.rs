@@ -142,6 +142,7 @@ impl Editor {
         self.pending_undo_capture = None;
         self.last_selection_snapshot = Self::empty_selection_snapshot();
         self.last_selection_snapshot_key = None;
+        self.bump_document_revision();
         self.last_stable_source_text = normalized;
         self.history_restore_in_progress = false;
         self.refresh_stable_document_snapshot(cx);

@@ -672,6 +672,7 @@ impl Editor {
                 self.table_cells.clear();
             }
         }
+        self.bump_document_revision();
     }
 
     /// Marks newly inserted text when both endpoints map to the same block.

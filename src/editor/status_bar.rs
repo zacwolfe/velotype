@@ -49,6 +49,11 @@ impl Editor {
     ) -> Option<AnyElement> {
         let ready = crate::updater::ready_version(cx);
         let prefs = effective_preferences(self.status_bar_preferences(cx), ready.is_some())?;
+        let metrics = if prefs.show_cursor_position || prefs.show_word_count {
+            Some(self.status_bar_metrics(cx))
+        } else {
+            None
+        };
 
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -97,23 +102,13 @@ impl Editor {
 
         let mut right_items: Vec<AnyElement> = Vec::new();
 
-        if prefs.show_cursor_position && self.view_mode == super::ViewMode::Source {
-            right_items.push(render_cursor(
-                self.compute_source_cursor_position(cx),
-                theme,
-            ));
-        }
-
-        if prefs.show_word_count {
-            let text = self.serialized_document_text(cx);
-            let total_count = count_words(&text);
-            let selection_count = self.selected_markdown_text(cx).as_deref().map(count_words);
-            right_items.push(render_word_count(
-                selection_count,
-                total_count,
-                theme,
-                strings,
-            ));
+        if let Some((cursor_pos, total_count, selection_count)) = metrics {
+            if prefs.show_cursor_position && self.view_mode == super::ViewMode::Source {
+                right_items.push(render_cursor(cursor_pos, theme));
+            }
+            if prefs.show_word_count {
+                right_items.push(render_word_count(selection_count, total_count, theme, strings));
+            }
         }
 
         for button in &prefs.custom_buttons {
@@ -161,18 +156,62 @@ impl Editor {
         crate::config::preferences::EditorSettings::status_bar_preferences(cx)
     }
 
-    /// Returns (line, col), both 1-based, from the source-mode selection snapshot.
-    fn compute_source_cursor_position(&self, cx: &App) -> (usize, usize) {
-        let snapshot = self.capture_source_selection_snapshot(cx);
+    /// Cached (cursor position, total words, selection words) for the status bar.
+    /// Recomputing these walks/serializes the whole document, and the caret blink
+    /// re-renders ~30x/second, so reuse values until the revision or selection moves.
+    pub(super) fn status_bar_metrics(&mut self, cx: &App) -> ((usize, usize), usize, Option<usize>) {
+        self.refresh_selection_snapshot_if_stale(cx);
+        let snapshot = &self.last_selection_snapshot;
+        let key = (
+            self.document_revision,
+            snapshot.range.start,
+            snapshot.range.end,
+            snapshot.reversed,
+        );
+        if let Some(cached) = &self.status_bar_cache {
+            if (cached.revision, cached.range_start, cached.range_end, cached.reversed) == key {
+                return (
+                    cached.cursor_position,
+                    cached.total_word_count,
+                    cached.selection_word_count,
+                );
+            }
+        }
+
         let cursor_offset = snapshot.range.end;
         let text = self.document.raw_source_text(cx);
         let clamped = cursor_offset.min(text.len());
-
         let line = text[..clamped].matches('\n').count() + 1;
         let last_newline = text[..clamped].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let col = text[last_newline..clamped].graphemes(true).count() + 1;
-        (line, col)
+        let cursor_position = (line, col);
+
+        let total_word_count = match self.cached_total_word_count {
+            Some((rev, count)) if rev == self.document_revision => count,
+            _ => {
+                let total_text = self.serialized_document_text(cx);
+                let count = count_words(&total_text);
+                self.cached_total_word_count = Some((self.document_revision, count));
+                count
+            }
+        };
+        let selection_word_count = self.selected_markdown_text(cx).as_deref().map(count_words);
+
+        self.status_bar_cache = Some(super::StatusBarCache {
+            revision: self.document_revision,
+            range_start: snapshot.range.start,
+            range_end: snapshot.range.end,
+            reversed: snapshot.reversed,
+            cursor_position,
+            total_word_count,
+            selection_word_count,
+        });
+
+        (cursor_position, total_word_count, selection_word_count)
     }
+
+    // Returns (line, col), both 1-based, from the source-mode selection snapshot.
+
 }
 
 /// Builds the workspace drawer toggle and its hover/click handlers.

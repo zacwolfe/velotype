@@ -1,3 +1,4 @@
+use crate::editor::status_bar::count_words;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -6065,3 +6066,117 @@ async fn scroll_recheck_budget_is_enforced(cx: &mut TestAppContext) {
         });
     });
 }
+
+#[gpui::test]
+async fn content_fingerprint_cached_matches_uncached_and_reuses(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(cx, "alpha\n\nbeta".to_string(), None)
+    });
+
+    let (uncached, first, first_cached, second) = editor.update(cx, |editor, cx| {
+        let uncached = editor.document.content_fingerprint(cx);
+        let first = editor.content_fingerprint_cached(cx);
+        let first_cached = editor.cached_content_fingerprint;
+        let second = editor.content_fingerprint_cached(cx);
+        (uncached, first, first_cached, second)
+    });
+
+    assert_eq!(first, uncached, "cached fingerprint must match the uncached walk");
+    assert_eq!(second, first, "second call should reuse the memoized hash");
+    assert_eq!(
+        first_cached,
+        Some((editor.read_with(cx, |editor, _cx| editor.document_revision), uncached)),
+        "cache should record the revision it was built for"
+    );
+}
+
+#[gpui::test]
+async fn document_revision_bumps_on_edit_and_invalidates_cache(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(cx, "alpha".to_string(), None)
+    });
+
+    let (revision_before, fingerprint_before, words_before) = editor.update(cx, |editor, cx| {
+        let fingerprint = editor.content_fingerprint_cached(cx);
+        let words = editor.status_bar_metrics(cx).1;
+        (editor.document_revision, fingerprint, words)
+    });
+    assert_eq!(words_before, 1);
+
+    cx.simulate_input("beta gamma");
+    redraw(cx);
+
+    let (revision_after, fingerprint_after, cached_revision, words_after) =
+        editor.update(cx, |editor, cx| {
+            let fingerprint = editor.content_fingerprint_cached(cx);
+            let words = editor.status_bar_metrics(cx).1;
+            (
+                editor.document_revision,
+                fingerprint,
+                editor.cached_content_fingerprint.map(|(rev, _)| rev),
+                words,
+            )
+        });
+
+    assert!(revision_after > revision_before, "editing must bump the revision");
+    assert_eq!(cached_revision, Some(revision_after), "fingerprint cache must be re-keyed");
+    assert_ne!(fingerprint_after, fingerprint_before, "edited document must hash differently");
+    let text_after = editor.read_with(cx, |editor, cx| editor.document.markdown_text(cx));
+    assert_ne!(text_after, "alpha", "the edit must actually change the document text");
+    assert_eq!(words_after, 2, "cached word count must refresh after the edit");
+    assert_ne!(words_after, words_before, "an edit that adds words must change the cached count");
+    assert_eq!(words_after, count_words(&text_after), "cached count must match the live document text");
+}
+
+#[gpui::test]
+async fn status_bar_metrics_cache_hits_until_selection_changes(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(cx, "alpha beta\n\ngamma delta".to_string(), None)
+    });
+
+    let (first, first_key, second, second_key, revision) = editor.update(cx, |editor, cx| {
+        let first = editor.status_bar_metrics(cx);
+        let first_key = editor
+            .status_bar_cache
+            .as_ref()
+            .map(|cache| (cache.revision, cache.range_start, cache.range_end, cache.reversed));
+        let second = editor.status_bar_metrics(cx);
+        let second_key = editor
+            .status_bar_cache
+            .as_ref()
+            .map(|cache| (cache.revision, cache.range_start, cache.range_end, cache.reversed));
+        (first, first_key, second, second_key, editor.document_revision)
+    });
+
+    assert_eq!(first, second, "unchanged revision and selection must reuse memoized values");
+    assert_eq!(first_key, second_key);
+    assert_eq!(first_key.map(|key| key.0), Some(revision));
+    assert_eq!(first.1, 4, "total word count comes from the whole document");
+
+    editor.update(cx, |editor, cx| {
+        let block = editor.document.visible_blocks()[0].entity.clone();
+        block.update(cx, |block, _cx| {
+            block.selected_range = 2..2;
+        });
+        cx.notify();
+    });
+    redraw(cx);
+
+    let (third, third_key, revision_after) = editor.update(cx, |editor, cx| {
+        let third = editor.status_bar_metrics(cx);
+        let third_key = editor
+            .status_bar_cache
+            .as_ref()
+            .map(|cache| (cache.revision, cache.range_start, cache.range_end, cache.reversed));
+        (third, third_key, editor.document_revision)
+    });
+
+    assert_eq!(revision_after, revision, "moving the caret must not bump the document revision");
+    assert_ne!(third_key, first_key, "a moved caret must re-key the status bar cache");
+    assert_ne!(third, first, "cursor position must refresh after the caret moves");
+    assert_eq!(third.1, first.1, "total word count must survive a caret move");
+}
+

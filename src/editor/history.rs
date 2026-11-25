@@ -27,7 +27,7 @@ impl Editor {
         self.last_selection_snapshot_key = Some(key);
     }
 
-    fn selection_snapshot_key(&self, cx: &App) -> SelectionSnapshotKey {
+    fn selection_snapshot_key(&mut self, cx: &App) -> SelectionSnapshotKey {
         let target = self.current_edit_target_from_state(cx).map(|entity| {
             let block = entity.read(cx);
             (
@@ -37,7 +37,7 @@ impl Editor {
             )
         });
         SelectionSnapshotKey {
-            content_fingerprint: self.document.content_fingerprint(cx),
+            content_fingerprint: self.content_fingerprint_cached(cx),
             target,
             view_mode: self.view_mode,
             cross_block_selection: self.cross_block_selection,
@@ -133,6 +133,7 @@ impl Editor {
 
     /// Refreshes the source and selection used by later stable-snapshot captures.
     pub(super) fn refresh_stable_document_snapshot(&mut self, cx: &App) {
+        self.bump_document_revision();
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.last_selection_snapshot_key = None;
         self.last_stable_source_text = self.current_document_source(cx);
@@ -373,6 +374,7 @@ impl Editor {
             roots.push(Self::new_block(cx, BlockRecord::paragraph(String::new())));
         }
         self.document.replace_roots(roots, cx);
+        self.bump_document_revision();
         self.rebuild_table_runtimes(cx);
         self.rebuild_image_runtimes(cx);
         self.apply_selection_snapshot_in_current_mode(&selection_snapshot, cx);

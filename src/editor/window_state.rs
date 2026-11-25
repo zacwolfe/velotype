@@ -238,6 +238,7 @@ impl Editor {
         self.end_block_pointer_selection_sessions(cx);
         self.last_selection_snapshot = self.capture_source_selection_snapshot(cx);
         self.last_selection_snapshot_key = None;
+        self.bump_document_revision();
         self.toggle_view_mode(cx);
     }
 
@@ -403,6 +404,7 @@ impl Editor {
     /// Marks the document dirty and schedules window-title and edited-state
     /// refresh for the next render frame.
     pub(super) fn mark_dirty(&mut self, cx: &mut Context<Self>) {
+        self.bump_document_revision();
         if !self.document_dirty {
             self.document_dirty = true;
             self.pending_window_edited = true;

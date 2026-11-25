@@ -284,6 +284,14 @@ pub struct Editor {
     last_selection_snapshot_key: Option<SelectionSnapshotKey>,
     /// Source text paired with the stable selection for the next undo capture.
     last_stable_source_text: String,
+    /// Current document revision; incremented whenever content changes.
+    document_revision: u64,
+    /// Cached content fingerprint (revision, hash) to avoid O(doc) walk per frame.
+    cached_content_fingerprint: Option<(u64, u64)>,
+    /// Total words in the document, cached by revision.
+    pub(super) cached_total_word_count: Option<(u64, usize)>,
+    /// Memoized status bar values (cursor pos, word counts) for the current revision.
+    status_bar_cache: Option<StatusBarCache>,
     /// Suppresses recursive history capture while restoring an entry.
     history_restore_in_progress: bool,
     /// Shared parsed image reference definitions for visible blocks.
@@ -399,6 +407,24 @@ struct ScrollbarDragSession {
     thumb_height: f32,
     /// Maximum scroll distance captured at drag start.
     max_scroll_y: f32,
+}
+
+/// Cached derived values for the status bar to avoid per-frame recomputation.
+/// Keyed by (document_revision, caret_range).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StatusBarCache {
+    /// Document revision this cache was built for.
+    revision: u64,
+    /// Selection range at time of calculation.
+    range_start: usize,
+    range_end: usize,
+    reversed: bool,
+    /// Current cursor position in the source text.
+    cursor_position: (usize, usize),
+    /// Total words in the document.
+    total_word_count: usize,
+    /// Words in the current selection.
+    selection_word_count: Option<usize>,
 }
 
 /// Source-byte selection snapshot stored with undo history across both modes.
@@ -637,6 +663,10 @@ impl Editor {
             pending_undo_capture: None,
             last_selection_snapshot: Self::empty_selection_snapshot(),
             last_selection_snapshot_key: None,
+            document_revision: 0,
+            cached_content_fingerprint: None,
+            cached_total_word_count: None,
+            status_bar_cache: None,
             last_stable_source_text: normalized,
             history_restore_in_progress: false,
             image_reference_definitions: Arc::default(),
@@ -652,5 +682,23 @@ impl Editor {
         editor.editor_settings_observer =
             Some(cx.observe_global::<crate::config::EditorSettings>(|_, cx| cx.notify()));
         editor
+    }
+ 
+    /// Increments the document revision to invalidate derived caches (fingerprints, status bar).
+    pub(super) fn bump_document_revision(&mut self) {
+        self.document_revision = self.document_revision.wrapping_add(1);
+    }
+ 
+    /// Returns the document content fingerprint, using a cached value if the revision hasn't changed.
+    /// This avoids an O(document) walk on every frame during idle renders.
+    pub(super) fn content_fingerprint_cached(&mut self, cx: &App) -> u64 {
+        if let Some((rev, hash)) = self.cached_content_fingerprint {
+            if rev == self.document_revision {
+                return hash;
+            }
+        }
+        let hash = self.document.content_fingerprint(cx);
+        self.cached_content_fingerprint = Some((self.document_revision, hash));
+        hash
     }
 }

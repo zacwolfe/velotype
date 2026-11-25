@@ -276,6 +276,7 @@ impl Editor {
         self.last_stable_source_text = normalized;
         self.last_selection_snapshot = Self::empty_selection_snapshot();
         self.last_selection_snapshot_key = None;
+        self.bump_document_revision();
         self.refresh_stable_document_snapshot(cx);
         self.invalidate_workspace_outline();
         self.recompute_search_matches(cx);
