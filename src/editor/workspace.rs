@@ -745,6 +745,7 @@ impl Editor {
             handle.focus(window, cx);
             self.active_entity_id = Some(entity_id);
             self.pending_focus = None;
+            self.scroll_recheck_attempts = 0;
             self.pending_scroll_active_block_into_view = true;
         }
         cx.notify();

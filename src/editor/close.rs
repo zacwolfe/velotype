@@ -71,6 +71,7 @@ impl Editor {
     pub(crate) fn restore_focus_after_close_dialog(&mut self, cx: &mut Context<Self>) {
         if let Some(focus_id) = self.close_dialog_restore_focus.take() {
             self.pending_focus = Some(focus_id);
+            self.scroll_recheck_attempts = 0;
             self.pending_scroll_active_block_into_view = true;
             cx.notify();
         }

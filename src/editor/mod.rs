@@ -267,6 +267,8 @@ pub struct Editor {
     /// not be satisfied yet (the target block has no measured bounds), so the
     /// scroll lands on the next frame instead of waiting for the cursor blink.
     scroll_recheck_task: Option<Task<()>>,
+    /// Number of attempts to re-check caret visibility after layout.
+    scroll_recheck_attempts: u8,
     /// Pointer offset and track dimensions for an active thumb drag.
     scrollbar_drag: Option<ScrollbarDragSession>,
     /// Past document states available for undo.
@@ -628,6 +630,7 @@ impl Editor {
             scrollbar_visible_until: Instant::now(),
             scrollbar_fade_task: None,
             scroll_recheck_task: None,
+            scroll_recheck_attempts: 0,
             scrollbar_drag: None,
             undo_history: Vec::new(),
             redo_history: Vec::new(),

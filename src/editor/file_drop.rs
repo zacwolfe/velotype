@@ -128,7 +128,7 @@ impl Editor {
         self.table_axis_selection = None;
         self.sync_table_axis_visuals(cx);
         self.clear_cross_block_selection(cx);
-
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_target = None;
         self.pending_scroll_recheck_after_layout = true;
@@ -155,6 +155,7 @@ impl Editor {
         self.clear_pending_drop_replace_state(cx);
         if let Some(focus_id) = restore_focus {
             self.pending_focus = Some(focus_id);
+            self.scroll_recheck_attempts = 0;
             self.pending_scroll_active_block_into_view = true;
         }
         cx.notify();
@@ -370,6 +371,7 @@ impl Editor {
         let restore_focus = self.drop_replace_restore_focus.take();
         if let Some(focus_id) = restore_focus {
             self.pending_focus = Some(focus_id);
+            self.scroll_recheck_attempts = 0;
             self.pending_scroll_active_block_into_view = true;
         }
         cx.notify();

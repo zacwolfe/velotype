@@ -211,6 +211,7 @@ impl Editor {
     pub(crate) fn focus_block(&mut self, entity_id: EntityId) {
         self.pending_focus = Some(entity_id);
         self.active_entity_id = Some(entity_id);
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_target = None;
         // Default alignment; callers wanting another one set it after this.

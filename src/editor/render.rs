@@ -254,6 +254,7 @@ fn menu_item_visual_height(item: &OwnedMenuItem, dimensions: &ThemeDimensions) -
 
 /// Maximum import-menu rows shown before the list scrolls.
 const SCROLLABLE_IMPORT_MENU_VISIBLE_ITEMS: usize = 12;
+pub(crate) const MAX_SCROLL_RECHECK_ATTEMPTS: u8 = 30;
 
 /// Sums menu row heights and inter-row gaps.
 fn menu_items_visual_height_with_gaps(
@@ -604,6 +605,7 @@ impl Editor {
         if std::mem::take(&mut self.suppress_caret_scroll_follow) {
             return;
         }
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
     }
     fn apply_pending_scroll_into_view(&mut self, window: &Window, cx: &mut Context<Self>) {
@@ -631,12 +633,18 @@ impl Editor {
         };
         if self.pending_scroll_recheck_after_layout {
             self.pending_scroll_recheck_after_layout = false;
+            self.scroll_recheck_attempts = 0;
             self.schedule_scroll_recheck(cx);
             return;
         }
 
         if !settled {
-            self.schedule_scroll_recheck(cx);
+            if self.consume_scroll_recheck_attempt() {
+                self.schedule_scroll_recheck(cx);
+            } else {
+                self.pending_scroll_active_block_into_view = false;
+                self.scroll_recheck_task = None;
+            }
             return;
         }
 
@@ -644,6 +652,20 @@ impl Editor {
         self.pending_scroll_target = None;
         self.pending_scroll_align = ScrollAlign::Nearest;
         self.scroll_recheck_task = None;
+        self.scroll_recheck_attempts = 0;
+    }
+
+    /// Returns `true` when another scroll recheck may be scheduled. The budget
+    /// resets on exhaustion so a later request starts with a full budget rather
+    /// than inheriting a permanently spent one.
+    pub(crate) fn consume_scroll_recheck_attempt(&mut self) -> bool {
+        if self.scroll_recheck_attempts < MAX_SCROLL_RECHECK_ATTEMPTS {
+            self.scroll_recheck_attempts += 1;
+            true
+        } else {
+            self.scroll_recheck_attempts = 0;
+            false
+        }
     }
 
     /// Requests a repaint one frame out so a still-pending scroll-into-view can

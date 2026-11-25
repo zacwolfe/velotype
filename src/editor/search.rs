@@ -388,6 +388,7 @@ impl Editor {
         // Caret scrolling follows the focused block and the block is left
         // unfocused here, so aim the scroll at the match explicitly.
         self.pending_scroll_target = Some(entity.entity_id());
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_align = super::ScrollAlign::Nearest;
     }

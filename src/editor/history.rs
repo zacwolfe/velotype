@@ -353,6 +353,7 @@ impl Editor {
         }
 
         self.apply_selection_snapshot_in_current_mode(&entry.selection, cx);
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_recheck_after_layout = true;
         self.last_scroll_viewport_size = None;
@@ -375,6 +376,7 @@ impl Editor {
         self.rebuild_table_runtimes(cx);
         self.rebuild_image_runtimes(cx);
         self.apply_selection_snapshot_in_current_mode(&selection_snapshot, cx);
+        self.scroll_recheck_attempts = 0;
         self.pending_scroll_active_block_into_view = true;
         self.pending_scroll_recheck_after_layout = true;
         self.last_scroll_viewport_size = None;

@@ -6028,3 +6028,40 @@ async fn clicking_a_search_field_keeps_focus_in_the_bar(cx: &mut TestAppContext)
         );
     });
 }
+
+#[gpui::test]
+async fn scroll_recheck_budget_is_enforced(cx: &mut TestAppContext) {
+    init_editor_test_app(cx);
+    let (editor, cx) = cx.add_window_view(|_window, cx| {
+        Editor::from_markdown(
+            cx,
+            (0..1000)
+                .map(|i| format!("line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None,
+        )
+    });
+
+    cx.update(|_window, cx| {
+        editor.update(cx, |editor, _cx| {
+            // Bounds resolve immediately in headless tests, so the budget logic is
+            // exercised directly on the helper instead of via a live retry loop.
+            assert!(super::render::MAX_SCROLL_RECHECK_ATTEMPTS > 0);
+            editor.scroll_recheck_attempts = 0;
+
+            for attempt in 1..=super::render::MAX_SCROLL_RECHECK_ATTEMPTS {
+                assert!(editor.consume_scroll_recheck_attempt());
+                assert_eq!(editor.scroll_recheck_attempts, attempt);
+            }
+
+            // Budget spent: the next call refuses and resets the counter.
+            assert!(!editor.consume_scroll_recheck_attempt());
+            assert_eq!(editor.scroll_recheck_attempts, 0);
+
+            // A fresh request starts with a full budget again.
+            assert!(editor.consume_scroll_recheck_attempt());
+            assert_eq!(editor.scroll_recheck_attempts, 1);
+        });
+    });
+}
