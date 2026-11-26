@@ -1,5 +1,6 @@
 //! A pill-shaped toggle switch component with slide animation.
 
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{prelude::FluentBuilder, *};
@@ -126,5 +127,108 @@ impl RenderOnce for Switch {
             .when(!disabled, |this| this.cursor_pointer())
             .child(thumb)
             .when_some(self.on_click, |this, on_click| this.on_click(on_click))
+    }
+}
+
+/// Callback invoked when a switch row is toggled by click or keyboard.
+type ToggleHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static;
+
+/// A row containing a label and a toggle switch, supporting keyboard activation.
+#[derive(IntoElement)]
+pub(crate) struct SwitchRow {
+    id: ElementId,
+    label: SharedString,
+    checked: bool,
+    focus_handle: Option<FocusHandle>,
+    label_size: Pixels,
+    label_color: Hsla,
+    show_label: bool,
+    on_toggle: Option<Box<ToggleHandler>>,
+}
+
+impl SwitchRow {
+    /// Creates a new switch row with the given label and checked state.
+    pub fn new(
+        label: impl Into<SharedString>,
+        checked: bool,
+        focus_handle: Option<FocusHandle>,
+    ) -> Self {
+        let label = label.into();
+        Self {
+            id: ElementId::Name(format!("preferences-row-{}", label).into()),
+            label,
+            checked,
+            focus_handle,
+            label_size: px(13.0),
+            label_color: Hsla::black(),
+            show_label: true,
+            on_toggle: None,
+        }
+    }
+
+    /// Set the label style.
+    pub fn label_style(mut self, size: Pixels, color: Hsla) -> Self {
+        self.label_size = size;
+        self.label_color = color;
+        self
+    }
+
+    /// Hides the label, leaving only the switch as the row content.
+    #[allow(dead_code)]
+    pub fn without_label(mut self) -> Self {
+        self.show_label = false;
+        self
+    }
+
+    /// Set the toggle callback for both click and keyboard events.
+    pub fn on_toggle(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_toggle = Some(Box::new(handler));
+        self
+    }
+}
+
+impl RenderOnce for SwitchRow {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let toggle: Rc<ToggleHandler> =
+            Rc::from(self.on_toggle.unwrap_or_else(|| Box::new(|_, _, _| {})));
+
+        let label_el = div()
+            .text_size(self.label_size)
+            .text_color(self.label_color)
+            .child(self.label.clone());
+
+        let switch = Switch::new(ElementId::Name(
+            format!("preferences-toggle-{}", self.label).into(),
+        ))
+        .checked(self.checked)
+        .on_click({
+            let t = toggle.clone();
+            move |event, window, cx| t(event, window, cx)
+        });
+
+        div()
+            .id(self.id)
+            .when_some(self.focus_handle, |this, handle| this.track_focus(&handle))
+            .flex()
+            .items_center()
+            .when(self.show_label, |this| this.w(px(280.0)).justify_between())
+            .on_key_down({
+                let t = toggle.clone();
+                move |event, window, cx| {
+                    if event.keystroke.modifiers.modified() {
+                        return;
+                    }
+                    if !matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                        return;
+                    }
+                    t(&ClickEvent::default(), window, cx);
+                    cx.stop_propagation();
+                }
+            })
+            .when(self.show_label, |this| this.child(label_el))
+            .child(switch)
     }
 }

@@ -19,7 +19,8 @@ use crate::components::single_line_input::{InputChanged, SingleLineInput, Single
 use crate::components::{
     SaveDocument, ShortcutCategory, ShortcutCommand, ShortcutDefinition, install_keybindings,
     normalize_shortcut_config, normalize_shortcut_keys, resolved_shortcut_keys,
-    shortcut_conflict_for, shortcut_definitions, switch::Switch,
+    shortcut_conflict_for, shortcut_definitions,
+    switch::{Switch, SwitchRow},
 };
 use crate::editor::search_match::SearchOptions;
 use crate::fonts::{FontCatalog, FontPreferences, FontSettings, FontStackParseError};
@@ -4450,28 +4451,18 @@ impl PreferencesWindow {
         let c = &theme.colors;
         let t = &theme.typography;
 
-        let switch_row = |label: &str,
+        let switch_row = |key: &str,
+                          label: &str,
                           checked: bool,
                           on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
                           cx: &mut Context<Self>| {
-            div()
-                .w(px(280.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(px(t.dialog_body_size))
-                        .text_color(c.dialog_body)
-                        .child(SharedString::from(label.to_string())),
-                )
-                .child(
-                    Switch::new(ElementId::Name(
-                        format!("preferences-toggle-{}", label).into(),
-                    ))
-                    .checked(checked)
-                    .on_click(cx.listener(on_click)),
-                )
+            SwitchRow::new(
+                SharedString::from(label.to_string()),
+                checked,
+                self.tab_handle(key),
+            )
+            .label_style(px(t.dialog_body_size), c.dialog_body)
+            .on_toggle(cx.listener(on_click))
         };
 
         let items = div()
@@ -4483,6 +4474,7 @@ impl PreferencesWindow {
                 window,
                 theme,
                 switch_row(
+                    "prefs-tab-sidebar-files-visible",
                     &strings.preferences_sidebar_files_visible,
                     self.files_visible,
                     |this, _, window, cx| this.toggle_files_visible(window, cx),
@@ -4494,6 +4486,7 @@ impl PreferencesWindow {
                 window,
                 theme,
                 switch_row(
+                    "prefs-tab-sidebar-outline-visible",
                     &strings.preferences_sidebar_outline_visible,
                     self.outline_visible,
                     |this, _, window, cx| this.toggle_outline_visible(window, cx),
@@ -6940,5 +6933,87 @@ mod tests {
             .update(cx, |view, window, _cx| view.focus_handle.is_focused(window))
             .expect("preferences window should be updateable");
         assert!(!focused, "tab should move focus off the category list root");
+    }
+
+    #[gpui::test]
+    async fn f16_preferences_sidebar_rows_toggle_with_space_and_enter(cx: &mut TestAppContext) {
+        const SIDEBAR: [&str; 2] = [
+            "prefs-tab-sidebar-files-visible",
+            "prefs-tab-sidebar-outline-visible",
+        ];
+
+        init_preferences_test_app(cx);
+        let window = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        // Settings, File, Theme, Image, Editor, Sidebar
+        for _ in 0..5 {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+        }
+        redraw_preferences(cx, window);
+        assert_eq!(
+            window
+                .read_with(cx, |view, _| view.nav)
+                .expect("preferences window should be readable"),
+            PreferencesNav::Sidebar
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("right").unwrap());
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        assert_eq!(
+            focused_key(cx, window, &SIDEBAR).as_deref(),
+            Some(SIDEBAR[0])
+        );
+
+        let files_before = window
+            .read_with(cx, |view, _| view.files_visible)
+            .expect("preferences window should be readable");
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("space").unwrap());
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        let files_after_space = window
+            .read_with(cx, |view, _| view.files_visible)
+            .expect("preferences window should be readable");
+        assert_ne!(files_after_space, files_before);
+        assert_eq!(
+            focused_key(cx, window, &SIDEBAR).as_deref(),
+            Some(SIDEBAR[0])
+        );
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("enter").unwrap());
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        let files_after_enter = window
+            .read_with(cx, |view, _| view.files_visible)
+            .expect("preferences window should be readable");
+        assert_ne!(files_after_enter, files_after_space);
+
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        assert_eq!(
+            focused_key(cx, window, &SIDEBAR).as_deref(),
+            Some(SIDEBAR[1])
+        );
+
+        let outline_before = window
+            .read_with(cx, |view, _| view.outline_visible)
+            .expect("preferences window should be readable");
+        cx.dispatch_keystroke(window.into(), Keystroke::parse("space").unwrap());
+        cx.run_until_parked();
+        redraw_preferences(cx, window);
+        let outline_after = window
+            .read_with(cx, |view, _| view.outline_visible)
+            .expect("preferences window should be readable");
+        assert_ne!(outline_after, outline_before);
     }
 }
