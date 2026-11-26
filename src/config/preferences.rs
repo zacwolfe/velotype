@@ -51,6 +51,8 @@ const TAB_KEYS: &[&str] = &[
     "prefs-tab-editor-reveal-source-on-focus",
     "prefs-tab-editor-show-table-headers",
     "prefs-tab-editor-tables-as-markdown",
+    "prefs-tab-sidebar-files-visible",
+    "prefs-tab-sidebar-outline-visible",
     "prefs-tab-statusbar-enabled",
     "prefs-tab-statusbar-word-count",
     "prefs-tab-statusbar-cursor-position",
@@ -106,6 +108,8 @@ pub(crate) struct WorkspacePreferences {
     pub(crate) drawer_open: bool,
     pub(crate) files_open: bool,
     pub(crate) outline_open: bool,
+    pub(crate) files_visible: bool,
+    pub(crate) outline_visible: bool,
 }
 
 impl Default for WorkspacePreferences {
@@ -115,6 +119,8 @@ impl Default for WorkspacePreferences {
             drawer_open: false,
             files_open: true,
             outline_open: true,
+            files_visible: true,
+            outline_visible: true,
         }
     }
 }
@@ -854,6 +860,8 @@ struct WorkspacePreferencesFile {
     drawer_open: bool,
     files_open: bool,
     outline_open: bool,
+    files_visible: bool,
+    outline_visible: bool,
 }
 
 #[derive(Serialize)]
@@ -881,6 +889,8 @@ impl From<&WorkspacePreferences> for WorkspacePreferencesFile {
             drawer_open: value.drawer_open,
             files_open: value.files_open,
             outline_open: value.outline_open,
+            files_visible: value.files_visible,
+            outline_visible: value.outline_visible,
         }
     }
 }
@@ -1141,10 +1151,20 @@ fn app_preferences_from_toml_value(
                 .get("outline_open")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let files_visible = workspace
+                .get("files_visible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let outline_visible = workspace
+                .get("outline_visible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             WorkspacePreferences {
                 drawer_open,
                 files_open,
                 outline_open,
+                files_visible,
+                outline_visible,
             }
         })
         .unwrap_or_default();
@@ -1342,6 +1362,8 @@ pub(crate) fn save_preferences_from_window(
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     reveal_diagram_source_on_double_click: bool,
+    files_visible: bool,
+    outline_visible: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1361,6 +1383,8 @@ pub(crate) fn save_preferences_from_window(
         reveal_source_on_focus,
         reveal_image_source_on_click,
         reveal_diagram_source_on_double_click,
+        files_visible,
+        outline_visible,
         keybindings,
         status_bar,
         fonts,
@@ -1383,6 +1407,8 @@ fn save_preferences_from_window_with_dirs(
     reveal_source_on_focus: bool,
     reveal_image_source_on_click: bool,
     reveal_diagram_source_on_double_click: bool,
+    files_visible: bool,
+    outline_visible: bool,
     keybindings: BTreeMap<String, Vec<String>>,
     status_bar: &StatusBarPreferences,
     fonts: &FontPreferences,
@@ -1403,6 +1429,8 @@ fn save_preferences_from_window_with_dirs(
     preferences.reveal_source_on_focus = reveal_source_on_focus;
     preferences.reveal_image_source_on_click = reveal_image_source_on_click;
     preferences.reveal_diagram_source_on_double_click = reveal_diagram_source_on_double_click;
+    preferences.workspace.files_visible = files_visible;
+    preferences.workspace.outline_visible = outline_visible;
     preferences.keybindings = normalize_shortcut_config(&keybindings);
     preferences.status_bar = status_bar.clone();
     preferences.fonts = fonts.clone();
@@ -1439,6 +1467,8 @@ fn save_preferences_from_view(
             view.reveal_source_on_focus,
             view.reveal_image_source_on_click,
             view.reveal_diagram_source_on_double_click,
+            view.files_visible,
+            view.outline_visible,
             keybindings,
             &status_bar,
             &view.fonts,
@@ -1458,6 +1488,8 @@ fn save_preferences_from_view(
             view.reveal_source_on_focus,
             view.reveal_image_source_on_click,
             view.reveal_diagram_source_on_double_click,
+            view.files_visible,
+            view.outline_visible,
             keybindings,
             &status_bar,
             &view.fonts,
@@ -1486,8 +1518,11 @@ enum PreferencesNav {
     Theme,
     /// Clipboard image storage policy.
     Image,
-    /// Keyboard shortcut overrides.
+    /// Editor behavior toggles.
     Editor,
+    /// Files and outline visibility switches.
+    Sidebar,
+    /// Keyboard shortcut overrides.
     Shortcuts,
     /// Status bar visibility controls.
     StatusBar,
@@ -1565,6 +1600,8 @@ pub(crate) struct PreferencesWindow {
     saved_reveal_source_on_focus: bool,
     saved_reveal_image_source_on_click: bool,
     saved_reveal_diagram_source_on_double_click: bool,
+    saved_files_visible: bool,
+    saved_outline_visible: bool,
     saved_keybindings: BTreeMap<String, Vec<String>>,
     /// Theme catalog snapshot captured when this window opens.
     theme_options: Vec<ThemeCatalogEntry>,
@@ -1594,6 +1631,10 @@ pub(crate) struct PreferencesWindow {
     status_bar_show_sidebar_toggle: bool,
     /// Draft visibility of the view-mode switch.
     status_bar_show_mode_switch: bool,
+    /// Draft visibility of the files pane.
+    pub(crate) files_visible: bool,
+    /// Draft visibility of the outline pane.
+    pub(crate) outline_visible: bool,
     /// Saved bar visibility for dirty-state comparison.
     saved_status_bar_enabled: bool,
     /// Saved word-count visibility for dirty-state comparison.
@@ -1928,6 +1969,8 @@ impl PreferencesWindow {
             reveal_image_source_on_click: preferences.reveal_image_source_on_click,
             reveal_diagram_source_on_double_click: preferences
                 .reveal_diagram_source_on_double_click,
+            files_visible: preferences.workspace.files_visible,
+            outline_visible: preferences.workspace.outline_visible,
             keybindings: keybindings.clone(),
             saved_startup_open: startup_open,
             saved_foreground_on_launch: foreground_on_launch,
@@ -1953,6 +1996,8 @@ impl PreferencesWindow {
             ),
             saved_reveal_diagram_source_on_double_click: preferences
                 .reveal_diagram_source_on_double_click,
+            saved_files_visible: preferences.workspace.files_visible,
+            saved_outline_visible: preferences.workspace.outline_visible,
             saved_keybindings: keybindings,
             theme_options,
             focus_handle: cx.focus_handle(),
@@ -2264,6 +2309,8 @@ impl PreferencesWindow {
             || self.reveal_image_source_on_click != self.saved_reveal_image_source_on_click
             || self.reveal_diagram_source_on_double_click
                 != self.saved_reveal_diagram_source_on_double_click
+            || self.files_visible != self.saved_files_visible
+            || self.outline_visible != self.saved_outline_visible
             || normalize_shortcut_config(&self.keybindings)
                 != normalize_shortcut_config(&self.saved_keybindings)
             || self.status_bar_enabled != self.saved_status_bar_enabled
@@ -2294,13 +2341,14 @@ impl PreferencesWindow {
     }
 
     /// Category cycle used by Up/Down navigation.
-    fn nav_order() -> [PreferencesNav; 7] {
+    fn nav_order() -> [PreferencesNav; 8] {
         [
             PreferencesNav::Settings,
             PreferencesNav::File,
             PreferencesNav::Theme,
             PreferencesNav::Image,
             PreferencesNav::Editor,
+            PreferencesNav::Sidebar,
             PreferencesNav::Shortcuts,
             PreferencesNav::StatusBar,
         ]
@@ -2389,6 +2437,16 @@ impl PreferencesWindow {
 
     fn toggle_show_table_headers(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.show_table_headers = !self.show_table_headers;
+        cx.notify();
+    }
+
+    fn toggle_files_visible(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.files_visible = !self.files_visible;
+        cx.notify();
+    }
+
+    fn toggle_outline_visible(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.outline_visible = !self.outline_visible;
         cx.notify();
     }
 
@@ -2801,6 +2859,10 @@ impl PreferencesWindow {
         self.enter_nav(PreferencesNav::Editor, window, cx);
     }
 
+    fn set_nav_sidebar(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_nav(PreferencesNav::Sidebar, window, cx);
+    }
+
     fn set_nav_shortcuts(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.nav = PreferencesNav::Shortcuts;
         self.startup_dropdown_open = false;
@@ -2998,6 +3060,10 @@ impl PreferencesWindow {
             settings.reveal_image_source_on_click = preferences.reveal_image_source_on_click;
             settings.reveal_diagram_source_on_double_click =
                 preferences.reveal_diagram_source_on_double_click;
+            // Only the visibility flags come from the preferences window; the
+            // drawer and section flags stay as the editor last persisted them.
+            settings.workspace.files_visible = preferences.workspace.files_visible;
+            settings.workspace.outline_visible = preferences.workspace.outline_visible;
         });
         FontSettings::update(cx, preferences.fonts.clone())
             .expect("saved font stacks were validated");
@@ -3026,6 +3092,8 @@ impl PreferencesWindow {
         self.saved_reveal_image_source_on_click = self.reveal_image_source_on_click;
         self.saved_reveal_diagram_source_on_double_click =
             self.reveal_diagram_source_on_double_click;
+        self.saved_files_visible = self.files_visible;
+        self.saved_outline_visible = self.outline_visible;
         cx.notify();
     }
 
@@ -4371,6 +4439,78 @@ impl PreferencesWindow {
             )
     }
 
+    /// Renders the sidebar visibility switches.
+    fn render_sidebar_page(
+        &self,
+        theme: &Theme,
+        strings: &crate::i18n::I18nStrings,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let c = &theme.colors;
+        let t = &theme.typography;
+
+        let switch_row = |label: &str,
+                          checked: bool,
+                          on_click: fn(&mut Self, &ClickEvent, &mut Window, &mut Context<Self>),
+                          cx: &mut Context<Self>| {
+            div()
+                .w(px(280.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(t.dialog_body_size))
+                        .text_color(c.dialog_body)
+                        .child(SharedString::from(label.to_string())),
+                )
+                .child(
+                    Switch::new(ElementId::Name(
+                        format!("preferences-toggle-{}", label).into(),
+                    ))
+                    .checked(checked)
+                    .on_click(cx.listener(on_click)),
+                )
+        };
+
+        let items = div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(self.tab_target(
+                "prefs-tab-sidebar-files-visible",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_sidebar_files_visible,
+                    self.files_visible,
+                    |this, _, window, cx| this.toggle_files_visible(window, cx),
+                    cx,
+                ),
+            ))
+            .child(self.tab_target(
+                "prefs-tab-sidebar-outline-visible",
+                window,
+                theme,
+                switch_row(
+                    &strings.preferences_sidebar_outline_visible,
+                    self.outline_visible,
+                    |this, _, window, cx| this.toggle_outline_visible(window, cx),
+                    cx,
+                ),
+            ));
+
+        div()
+            .w_full()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(items)
+    }
+
     /// Renders the draft status bar and built-in item visibility switches.
     fn render_status_bar_page(
         &self,
@@ -4567,6 +4707,15 @@ impl Render for PreferencesWindow {
                                 cx,
                             ))
                             .child(self.nav_button(
+                                "preferences-nav-sidebar",
+                                strings.preferences_nav_sidebar.clone(),
+                                self.nav == PreferencesNav::Sidebar,
+                                nav_list_focused,
+                                &theme,
+                                Self::set_nav_sidebar,
+                                cx,
+                            ))
+                            .child(self.nav_button(
                                 "preferences-nav-shortcuts",
                                 strings.preferences_nav_shortcuts.clone(),
                                 self.nav == PreferencesNav::Shortcuts,
@@ -4624,6 +4773,9 @@ impl Render for PreferencesWindow {
                                         }
                                         PreferencesNav::Editor => {
                                             strings.preferences_nav_editor.clone()
+                                        }
+                                        PreferencesNav::Sidebar => {
+                                            strings.preferences_sidebar_title.clone()
                                         }
                                         PreferencesNav::Shortcuts => {
                                             strings.preferences_nav_shortcuts.clone()
@@ -4699,6 +4851,14 @@ impl Render for PreferencesWindow {
                                     .items_center()
                                     .justify_center()
                                     .child(self.render_editor_page(&theme, &strings, window, cx))
+                                    .into_any_element(),
+                                PreferencesNav::Sidebar => div()
+                                    .id("preferences-sidebar-scroll")
+                                    .w_full()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .overflow_y_scroll()
+                                    .child(self.render_sidebar_page(&theme, &strings, window, cx))
                                     .into_any_element(),
                                 PreferencesNav::Shortcuts => div()
                                     .w_full()
@@ -4967,17 +5127,18 @@ mod tests {
         };
         assert_eq!(nav(cx), PreferencesNav::Settings);
 
-        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
-        cx.run_until_parked();
-        assert_eq!(nav(cx), PreferencesNav::File);
+        let nav_order = PreferencesWindow::nav_order();
+        for step in 1..=nav_order.len() {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
+            cx.run_until_parked();
+            assert_eq!(nav(cx), nav_order[step % nav_order.len()]);
+        }
 
-        cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
-        cx.run_until_parked();
-        assert_eq!(nav(cx), PreferencesNav::Theme);
-
-        cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
-        cx.run_until_parked();
-        assert_eq!(nav(cx), PreferencesNav::File);
+        for step in 1..=nav_order.len() {
+            cx.dispatch_keystroke(window.into(), Keystroke::parse("up").unwrap());
+            cx.run_until_parked();
+            assert_eq!(nav(cx), nav_order[(nav_order.len() - step) % nav_order.len()]);
+        }
 
         redraw_preferences(cx, window);
     }
@@ -5043,6 +5204,35 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn sidebar_visibility_save_updates_editor_settings(cx: &mut TestAppContext) {
+        init_preferences_test_app(cx);
+
+        let handle = cx.update(|cx| {
+            open_preferences_window_with_state(
+                cx,
+                AppPreferences::default(),
+                default_theme_options(),
+                "Preferences".into(),
+            )
+        });
+        cx.run_until_parked();
+
+        handle
+            .update(cx, |preferences, window, cx| {
+                let mut saved = AppPreferences::default();
+                saved.workspace.files_visible = false;
+                saved.workspace.outline_visible = false;
+                preferences.apply_saved_preferences(saved, window, cx);
+            })
+            .expect("preferences window should be updateable");
+        cx.run_until_parked();
+
+        let workspace = cx.update(|cx| EditorSettings::workspace_preferences(cx));
+        assert!(!workspace.files_visible);
+        assert!(!workspace.outline_visible);
+    }
+
+    #[gpui::test]
     async fn f4_preferences_shift_tab_reverses_and_wraps(cx: &mut TestAppContext) {
         const SETTINGS: [&str; 2] = ["prefs-tab-auto-updates", "prefs-tab-associate"];
 
@@ -5084,6 +5274,10 @@ mod tests {
             "prefs-tab-editor-reveal-source-on-focus",
             "prefs-tab-editor-show-table-headers",
         ];
+        const SIDEBAR: [&str; 2] = [
+            "prefs-tab-sidebar-files-visible",
+            "prefs-tab-sidebar-outline-visible",
+        ];
         const SHORTCUTS: [&str; 2] = ["prefs-tab-shortcut-0", "prefs-tab-shortcut-1"];
         const STATUS_BAR: [&str; 2] = [
             "prefs-tab-statusbar-enabled",
@@ -5101,7 +5295,12 @@ mod tests {
         });
         cx.run_until_parked();
 
-        let pages: [(usize, [&str; 2]); 3] = [(4, EDITOR), (1, SHORTCUTS), (1, STATUS_BAR)];
+        let pages: [(usize, [&str; 2]); 4] = [
+            (4, EDITOR),
+            (1, SIDEBAR),
+            (1, SHORTCUTS),
+            (1, STATUS_BAR),
+        ];
         for (steps, page) in pages {
             window
                 .update(cx, |view, window, cx| window.focus(&view.focus_handle, cx))
@@ -5267,7 +5466,7 @@ mod tests {
         cx.run_until_parked();
         redraw_preferences(cx, window);
 
-        for _ in 0..5 {
+        for _ in 0..6 {
             cx.dispatch_keystroke(window.into(), Keystroke::parse("down").unwrap());
             cx.run_until_parked();
         }
@@ -6257,6 +6456,8 @@ mod tests {
             true,
             false,
             false,
+            true,
+            true,
             BTreeMap::from([("save_document".to_string(), vec!["ctrl-alt-s".to_string()])]),
             &StatusBarPreferences::default(),
             &FontPreferences::default(),
@@ -6507,6 +6708,8 @@ mod tests {
                 drawer_open: true,
                 files_open: false,
                 outline_open: true,
+                files_visible: true,
+                outline_visible: true,
             },
             ..AppPreferences::default()
         };

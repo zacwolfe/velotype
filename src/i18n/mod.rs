@@ -85,6 +85,14 @@ pub struct I18nStrings {
     pub update_save_first_message: String,
     /// General application settings page.
     pub preferences_nav_settings: String,
+    /// Label for the sidebar settings page in the preferences navigation.
+    pub preferences_nav_sidebar: String,
+    /// Title of the sidebar settings page.
+    pub preferences_sidebar_title: String,
+    /// Label for the "Files visible" toggle in the sidebar settings.
+    pub preferences_sidebar_files_visible: String,
+    /// Label for the "Outline visible" toggle in the sidebar settings.
+    pub preferences_sidebar_outline_visible: String,
     /// Opt-in automatic download switch label and explanation.
     pub preferences_updates_auto_download: String,
     pub preferences_updates_auto_download_hint: String,
@@ -978,6 +986,14 @@ struct I18nStringsDe {
     /// Optional mode-switch visibility switch label.
     preferences_status_bar_show_mode_switch: Option<String>,
     preferences_nav_editor: Option<String>,
+    /// Optional sidebar settings page navigation label.
+    preferences_nav_sidebar: Option<String>,
+    /// Optional sidebar settings page title.
+    preferences_sidebar_title: Option<String>,
+    /// Optional Files visibility switch label.
+    preferences_sidebar_files_visible: Option<String>,
+    /// Optional Outline visibility switch label.
+    preferences_sidebar_outline_visible: Option<String>,
     preferences_reveal_source_on_focus: Option<String>,
     preferences_reveal_image_source_on_click: Option<String>,
     preferences_reveal_diagram_source_on_double_click: Option<String>,
@@ -1242,6 +1258,10 @@ const I18N_STRING_KEYS: &[&str] = &[
     "preferences_status_bar_show_sidebar_toggle",
     "preferences_status_bar_show_mode_switch",
     "preferences_nav_editor",
+    "preferences_nav_sidebar",
+    "preferences_sidebar_title",
+    "preferences_sidebar_files_visible",
+    "preferences_sidebar_outline_visible",
     "preferences_reveal_source_on_focus",
     "preferences_reveal_image_source_on_click",
     "preferences_reveal_diagram_source_on_double_click",
@@ -1940,6 +1960,18 @@ impl I18nStringsDe {
             preferences_nav_editor: self
                 .preferences_nav_editor
                 .unwrap_or(defaults.preferences_nav_editor),
+            preferences_nav_sidebar: self
+                .preferences_nav_sidebar
+                .unwrap_or(defaults.preferences_nav_sidebar),
+            preferences_sidebar_title: self
+                .preferences_sidebar_title
+                .unwrap_or(defaults.preferences_sidebar_title),
+            preferences_sidebar_files_visible: self
+                .preferences_sidebar_files_visible
+                .unwrap_or(defaults.preferences_sidebar_files_visible),
+            preferences_sidebar_outline_visible: self
+                .preferences_sidebar_outline_visible
+                .unwrap_or(defaults.preferences_sidebar_outline_visible),
             preferences_reveal_source_on_focus: self
                 .preferences_reveal_source_on_focus
                 .unwrap_or(defaults.preferences_reveal_source_on_focus),
@@ -2242,6 +2274,10 @@ impl I18nStrings {
         strings.preferences_picgo_unavailable =
             "PicGo Server 不可用；粘贴时将使用上次的本地策略".into();
         strings.preferences_nav_editor = "编辑器".into();
+        strings.preferences_nav_sidebar = "侧边栏".into();
+        strings.preferences_sidebar_title = "侧边栏".into();
+        strings.preferences_sidebar_files_visible = "文件".into();
+        strings.preferences_sidebar_outline_visible = "大纲".into();
         strings.preferences_reveal_source_on_focus = "聚焦时显示 Markdown 源代码".into();
         strings.preferences_reveal_image_source_on_click = "点击时显示图像源代码".into();
         strings.preferences_reveal_diagram_source_on_double_click = "双击显示 Markdown 源代码".into();
@@ -2527,6 +2563,10 @@ impl I18nStrings {
             preferences_status_bar_show_sidebar_toggle: "Sidebar Toggle".into(),
             preferences_status_bar_show_mode_switch: "Mode Switch".into(),
             preferences_nav_editor: "Editor".into(),
+            preferences_nav_sidebar: "Sidebar".into(),
+            preferences_sidebar_title: "Sidebar".into(),
+            preferences_sidebar_files_visible: "Files".into(),
+            preferences_sidebar_outline_visible: "Outline".into(),
             preferences_reveal_source_on_focus: "Reveal Markdown source on focus".into(),
             preferences_reveal_image_source_on_click: "Reveal image source on click".into(),
             preferences_reveal_diagram_source_on_double_click:

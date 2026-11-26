@@ -79,6 +79,14 @@ pub(super) struct WorkspaceState {
     pub(super) is_open: bool,
     files_section_open: bool,
     outline_section_open: bool,
+    /// Whether the Files section is shown at all, independent of its
+    /// open/closed state. Mirrors the Sidebar preferences page.
+    files_visible: bool,
+    /// Whether the Outline section is shown at all, independent of its
+    /// open/closed state. Mirrors the Sidebar preferences page.
+    outline_visible: bool,
+    /// Whether the default top-level expansion has been applied for the current document.
+    outline_seeded: bool,
     root: Option<PathBuf>,
     file_tree: Option<WorkspaceTreeNode>,
     file_error: Option<String>,
@@ -120,6 +128,9 @@ impl Default for WorkspaceState {
             is_open: false,
             files_section_open: true,
             outline_section_open: true,
+            files_visible: true,
+            outline_visible: true,
+            outline_seeded: false,
             root: None,
             file_tree: None,
             file_error: None,
@@ -149,6 +160,8 @@ impl WorkspaceState {
             is_open: preferences.drawer_open,
             files_section_open: preferences.files_open,
             outline_section_open: preferences.outline_open,
+            files_visible: preferences.files_visible,
+            outline_visible: preferences.outline_visible,
             ..Self::default()
         }
     }
@@ -180,6 +193,8 @@ impl Editor {
                 drawer_open: self.workspace.is_open,
                 files_open: self.workspace.files_section_open,
                 outline_open: self.workspace.outline_section_open,
+                files_visible: self.workspace.files_visible,
+                outline_visible: self.workspace.outline_visible,
             },
         );
         cx.notify();
@@ -476,6 +491,19 @@ impl Editor {
         cx.notify();
     }
 
+    fn seed_outline_expansion(&mut self) {
+        if self.workspace.outline_seeded {
+            return;
+        }
+        if self.workspace.outline_tree.is_empty() {
+            return;
+        }
+        for node in &self.workspace.outline_tree {
+            self.workspace.expanded.insert(node.id.clone());
+        }
+        self.workspace.outline_seeded = true;
+    }
+
     fn sync_workspace_outline(&mut self, cx: &mut Context<Self>) {
         // The caret blink re-runs render ~30x/second, and serializing the whole
         // document allocates a string per block plus document-sized offset-map
@@ -499,6 +527,7 @@ impl Editor {
         prune_outline_state(&mut self.workspace, &outline);
         self.workspace.outline_tree = outline;
         self.workspace.outline_source = Some(source);
+        self.seed_outline_expansion();
     }
 
     /// Forces the outline to rebuild after the document text was replaced
@@ -506,6 +535,7 @@ impl Editor {
     pub(super) fn invalidate_workspace_outline(&mut self) {
         self.workspace.outline_source = None;
         self.workspace.outline_fingerprint = None;
+        self.workspace.outline_seeded = false;
     }
 
     fn toggle_workspace_section(&mut self, section: WorkspaceSection, cx: &mut Context<Self>) {
@@ -516,6 +546,8 @@ impl Editor {
                 drawer_open: self.workspace.is_open,
                 files_open: self.workspace.files_section_open,
                 outline_open: self.workspace.outline_section_open,
+                files_visible: self.workspace.files_visible,
+                outline_visible: self.workspace.outline_visible,
             },
         );
         cx.notify();
@@ -592,10 +624,14 @@ impl Editor {
     fn workspace_section_is_usable(&self, section: WorkspaceSection) -> bool {
         match section {
             WorkspaceSection::Files => {
-                self.workspace.files_section_open && self.workspace.file_tree.is_some()
+                self.workspace.files_section_open
+                    && self.workspace.file_tree.is_some()
+                    && self.workspace.files_visible
             }
             WorkspaceSection::Outline => {
-                self.workspace.outline_section_open && !self.workspace.outline_tree.is_empty()
+                self.workspace.outline_section_open
+                    && !self.workspace.outline_tree.is_empty()
+                    && self.workspace.outline_visible
             }
         }
     }
@@ -1078,6 +1114,12 @@ impl Editor {
         self.request_dropped_markdown_replace(path, window, cx);
     }
 
+    fn sync_workspace_visibility(&mut self, cx: &App) {
+        let preferences = EditorSettings::workspace_preferences(cx);
+        self.workspace.files_visible = preferences.files_visible;
+        self.workspace.outline_visible = preferences.outline_visible;
+    }
+
     pub(super) fn render_workspace_panel(
         &mut self,
         theme: &Theme,
@@ -1086,11 +1128,12 @@ impl Editor {
         viewport_width: f32,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.workspace.is_open {
+        if !self.workspace.is_open || (!self.workspace.files_visible && !self.workspace.outline_visible) {
             return None;
         }
 
         self.sync_workspace_models(cx);
+        self.sync_workspace_visibility(cx);
         let editor = cx.entity().downgrade();
         let c = &theme.colors;
         let d = &theme.dimensions;
@@ -1101,29 +1144,37 @@ impl Editor {
             .workspace
             .files_section_open
             .then(|| self.render_workspace_files_tree(theme, strings, &editor));
-        let mut section_children = self.render_workspace_section(
-            WorkspaceSection::Files,
-            strings.workspace_tab_files.clone(),
-            self.workspace.files_section_open,
-            "workspace-files-scroll",
-            files_body,
-            theme,
-            &editor,
-        );
+        let mut section_children = Vec::new();
+        if self.workspace.files_visible {
+            section_children.extend(self.render_workspace_section(
+                WorkspaceSection::Files,
+                strings.workspace_tab_files.clone(),
+                self.workspace.files_section_open,
+                "workspace-files-scroll",
+                files_body,
+                theme,
+                &editor,
+            ));
+        }
 
-        let outline_body = self
-            .workspace
-            .outline_section_open
-            .then(|| self.render_workspace_outline_tree(theme, strings, &editor));
-        section_children.extend(self.render_workspace_section(
-            WorkspaceSection::Outline,
-            strings.workspace_tab_outline.clone(),
-            self.workspace.outline_section_open,
-            "workspace-outline-scroll",
-            outline_body,
-            theme,
-            &editor,
-        ));
+        let outline_body = if self.workspace.outline_visible
+            && self.workspace.outline_section_open
+        {
+            Some(self.render_workspace_outline_tree(theme, strings, &editor))
+        } else {
+            None
+        };
+        if self.workspace.outline_visible {
+            section_children.extend(self.render_workspace_section(
+                WorkspaceSection::Outline,
+                strings.workspace_tab_outline.clone(),
+                self.workspace.outline_section_open,
+                "workspace-outline-scroll",
+                outline_body,
+                theme,
+                &editor,
+            ));
+        }
 
         let resize_max_width = workspace_panel_drag_max_width(viewport_width);
         let resize_editor = editor.clone();
@@ -3428,5 +3479,81 @@ mod tests {
         let source = "# café\n\nAlpha\n\n## Two\n\nBravo";
         let offset = line_start_offset(source, 6).expect("line 6 exists");
         assert!(source[offset..].starts_with("Bravo"));
+    }
+
+    #[gpui::test]
+    async fn outline_top_level_starts_expanded_and_user_collapse_sticks(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "# Alpha\n\n## Alpha Child\n\n# Beta\n\nbody".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            editor.sync_workspace_models(cx);
+            assert!(editor.workspace.outline_seeded, "outline should be seeded");
+            for node in &editor.workspace.outline_tree {
+                assert!(editor.workspace.expanded.contains(&node.id));
+            }
+
+            let first_id = editor.workspace.outline_tree[0].id.clone();
+            editor.workspace.expanded.remove(&first_id);
+
+            // Seed runs once per document; user toggles win afterwards.
+            editor.sync_workspace_models(cx);
+            assert!(!editor.workspace.expanded.contains(&first_id), "user collapse should stick");
+        });
+    }
+
+    #[gpui::test]
+    async fn hidden_sidebar_sections_are_not_usable(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let editor = cx.new(|cx| Editor::from_markdown(cx, "# A\n\nbody".to_string(), None));
+
+        editor.update(cx, |editor, cx| {
+            editor.sync_workspace_models(cx);
+
+            editor.workspace.outline_section_open = true;
+            assert!(!editor.workspace.outline_tree.is_empty());
+            assert!(editor.workspace_section_is_usable(WorkspaceSection::Outline));
+
+            editor.workspace.outline_visible = false;
+            assert!(!editor.workspace_section_is_usable(WorkspaceSection::Outline));
+
+            editor.workspace.outline_visible = true;
+            assert!(editor.workspace_section_is_usable(WorkspaceSection::Outline));
+        });
+    }
+
+    #[gpui::test]
+    async fn hidden_files_section_is_not_usable(cx: &mut TestAppContext) {
+        init_editor_test_app(cx);
+        let root = std::env::temp_dir().join(format!(
+            "velotype-workspace-files-visible-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("create dir");
+        fs::write(root.join("a.md"), "a").expect("write md");
+
+        let (editor, cx) =
+            cx.add_window_view(|_window, cx| Editor::from_markdown(cx, "draft".into(), None));
+        editor.update_in(cx, |editor, window, cx| {
+            editor.set_workspace_root_override(root.clone(), cx);
+            editor.toggle_workspace_drawer(window, cx);
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.sync_workspace_models(cx);
+            assert!(editor.workspace.file_tree.is_some());
+
+            editor.workspace.files_section_open = true;
+            editor.workspace.files_visible = true;
+            assert!(editor.workspace_section_is_usable(WorkspaceSection::Files));
+
+            editor.workspace.files_visible = false;
+            assert!(!editor.workspace_section_is_usable(WorkspaceSection::Files));
+
+            editor.workspace.files_visible = true;
+            assert!(editor.workspace_section_is_usable(WorkspaceSection::Files));
+        });
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
